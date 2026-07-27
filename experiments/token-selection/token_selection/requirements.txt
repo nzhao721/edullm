@@ -1,0 +1,8 @@
+PyYAML>=6.0
+numpy>=1.24
+torch>=2.1
+pytest>=7.0
+transformers>=4.40
+# For real CPT / tokenize on cluster:
+# ai2-olmo-core  # or: pip install -e path/to/edu-llm/OLMo-core
+# dolma          # edu-llm/dolma fork

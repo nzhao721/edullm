@@ -1,0 +1,65 @@
+{
+  "schema": 1,
+  "description": "24 pilot mixtures for Ye et al. (arXiv:2403.16952) data mixing law fitting, sampled with Algorithm 2 (double-diminishing grid, delta=0.05, seed 42) over r_max derived from a 30B target corpus, plus 3 injected mid-high DCLM points that the coarse grid cannot reach with all domains positive.",
+  "seed": 42,
+  "delta": 0.05,
+  "constraints": {
+    "wiki_floor": 0.005,
+    "wiki_floor_exempt_tags": ["C0-wiki0"],
+    "dclm_cap": 0.6,
+    "other_domain_cap": 0.7
+  },
+  "domain_order": [
+    "dclm",
+    "arxiv",
+    "starcoder",
+    "pes2o",
+    "open-web-math",
+    "algebraic-stack",
+    "wiki"
+  ],
+  "r_max_30b": {
+    "dclm": 0.9533,
+    "arxiv": 0.6933,
+    "starcoder": 0.6767,
+    "pes2o": 0.8767,
+    "open-web-math": 0.4067,
+    "algebraic-stack": 0.3933,
+    "wiki": 0.122
+  },
+  "base_weights": {
+    "dclm": 0.375,
+    "arxiv": 0.25,
+    "starcoder": 0.1406,
+    "pes2o": 0.0938,
+    "open-web-math": 0.0635,
+    "algebraic-stack": 0.0615,
+    "wiki": 0.0156
+  },
+  "mixtures": [
+    { "id": 1, "tag": "base", "weights": [0.375, 0.25, 0.1406, 0.0938, 0.0635, 0.0615, 0.0156] },
+    { "id": 2, "tag": "C0-wiki0", "weights": [0.0594, 0.0406, 0.65, 0.1062, 0.1, 0.0437, 0.0] },
+    { "id": 3, "tag": "C0-wiki0", "weights": [0.0594, 0.65, 0.0406, 0.1062, 0.1, 0.0437, 0.0] },
+    { "id": 4, "tag": "C0-dclm0", "weights": [0.0, 0.0406, 0.0406, 0.425, 0.4, 0.0437, 0.05] },
+    { "id": 5, "tag": "C1-dclm50", "weights": [0.5, 0.2, 0.1125, 0.075, 0.0508, 0.0492, 0.0125] },
+    { "id": 6, "tag": "C1-dclm55", "weights": [0.55, 0.18, 0.1012, 0.0675, 0.0457, 0.0443, 0.0112] },
+    { "id": 7, "tag": "C1-dclm60", "weights": [0.6, 0.16, 0.09, 0.06, 0.0406, 0.0394, 0.01] },
+    { "id": 8, "tag": "C1", "weights": [0.1187, 0.0406, 0.0406, 0.0266, 0.4, 0.35, 0.0234] },
+    { "id": 9, "tag": "C1", "weights": [0.0297, 0.1625, 0.325, 0.0266, 0.05, 0.35, 0.0562] },
+    { "id": 10, "tag": "C1", "weights": [0.0594, 0.0406, 0.0406, 0.425, 0.05, 0.35, 0.0344] },
+    { "id": 11, "tag": "C1", "weights": [0.0297, 0.1625, 0.325, 0.0266, 0.4, 0.0437, 0.0125] },
+    { "id": 12, "tag": "C1", "weights": [0.0297, 0.325, 0.0406, 0.425, 0.05, 0.0437, 0.0859] },
+    { "id": 13, "tag": "C1", "weights": [0.0594, 0.0406, 0.325, 0.425, 0.1, 0.0437, 0.0063] },
+    { "id": 14, "tag": "C1", "weights": [0.0594, 0.325, 0.0813, 0.0531, 0.2, 0.175, 0.1062] },
+    { "id": 15, "tag": "C1", "weights": [0.0297, 0.325, 0.325, 0.2125, 0.05, 0.0437, 0.0141] },
+    { "id": 16, "tag": "C1", "weights": [0.2375, 0.1625, 0.0406, 0.1062, 0.4, 0.0437, 0.0094] },
+    { "id": 17, "tag": "C1", "weights": [0.475, 0.0406, 0.0406, 0.0266, 0.05, 0.35, 0.0172] },
+    { "id": 18, "tag": "C1", "weights": [0.2375, 0.0406, 0.0406, 0.425, 0.1, 0.0437, 0.1125] },
+    { "id": 19, "tag": "C1", "weights": [0.2375, 0.0406, 0.325, 0.1062, 0.1, 0.0875, 0.1031] },
+    { "id": 20, "tag": "C1", "weights": [0.0594, 0.0813, 0.1625, 0.2125, 0.2, 0.175, 0.1094] },
+    { "id": 21, "tag": "C1", "weights": [0.2375, 0.0406, 0.1625, 0.0531, 0.05, 0.35, 0.1062] },
+    { "id": 22, "tag": "C1", "weights": [0.2375, 0.1625, 0.0406, 0.2125, 0.05, 0.175, 0.1219] },
+    { "id": 23, "tag": "C1", "weights": [0.475, 0.0406, 0.325, 0.0531, 0.05, 0.0437, 0.0125] },
+    { "id": 24, "tag": "C1", "weights": [0.1187, 0.325, 0.0406, 0.1062, 0.05, 0.35, 0.0094] }
+  ]
+}

@@ -1,0 +1,13 @@
+# HQ reference code path: code-only taggers (no Gopher/C4/lang-id).
+# Passed to dolma tag after environment substitution.
+documents:
+  - "${DOCUMENTS_GLOB}"
+experiment: "${TAG_EXPERIMENT}"
+taggers:
+  - code_copyright_comments_v1
+  - code_redpajama_taggers_v1
+  - code_secrets_v1
+processes: ${DOLMA_PROCESSES}
+work_dir:
+  input: "${WORK_DIR}/tag-input"
+  output: "${WORK_DIR}/tag-output"

@@ -1,0 +1,3 @@
+# Dolma + helpers for HQ reference StarCoder filtering on FarmShare.
+dolma[code]==1.1.2
+PyYAML==6.0.2

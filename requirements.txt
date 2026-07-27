@@ -1,0 +1,10 @@
+torch>=2.1.0
+transformers>=4.38.0
+datasets>=2.18.0
+accelerate>=0.27.0
+numpy>=1.24.0
+pyyaml>=6.0
+tqdm>=4.66.0
+tokenizers>=0.15.0
+huggingface_hub>=0.21.0
+boto3>=1.34.0

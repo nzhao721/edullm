@@ -1,0 +1,7 @@
+# Local experiment artifacts (large). Patterns here are relative to this file, so
+# this must be `data/`, not `token_selection/data/`.
+data/
+*.pt
+__pycache__/
+*.pyc
+.pytest_cache/
