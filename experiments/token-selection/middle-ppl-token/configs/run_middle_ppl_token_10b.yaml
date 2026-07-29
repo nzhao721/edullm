@@ -1,0 +1,83 @@
+# Middle-PPL token arm: keep middle 60% by current-model CE (log-PPL) per sequence.
+# Shared scorer: token_selection.olmo_ext.scorers.middle_ppl (package).
+# RegMix 10B / olmo2_370M / permanent ladder {0,125,…,2250,2384} (skip 2375).
+# Selection active from step 0 (t0_steps=0); LR warmup remains 24 steps.
+
+run_id: middle-ppl-token-10b-v1
+seed: 42
+output_dir: middle-ppl-token/data/middle_ppl_token_10b
+arm: middle-ppl-token
+
+methods: [middle_ppl]
+
+k: 0.6
+# No masking warmup — selection from step 0.
+t0_steps: 0
+t0_frac: 0.0
+# Unused by middle_ppl (no EMA); kept so shared helpers/metrics payloads stay uniform.
+alpha_start: 0.99
+alpha_end: 0.98
+
+data:
+  tokens_s3: s3://edullm-datasets/regmix/regmix-10b/tokenized
+  tokenizer: allenai/dolma2-tokenizer
+  sequence_length: 2048
+
+s3:
+  dataset_bucket: edullm-datasets
+  checkpoint_bucket: edullm-checkpoints
+  # Checkpoints + results → s3://edullm-checkpoints/token-sel/middle-ppl-token/
+  prefix: token-sel/middle-ppl-token
+  profile: sbsandbox
+
+model:
+  name: OLMo-2-370M-scratch
+  arch: olmo2_370M
+  init_mode: scratch
+  init_seed: 42
+  load_path: null
+
+olmo_core:
+  repository: https://github.com/edu-llm/OLMo-core
+  revision: 99e0009ed67679c90da970ec5ba439c9459e3757
+
+train:
+  max_tokens: 10000000000
+  global_batch_size: 4194304
+  lr: 4.0e-4
+  lr_alpha_f: 0.1
+  warmup_steps: 24
+  data_loader_seed: 42
+  data_loader_initial_epoch: 0
+  data_loader_chunk_size: 1
+  # Tokens per rank microbatch. GBS must stay divisible by world_size * this.
+  # Hardware knob (not fingerprinted). Tune per GPU memory (e.g. 16384 on 48 GiB).
+  rank_microbatch_size: 65536
+  dp_type: hsdp
+  optim_type: skip_step_adamw
+  compile_model: true
+  max_grad_norm: 1.0
+  z_loss_multiplier: 1.0e-5
+  # Wall-clock kernel only (not fingerprinted): auto -> flash_2 if flash_attn works.
+  attn_backend: auto
+  # Leave empty so CUDA_VISIBLE_DEVICES / Slurm allocator owns the pin.
+  cuda_visible_devices: ""
+  # Informational only; torchrun --nproc_per_node is the authority at launch.
+  num_gpus: null
+  num_workers: 8
+  # Permanent ladder via shared checkpointer_kwargs_for_ladder (interval 125).
+  # Saves {0,125,…,2250,2384}; omits 2375. No ephemeral rotation.
+  checkpoint_every_steps: 125
+  checkpoint_keep_last: null
+  pre_train_checkpoint: true
+  # False so TaskLossEvalCallback sees a complete DistCP step dir before eval.
+  save_async: false
+  ephemeral_checkpoint_every_steps: null
+
+eval:
+  block_unit: sequence
+  metrics_filename: metrics.json
+  task_loss:
+    enabled: true
+    # Relative to experiments/token-selection (train_olmo_template ROOT).
+    results_dir: task_loss_results/middle-ppl-token

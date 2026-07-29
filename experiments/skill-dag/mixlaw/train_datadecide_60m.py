@@ -88,6 +88,7 @@ from mixlaw_common import (
     CURVE_TASK_LOSS_LABELS,
     D_MODEL,
     DATADECIDE_MODEL_SIZE,
+    patch_torch_load_for_olmo_checkpoints,
     EMBEDDING_SIZE,
     EOS_TOKEN_ID,
     GLOBAL_BATCH_SEQS,
@@ -281,6 +282,7 @@ def build_config(args: argparse.Namespace) -> TrainConfig:
         "data_seed": args.data_seed,
         "train_paths": len(paths),
         "flash_attention": os.environ.get("OLMO_FLASH_ATTENTION", "0") == "1",
+        "fused_loss": os.environ.get("OLMO_FUSED_LOSS", "0") == "1",
         "wandb": None,
     }
     progress = Path(args.progress_dir)
@@ -331,7 +333,7 @@ def build_config(args: argparse.Namespace) -> TrainConfig:
         # World size is 1 per mixture, so DDP is a no-op wrapper and FSDP would
         # only add collectives.
         distributed_strategy=DistributedStrategy.ddp,
-        fused_loss=None,
+        fused_loss=os.environ.get("OLMO_FUSED_LOSS", "0") == "1",
         gen1_gc_interval=2,
         max_grad_norm=1.0,
         speed_monitor=SpeedMonitorConfig(window_size=1),
@@ -421,6 +423,7 @@ class TaskLossHandler(logging.Handler):
 
 
 def main() -> None:
+    patch_torch_load_for_olmo_checkpoints()
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--name", required=True, help="Run name, e.g. mix07")
     ap.add_argument("--paths-file", required=True, help="paths_train.txt for this mixture")

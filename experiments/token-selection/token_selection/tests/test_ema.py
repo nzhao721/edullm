@@ -2,11 +2,19 @@
 
 from __future__ import annotations
 
+import math
+
 import pytest
 import torch
 import torch.nn as nn
 
-from token_selection.olmo_ext.ema import EMAHistory, alpha_at_step
+from token_selection.olmo_ext.ema import (
+    DEFAULT_ALPHA_TAU,
+    EMAHistory,
+    alpha_at_step,
+    alpha_exp,
+    alpha_for_half_life,
+)
 
 
 def test_alpha_warmup_then_decay():
@@ -16,6 +24,74 @@ def test_alpha_warmup_then_decay():
     assert 0.999 < mid < 0.9999
     end = alpha_at_step(110, t0=10, total_steps=110, alpha_start=0.9999, alpha_end=0.999)
     assert abs(end - 0.999) < 1e-12
+
+
+def test_alpha_exp_tau300():
+    assert alpha_exp(0, tau=300) == 0.0
+    assert abs(alpha_exp(300, tau=300) - (1.0 - math.exp(-1.0))) < 1e-12
+    assert abs(alpha_exp(600, tau=DEFAULT_ALPHA_TAU) - (1.0 - math.exp(-2.0))) < 1e-12
+    # Monotone increasing toward 1.
+    assert alpha_exp(1, tau=300) < alpha_exp(100, tau=300) < alpha_exp(1000, tau=300) < 1.0
+
+
+def test_alpha_at_step_exp_schedule_ignores_linear_knobs():
+    a = alpha_at_step(
+        150,
+        t0=48,
+        total_steps=2384,
+        alpha_start=0.99,
+        alpha_end=0.98,
+        schedule="exp",
+        tau=300,
+    )
+    assert abs(a - alpha_exp(150, tau=300)) < 1e-12
+
+
+def test_alpha_at_step_rejects_unknown_schedule():
+    with pytest.raises(ValueError, match="Unknown alpha schedule"):
+        alpha_at_step(
+            0, t0=0, total_steps=10, alpha_start=0.9, alpha_end=0.8, schedule="cosine"
+        )
+
+
+def test_alpha_exp_rejects_bad_tau():
+    with pytest.raises(ValueError, match="tau"):
+        alpha_exp(0, tau=0)
+
+
+def test_alpha_for_half_life_refhq_constant():
+    """rel-ema-refhq pins α≈0.9985 ≈ 20% half-life on a 2384-step run."""
+    a = alpha_for_half_life(0.2 * 2384)
+    assert abs(a - 0.9985) < 5e-5
+    # Constant schedule with start==end returns α at every step.
+    for step in (0, 1, 500, 2384):
+        assert (
+            alpha_at_step(
+                step,
+                t0=0,
+                total_steps=2384,
+                alpha_start=0.9985,
+                alpha_end=0.9985,
+                schedule="linear",
+            )
+            == 0.9985
+        )
+
+
+def test_from_module_seeded_sets_correction_one():
+    """RefHQ seed path: history usable immediately with correction=1."""
+    m = M((0.0, 0.0))
+    seed = {"w": torch.tensor([3.0, 5.0])}
+    ema = EMAHistory.from_module_seeded(m, seed, alpha=0.9985)
+    assert ema.has_history
+    assert ema.correction == 1.0
+    assert torch.allclose(ema.history("w"), torch.tensor([3.0, 5.0]))
+    # After one update, correction stays 1 and shadow is textbook EMA.
+    m.w.data.fill_(7.0)
+    ema.update_module(m, alpha=0.9985)
+    assert abs(ema.correction - 1.0) < 1e-12
+    expected = 0.9985 * torch.tensor([3.0, 5.0]) + (1.0 - 0.9985) * 7.0
+    assert torch.allclose(ema.history("w"), expected)
 
 
 class M(nn.Module):

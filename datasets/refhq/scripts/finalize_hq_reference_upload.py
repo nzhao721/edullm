@@ -35,7 +35,7 @@ def main() -> int:
     args = parser.parse_args()
 
     plan = json.loads(args.plan.read_text(encoding="utf-8"))
-    bucket = args.bucket or plan.get("s3_bucket") or "edullm-dataset-olmohq"
+    bucket = args.bucket or plan.get("s3_bucket") or "edullm-datasets"
     prefix = args.prefix or plan.get("s3_prefix") or "hq-reference-v1"
     manifests_dir = Path(plan["scratch_root"]) / "manifests"
 

@@ -16,24 +16,32 @@ def test_derive_steps_10b_defaults():
     assert t0 < total
 
 
-def test_derive_steps_explicit_t0_wins():
+def test_derive_steps_explicit_t0_zero_wins_over_frac():
     cfg = {
         "t0_frac": 0.02,
-        "t0_steps": 24,
+        "t0_steps": 0,
         "train": {"max_tokens": 10_000_000_000, "global_batch_size": 4_194_304},
     }
     total, t0 = derive_steps(cfg)
-    assert total == 10_000_000_000 // 4_194_304
-    assert t0 == 24
+    assert total == 2384
+    assert t0 == 0
 
 
-def test_derive_steps_5b_segment():
+def test_derive_steps_t0_frac_zero():
     cfg = {
-        "t0_frac": 0.02,
-        "t0_steps": 24,
-        "train": {"max_tokens": 5_000_000_000, "global_batch_size": 4_194_304},
+        "t0_frac": 0.0,
+        "train": {"max_tokens": 10_000_000_000, "global_batch_size": 4_194_304},
     }
     total, t0 = derive_steps(cfg)
-    assert total == 5_000_000_000 // 4_194_304
-    assert total == 1192
-    assert t0 == 24
+    assert total == 2384
+    assert t0 == 0
+
+
+def test_derive_steps_t0_steps_zero_alone():
+    cfg = {
+        "t0_steps": 0,
+        "train": {"max_tokens": 10_000_000_000, "global_batch_size": 4_194_304},
+    }
+    total, t0 = derive_steps(cfg)
+    assert total == 2384
+    assert t0 == 0

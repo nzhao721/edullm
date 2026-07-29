@@ -14,7 +14,7 @@ Architecture matches the finished GPU7 REL+EMA job
   * ``compile_model=True`` + ``torch.set_float32_matmul_precision("high")``
   * attn backend ``torch``
 
-Dataset is **only** RefHQ (``s3://edullm-dataset-refhq/refhq-regmix-5p5b-v1/``).
+Dataset is **only** RefHQ (``s3://edullm-datasets/refhq/refhq-regmix-5p5b-v1/``).
 No evals / W&B. Do not confuse with ``olmo3-370m/run-10b-equal``.
 """
 from __future__ import annotations
@@ -246,7 +246,7 @@ def build_config(opts: argparse.Namespace) -> ExperimentConfig:
             "compile_model": opts.compile_model,
             "attn_backend": str(resolve_attn_backend()),
             "seed": opts.seed,
-            "dataset": "s3://edullm-dataset-refhq/refhq-regmix-5p5b-v1/",
+            "dataset": "s3://edullm-datasets/refhq/refhq-regmix-5p5b-v1/",
             "reference_job": "rel-ema-5b-scratch-v1 (arch/batch/seq/lr; RefHQ data)",
             "paths": len(paths),
             "evals": False,

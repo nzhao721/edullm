@@ -1,8 +1,10 @@
 """Token-selection train helpers + optional OLMo-core TrainModule subclass.
 
 Supports ``method=full``, ``rel_ema`` (REL + EMA), ``rho_excess`` (frozen-ref
-excess loss), and ``middle_ppl`` (middle-k by current CE). When ``olmo_core`` is
-not installed, ``TokenSelectLoop`` still runs for local smokes.
+excess loss), ``middle_ppl`` (middle-k by current CE), ``attention_topk``
+(last-layer attention-received), and ``learnability`` (dual frozen RefHQ
+early−late). When ``olmo_core`` is not installed, ``TokenSelectLoop`` still
+runs for local smokes.
 """
 
 from __future__ import annotations
@@ -11,13 +13,14 @@ import contextlib
 import copy
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Iterator, Literal, Mapping, Optional, Tuple, Union
+from typing import Any, Dict, Iterator, Literal, Mapping, Optional, Sequence, Tuple, Union
 
 import torch
 import torch.nn.functional as F
 from torch import Tensor, nn
 
-from .ema import EMAHistory, alpha_at_step
+from .attention_score import capture_last_layer_attention_input, scores_from_capture
+from .ema import DEFAULT_ALPHA_TAU, EMAHistory, alpha_at_step
 from .frozen_ref import FrozenReference
 from .scorers import MethodName, build_mask
 
@@ -30,11 +33,21 @@ class TokenSelectConfig:
     total_steps: int = 1000
     alpha_start: float = 0.999
     alpha_end: float = 0.995
+    # ``linear`` (legacy piecewise) or ``exp`` (α=1−exp(−t/τ); rel-ema-exp, τ=300).
+    alpha_schedule: str = "linear"
+    alpha_tau: float = 300.0
     label_ignore_index: int = -100
     seed: int = 42
     # Production RHO: local path to a reference checkpoint (fingerprinted). Smoke may
     # omit this and pass an in-memory FrozenReference into TokenSelectState instead.
+    # RefHQ-seeded REL (``ema_seed_mode="refhq"``) also loads this path into EMA history.
     reference_load_path: Optional[str] = None
+    # ``"zero"``: bias-corrected accumulator from empty (rel-ema-exp). ``"refhq"``: seed
+    # history buffers from ``reference_load_path`` (rel-ema-refhq ONLY).
+    ema_seed_mode: Literal["zero", "refhq"] = "zero"
+    # Learnability dual frozen refs (early = RefHQ step250; late = avg of late steps).
+    early_reference_load_path: Optional[str] = None
+    late_reference_load_path: Optional[str] = None
 
     @property
     def uses_rel(self) -> bool:
@@ -49,13 +62,27 @@ class TokenSelectConfig:
         return self.method == "middle_ppl"
 
     @property
+    def uses_attention(self) -> bool:
+        return self.method == "attention_topk"
+
+    @property
+    def uses_learnability(self) -> bool:
+        return self.method == "learnability"
+
+    @property
     def uses_selection(self) -> bool:
-        return self.uses_rel or self.uses_rho or self.uses_middle_ppl
+        return (
+            self.uses_rel
+            or self.uses_rho
+            or self.uses_middle_ppl
+            or self.uses_attention
+            or self.uses_learnability
+        )
 
     @property
     def needs_scoring_forward(self) -> bool:
-        """True when selection needs a second no-grad forward (EMA history or frozen ref)."""
-        return self.uses_rel or self.uses_rho
+        """True when selection needs ≥1 no-grad scoring forward."""
+        return self.uses_rel or self.uses_rho or self.uses_learnability
 
 
 def load_reference_state_dict(path: Union[str, Path]) -> Dict[str, Tensor]:
@@ -139,6 +166,25 @@ def per_token_ce(
     return F.pad(loss, (1, 0), value=0.0)
 
 
+def per_token_z_loss(
+    logits: Tensor,
+    *,
+    z_loss_multiplier: float,
+) -> Tensor:
+    """Per-target-position Z-loss aligned like :func:`per_token_ce`.
+
+    Matches OLMo-core ``cross_entropy_loss``::
+
+        z = λ · (logsumexp(logits))^2
+
+    on the shifted (causal) logits, then pads so index ``t`` corresponds to the
+    prediction of token ``t``. Position 0 is 0.
+    """
+    shift_logits = logits[:, :-1, :].float()
+    z = float(z_loss_multiplier) * shift_logits.logsumexp(-1).pow(2)
+    return F.pad(z, (1, 0), value=0.0)
+
+
 def masked_ce_from_token_ce(token_ce: Tensor, label_mask: Tensor) -> Tuple[Tensor, int]:
     """Sum an already-computed per-token CE over the selected positions.
 
@@ -160,8 +206,51 @@ def masked_ce_from_token_ce(token_ce: Tensor, label_mask: Tensor) -> Tuple[Tenso
     return loss, int(mask.sum().item())
 
 
+def masked_z_from_token_z(token_z: Tensor, label_mask: Tensor) -> Tensor:
+    """Sum per-token Z-loss over the same selected positions as CE."""
+    mask = label_mask.to(dtype=torch.bool)
+    accumulate_in = torch.promote_types(token_z.dtype, torch.float32)
+    return (token_z.to(accumulate_in) * mask).sum()
+
+
+def average_reference_state_dicts(
+    state_dicts: Sequence[Mapping[str, Tensor]],
+) -> Dict[str, Tensor]:
+    """Element-wise mean of full parameter state dicts (late RefHQ average)."""
+    if not state_dicts:
+        raise ValueError("average_reference_state_dicts requires at least one state dict")
+    first = state_dicts[0]
+    keys = set(first)
+    for i, sd in enumerate(state_dicts[1:], start=1):
+        if set(sd) != keys:
+            missing = sorted(keys - set(sd))[:8]
+            extra = sorted(set(sd) - keys)[:8]
+            raise KeyError(
+                f"state dict {i} keys differ: missing={missing} extra={extra}"
+            )
+    out: Dict[str, Tensor] = {}
+    n = float(len(state_dicts))
+    for key, tensor0 in first.items():
+        if not isinstance(tensor0, Tensor):
+            raise TypeError(f"reference weight {key!r} must be a Tensor")
+        if tensor0.is_floating_point():
+            acc = tensor0.detach().to(dtype=torch.float32).clone()
+            for sd in state_dicts[1:]:
+                t = sd[key]
+                if tuple(t.shape) != tuple(tensor0.shape):
+                    raise ValueError(
+                        f"shape mismatch for {key!r}: {tuple(t.shape)} vs "
+                        f"{tuple(tensor0.shape)}"
+                    )
+                acc.add_(t.detach().to(dtype=torch.float32))
+            out[key] = (acc / n).to(dtype=tensor0.dtype)
+        else:
+            out[key] = tensor0.detach().clone()
+    return out
+
+
 class TokenSelectState:
-    """Mutable run state: step counter + REL EMA and/or RHO frozen reference.
+    """Mutable run state: step counter + REL EMA and/or frozen reference(s).
 
     The EMA accumulates from step 0, including through warmup, but it is debiased so the
     random initialization is excluded from the average (see :class:`EMAHistory`). Warmup
@@ -172,8 +261,8 @@ class TokenSelectState:
     - ``False`` (FSDP / OLMo-core): keep only the EMA shadow and run the history forward
       via :meth:`EMAHistory.swap_to` on the training model (no second full-size copy).
 
-    RHO always uses a :class:`FrozenReference` shadow + ``swap_to``. Pass ``frozen_ref``
-    directly, or set ``cfg.reference_load_path`` to load from disk.
+    RHO uses one :class:`FrozenReference`. Learnability uses two (early + late).
+    Pass in-memory refs for smokes, or set the corresponding ``*_load_path`` fields.
     """
 
     def __init__(
@@ -183,6 +272,8 @@ class TokenSelectState:
         *,
         build_history_module: bool = True,
         frozen_ref: Optional[FrozenReference] = None,
+        frozen_ref_early: Optional[FrozenReference] = None,
+        frozen_ref_late: Optional[FrozenReference] = None,
     ):
         self.cfg = cfg
         self.step = 0
@@ -190,13 +281,36 @@ class TokenSelectState:
         self.ema: Optional[EMAHistory] = None
         self.history_model: Optional[nn.Module] = None
         self.frozen_ref: Optional[FrozenReference] = None
+        self.frozen_ref_early: Optional[FrozenReference] = None
+        self.frozen_ref_late: Optional[FrozenReference] = None
         if cfg.uses_rel:
-            self.ema = EMAHistory.from_module(model, alpha=cfg.alpha_start)
+            seed_mode = str(cfg.ema_seed_mode or "zero").lower()
+            if seed_mode == "refhq":
+                if not cfg.reference_load_path:
+                    raise ValueError(
+                        "ema_seed_mode='refhq' requires TokenSelectConfig.reference_load_path "
+                        "(exported RefHQ step1315 model.pt). This is the ONLY arm that seeds "
+                        "EMA history from RefHQ; zero-init bias-corrected EMA must use "
+                        "ema_seed_mode='zero'."
+                    )
+                weights = load_reference_state_dict(cfg.reference_load_path)
+                self.ema = EMAHistory.from_module_seeded(
+                    model, weights, alpha=cfg.alpha_start
+                )
+            elif seed_mode == "zero":
+                # Bias-corrected empty accumulator (rel-ema-exp). Do not seed from RefHQ.
+                self.ema = EMAHistory.from_module(model, alpha=cfg.alpha_start)
+            else:
+                raise ValueError(
+                    f"ema_seed_mode={seed_mode!r} unsupported; expected 'zero' or 'refhq'"
+                )
             if build_history_module:
                 self.history_model = copy.deepcopy(model)
                 self.history_model.eval()
                 for p in self.history_model.parameters():
                     p.requires_grad_(False)
+                if self.ema is not None and self.ema.has_history:
+                    self.ema.copy_to(self.history_model)
         if cfg.uses_rho:
             if frozen_ref is not None:
                 self.frozen_ref = frozen_ref
@@ -206,6 +320,27 @@ class TokenSelectState:
             else:
                 raise ValueError(
                     "rho_excess requires frozen_ref=... or TokenSelectConfig.reference_load_path"
+                )
+        if cfg.uses_learnability:
+            if frozen_ref_early is not None:
+                self.frozen_ref_early = frozen_ref_early
+            elif cfg.early_reference_load_path:
+                weights = load_reference_state_dict(cfg.early_reference_load_path)
+                self.frozen_ref_early = FrozenReference.from_state_dict(model, weights)
+            else:
+                raise ValueError(
+                    "learnability requires frozen_ref_early=... or "
+                    "TokenSelectConfig.early_reference_load_path"
+                )
+            if frozen_ref_late is not None:
+                self.frozen_ref_late = frozen_ref_late
+            elif cfg.late_reference_load_path:
+                weights = load_reference_state_dict(cfg.late_reference_load_path)
+                self.frozen_ref_late = FrozenReference.from_state_dict(model, weights)
+            else:
+                raise ValueError(
+                    "learnability requires frozen_ref_late=... or "
+                    "TokenSelectConfig.late_reference_load_path"
                 )
 
     def current_alpha(self) -> float:
@@ -217,6 +352,8 @@ class TokenSelectState:
             total_steps=self.cfg.total_steps,
             alpha_start=self.cfg.alpha_start,
             alpha_end=self.cfg.alpha_end,
+            schedule=self.cfg.alpha_schedule,
+            tau=self.cfg.alpha_tau,
         )
 
     def in_warmup(self) -> bool:
@@ -255,6 +392,10 @@ class TokenSelectState:
             state["ema"] = self.ema.state_dict()
         if self.frozen_ref is not None:
             state["frozen_ref"] = self.frozen_ref.state_dict()
+        if self.frozen_ref_early is not None:
+            state["frozen_ref_early"] = self.frozen_ref_early.state_dict()
+        if self.frozen_ref_late is not None:
+            state["frozen_ref_late"] = self.frozen_ref_late.state_dict()
         return state
 
     def load_state_dict(self, state: Mapping[str, Any]) -> None:
@@ -290,6 +431,34 @@ class TokenSelectState:
             elif not self.cfg.reference_load_path:
                 raise ValueError("RHO checkpoint state is missing frozen reference weights")
 
+        if self.frozen_ref_early is None:
+            if "frozen_ref_early" in state:
+                raise ValueError(
+                    f"received early-ref checkpoint state for method={self.cfg.method!r}"
+                )
+        else:
+            early_state = state.get("frozen_ref_early")
+            if isinstance(early_state, Mapping):
+                self.frozen_ref_early.load_state_dict(early_state)
+            elif not self.cfg.early_reference_load_path:
+                raise ValueError(
+                    "learnability checkpoint state is missing early frozen reference weights"
+                )
+
+        if self.frozen_ref_late is None:
+            if "frozen_ref_late" in state:
+                raise ValueError(
+                    f"received late-ref checkpoint state for method={self.cfg.method!r}"
+                )
+        else:
+            late_state = state.get("frozen_ref_late")
+            if isinstance(late_state, Mapping):
+                self.frozen_ref_late.load_state_dict(late_state)
+            elif not self.cfg.late_reference_load_path:
+                raise ValueError(
+                    "learnability checkpoint state is missing late frozen reference weights"
+                )
+
         self.step = step
         self.tokens_seen = tokens_seen
         if self.ema is not None:
@@ -308,10 +477,18 @@ class TokenSelectLoop:
         cfg: TokenSelectConfig,
         *,
         frozen_ref: Optional[FrozenReference] = None,
+        frozen_ref_early: Optional[FrozenReference] = None,
+        frozen_ref_late: Optional[FrozenReference] = None,
     ):
         self.model = model
         self.cfg = cfg
-        self.state = TokenSelectState(cfg, model, frozen_ref=frozen_ref)
+        self.state = TokenSelectState(
+            cfg,
+            model,
+            frozen_ref=frozen_ref,
+            frozen_ref_early=frozen_ref_early,
+            frozen_ref_late=frozen_ref_late,
+        )
 
     def train_step(self, input_ids: Tensor) -> Dict[str, Any]:
         cfg = self.cfg
@@ -321,8 +498,13 @@ class TokenSelectLoop:
         rel_active = bool(cfg.uses_rel and not warmup)
         rho_active = bool(cfg.uses_rho and not warmup)
         middle_active = bool(cfg.uses_middle_ppl and not warmup)
-        select_active = rel_active or rho_active or middle_active
-        scoring_forward = rel_active or rho_active
+        attn_active = bool(cfg.uses_attention and not warmup)
+        learn_active = bool(cfg.uses_learnability and not warmup)
+        select_active = (
+            rel_active or rho_active or middle_active or attn_active or learn_active
+        )
+        scoring_forward = rel_active or rho_active or learn_active
+        scoring_passes = (1 if (rel_active or rho_active) else 0) + (2 if learn_active else 0)
 
         valid = torch.ones_like(input_ids, dtype=torch.bool)
         valid[:, 0] = False
@@ -330,10 +512,13 @@ class TokenSelectLoop:
         current_loss: Optional[Tensor] = None
         history_loss: Optional[Tensor] = None
         reference_loss: Optional[Tensor] = None
+        early_loss: Optional[Tensor] = None
+        late_loss: Optional[Tensor] = None
+        attention_score: Optional[Tensor] = None
         scoring_tokens = 0
 
-        # RHO must score *before* the grad-enabled forward: swap_to mutates parameters
-        # in place, which would invalidate autograd if the train forward ran first.
+        # Frozen-ref scoring must run *before* the grad-enabled forward: swap_to mutates
+        # parameters in place, which would invalidate autograd if the train forward ran first.
         if rho_active:
             assert st.frozen_ref is not None
             with torch.no_grad():
@@ -341,11 +526,28 @@ class TokenSelectLoop:
                     logits_r = self.model(input_ids)
                     reference_loss = per_token_ce(logits_r, input_ids)
             scoring_tokens += int(input_ids.numel())
+        elif learn_active:
+            assert st.frozen_ref_early is not None and st.frozen_ref_late is not None
+            with torch.no_grad():
+                with st.frozen_ref_early.swap_to(self.model):
+                    logits_e = self.model(input_ids)
+                    early_loss = per_token_ce(logits_e, input_ids)
+                with st.frozen_ref_late.swap_to(self.model):
+                    logits_l = self.model(input_ids)
+                    late_loss = per_token_ce(logits_l, input_ids)
+            scoring_tokens += 2 * int(input_ids.numel())
 
         # Folded: ONE training forward (with grad) and ONE cross-entropy over its logits.
         # REL / middle_ppl reuse that CE as the current-model score (detached).
+        # attention_topk hooks last-layer attention input during this forward, then
+        # recomputes Q/K (FlashAttention-safe) for the received-mass score.
         self.model.train()
-        logits = self.model(input_ids)
+        if attn_active:
+            with capture_last_layer_attention_input(self.model) as attn_cap:
+                logits = self.model(input_ids)
+            attention_score = scores_from_capture(attn_cap)
+        else:
+            logits = self.model(input_ids)
         token_ce = per_token_ce(logits, input_ids)
 
         if rel_active:
@@ -365,6 +567,9 @@ class TokenSelectLoop:
             current_loss=current_loss,
             history_loss=history_loss,
             reference_loss=reference_loss,
+            early_loss=early_loss,
+            late_loss=late_loss,
+            attention_score=attention_score,
             shape_ref=input_ids,
             valid=valid,
             warmup=warmup,
@@ -384,6 +589,10 @@ class TokenSelectLoop:
             score = current_loss - reference_loss
         elif middle_active and current_loss is not None:
             score = current_loss
+        elif attn_active and attention_score is not None:
+            score = attention_score
+        elif learn_active and early_loss is not None and late_loss is not None:
+            score = early_loss - late_loss
         if score is not None:
             kept = label_mask & valid
             dropped = (~label_mask) & valid
@@ -396,10 +605,10 @@ class TokenSelectLoop:
         compute = {
             "selected_tokens": int(n_tok),
             "forward_tokens_train": n_input,
-            "forward_tokens_history": n_input if scoring_forward else 0,
+            "forward_tokens_history": n_input * scoring_passes if scoring_forward else 0,
             "forward_tokens_current": 0,  # folded into the training forward
             "fwd_passes_train": 1,
-            "fwd_passes_history": 1 if scoring_forward else 0,
+            "fwd_passes_history": scoring_passes,
             "fwd_passes_current": 0,
         }
 
@@ -544,14 +753,16 @@ _EMPTY_SELECTION_DELTA: Dict[str, float] = {
 
 
 class TokenSelectTrainModule(TransformerTrainModule if _HAS_OLMO else object):  # type: ignore[misc]
-    """OLMo-core train module for full-token, REL+EMA, RHO, and middle-PPL objectives.
+    """OLMo-core train module for full-token, REL+EMA, RHO, middle-PPL, attention, and learnability.
 
     REL/RHO use a no-grad scoring forward (EMA history or frozen reference) plus one
     grad-enabled current forward whose logits are reused for both the current score and
-    the selected-token CE (two forwards per active micro-batch). ``middle_ppl`` reuses
-    the train-forward CE only (one forward). Intentionally rejects TP/CP and z-loss
-    configurations: their public APIs do not expose unsharded per-token logits
-    compatible with this scoring path.
+    the selected-token CE. Learnability runs *two* frozen-ref scoring forwards
+    (early + late) then the train forward. ``middle_ppl`` reuses the train-forward CE
+    only (one forward). ``attention_topk`` hooks last-layer attention input during the
+    train forward and recomputes Q/K for FlashAttention-safe received-mass scores.
+    Intentionally rejects TP/CP and z-loss configurations: their public APIs do not
+    expose unsharded per-token logits compatible with this scoring path.
     """
 
     def __init__(self, *args: Any, ts_config: Optional[TokenSelectConfig] = None, **kwargs: Any):
@@ -625,11 +836,8 @@ class TokenSelectTrainModule(TransformerTrainModule if _HAS_OLMO else object):  
                 "TokenSelectTrainModule requires full, unsharded logits for REL scoring; "
                 "the pinned OLMo-core API does not expose them with TP or CP enabled."
             )
-        if self.z_loss_multiplier is not None:
-            raise RuntimeError(
-                "TokenSelectTrainModule does not support z_loss_multiplier: the folded "
-                "logits path cannot reproduce OLMo-core's combined CE+z-loss objective."
-            )
+        # z_loss_multiplier is supported: CE+z are folded over the same selection mask
+        # (see train_batch). None disables z-loss (OLMo-core default).
 
     @staticmethod
     def _valid_targets(batch: Mapping[str, Any], input_ids: Tensor) -> Tensor:
@@ -703,8 +911,13 @@ class TokenSelectTrainModule(TransformerTrainModule if _HAS_OLMO else object):  
         rel_active = bool(cfg.uses_rel and not warmup)
         rho_active = bool(cfg.uses_rho and not warmup)
         middle_active = bool(cfg.uses_middle_ppl and not warmup)
-        select_active = rel_active or rho_active or middle_active
-        scoring_forward = rel_active or rho_active
+        attn_active = bool(cfg.uses_attention and not warmup)
+        learn_active = bool(cfg.uses_learnability and not warmup)
+        select_active = (
+            rel_active or rho_active or middle_active or attn_active or learn_active
+        )
+        scoring_passes = (1 if (rel_active or rho_active) else 0) + (2 if learn_active else 0)
+        scoring_forward = scoring_passes > 0
         valid = self._valid_targets(batch, input_ids)
         selected_total = self._selected_count(valid, select_active=select_active, k=cfg.k)
         if selected_total == 0:
@@ -739,6 +952,9 @@ class TokenSelectTrainModule(TransformerTrainModule if _HAS_OLMO else object):  
         micro_batches = split_batch(batch, self.rank_microbatch_size // seq_len)
         num_micro_batches = len(micro_batches)
         ce_batch_loss = torch.zeros((), device=self.device)
+        z_batch_loss: Optional[Tensor] = None
+        if self.z_loss_multiplier is not None:
+            z_batch_loss = torch.zeros((), device=self.device)
         selected_seen = 0
         # Accumulated on-device so the score curves cost one host sync per batch
         # rather than one per micro-batch.
@@ -752,6 +968,9 @@ class TokenSelectTrainModule(TransformerTrainModule if _HAS_OLMO else object):  
 
                 history_loss = None
                 reference_loss = None
+                early_loss = None
+                late_loss = None
+                attention_score = None
                 if rel_active:
                     assert st.ema is not None
                     with self._score_eval_mode(), torch.no_grad(), st.ema.swap_to(self.model):
@@ -766,16 +985,40 @@ class TokenSelectTrainModule(TransformerTrainModule if _HAS_OLMO else object):  
                         reference_loss = per_token_ce(ref_logits, micro_input_ids)
                     del ref_logits
                     self.model.reset_auxiliary_metrics()
+                elif learn_active:
+                    assert st.frozen_ref_early is not None and st.frozen_ref_late is not None
+                    with self._score_eval_mode(), torch.no_grad():
+                        with st.frozen_ref_early.swap_to(self.model):
+                            early_logits = self._forward_logits(micro_input_ids, **model_kwargs)
+                            early_loss = per_token_ce(early_logits, micro_input_ids)
+                        del early_logits
+                        with st.frozen_ref_late.swap_to(self.model):
+                            late_logits = self._forward_logits(micro_input_ids, **model_kwargs)
+                            late_loss = per_token_ce(late_logits, micro_input_ids)
+                        del late_logits
+                    self.model.reset_auxiliary_metrics()
 
-                logits = self._forward_logits(micro_input_ids, **model_kwargs)
+                if attn_active:
+                    with capture_last_layer_attention_input(self.model) as attn_cap:
+                        logits = self._forward_logits(micro_input_ids, **model_kwargs)
+                    attention_score = scores_from_capture(attn_cap)
+                else:
+                    logits = self._forward_logits(micro_input_ids, **model_kwargs)
                 token_ce = per_token_ce(logits, micro_input_ids)
-                current_loss = token_ce.detach() if select_active else None
+                current_loss = (
+                    token_ce.detach()
+                    if (select_active and not learn_active and not attn_active)
+                    else None
+                )
                 label_mask = build_mask(
                     method=cfg.method,
                     k=cfg.k,
                     current_loss=current_loss,
                     history_loss=history_loss,
                     reference_loss=reference_loss,
+                    early_loss=early_loss,
+                    late_loss=late_loss,
+                    attention_score=attention_score,
                     shape_ref=micro_input_ids,
                     valid=micro_valid,
                     warmup=warmup,
@@ -795,6 +1038,10 @@ class TokenSelectTrainModule(TransformerTrainModule if _HAS_OLMO else object):  
                     score = current_loss - reference_loss
                 elif middle_active and current_loss is not None:
                     score = current_loss
+                elif attn_active and attention_score is not None:
+                    score = attention_score
+                elif learn_active and early_loss is not None and late_loss is not None:
+                    score = early_loss - late_loss
                 if score is not None:
                     kept = label_mask & micro_valid
                     dropped = (~label_mask) & micro_valid
@@ -807,8 +1054,21 @@ class TokenSelectTrainModule(TransformerTrainModule if _HAS_OLMO else object):  
                             dropped.sum().to(score.dtype),
                         ]
                     )
-                loss = loss_sum / loss_divisor
-                ce_batch_loss += loss.detach()
+                # CE (+ optional Z) over the same selection mask; both scale by loss_divisor.
+                ce_loss = loss_sum / loss_divisor
+                loss = ce_loss
+                if self.z_loss_multiplier is not None:
+                    assert z_batch_loss is not None
+                    z_sum = masked_z_from_token_z(
+                        per_token_z_loss(logits, z_loss_multiplier=float(self.z_loss_multiplier)),
+                        label_mask,
+                    )
+                    z_loss = z_sum / loss_divisor
+                    loss = ce_loss + z_loss
+                    z_batch_loss += z_loss.detach()
+                    del z_sum, z_loss
+                ce_batch_loss += ce_loss.detach()
+                del logits, token_ce
                 loss.backward()
 
         if selected_seen != selected_total:
@@ -819,8 +1079,8 @@ class TokenSelectTrainModule(TransformerTrainModule if _HAS_OLMO else object):  
         self._compute_delta["forward_tokens_train"] += int(batch_num_tokens)
         self._compute_delta["fwd_passes_train"] += num_micro_batches
         if scoring_forward:
-            self._compute_delta["forward_tokens_history"] += int(batch_num_tokens)
-            self._compute_delta["fwd_passes_history"] += num_micro_batches
+            self._compute_delta["forward_tokens_history"] += int(batch_num_tokens) * scoring_passes
+            self._compute_delta["fwd_passes_history"] += num_micro_batches * scoring_passes
         self.model.post_batch(dry_run=dry_run)
         if dry_run:
             self.model.reset_auxiliary_metrics()
@@ -836,6 +1096,8 @@ class TokenSelectTrainModule(TransformerTrainModule if _HAS_OLMO else object):  
         self._selection_delta["n_batches"] += 1.0
 
         self.record_ce_loss(ce_batch_loss, ReduceType.mean)
+        if z_batch_loss is not None:
+            self.record_metric("Z loss", z_batch_loss, ReduceType.mean, namespace="train")
         for metric_name, (metric_val, reduction) in self.model.compute_auxiliary_metrics(
             reset=True
         ).items():
@@ -849,7 +1111,9 @@ def has_olmo_core() -> bool:
 def make_ts_config(
     cfg: Dict[str, Any],
     *,
-    method: Literal["full", "rel_ema", "rho_excess", "middle_ppl"],
+    method: Literal[
+        "full", "rel_ema", "rho_excess", "middle_ppl", "attention_topk", "learnability"
+    ],
     total_steps: Optional[int] = None,
     t0_steps: Optional[int] = None,
 ) -> TokenSelectConfig:
@@ -858,9 +1122,42 @@ def make_ts_config(
         from token_selection.scripts import derive_steps
 
         total_steps, t0_steps = derive_steps(cfg)
-    uses_selection = method in ("rel_ema", "rho_excess", "middle_ppl")
+    uses_selection = method in (
+        "rel_ema",
+        "rho_excess",
+        "middle_ppl",
+        "attention_topk",
+        "learnability",
+    )
     ref = cfg.get("reference") or {}
     ref_path = ref.get("load_path")
+    early = ref.get("early") or {}
+    late = ref.get("late") or {}
+    early_path = early.get("load_path")
+    late_path = late.get("load_path")
+    ema_block = cfg.get("ema") or {}
+    seed_mode = str(
+        ema_block.get("seed_mode") or cfg.get("ema_seed_mode") or "zero"
+    ).lower()
+    if seed_mode not in ("zero", "refhq"):
+        raise ValueError(
+            f"ema.seed_mode / ema_seed_mode={seed_mode!r} unsupported; "
+            "expected 'zero' (bias-corrected) or 'refhq' (rel-ema-refhq only)"
+        )
+    if method != "rel_ema" and seed_mode == "refhq":
+        raise ValueError("ema_seed_mode='refhq' is only valid for method=rel_ema")
+    schedule = str(
+        ema_block.get("schedule") or cfg.get("alpha_schedule") or "linear"
+    ).strip().lower()
+    if schedule not in ("linear", "exp"):
+        raise ValueError(
+            f"ema.schedule / alpha_schedule={schedule!r} unsupported; "
+            "expected 'linear' or 'exp'"
+        )
+    tau_raw = ema_block.get("tau")
+    if tau_raw is None:
+        tau_raw = cfg.get("alpha_tau", DEFAULT_ALPHA_TAU)
+    tau = float(tau_raw)
     return TokenSelectConfig(
         method=method,
         k=float(cfg.get("k", 0.6)),
@@ -868,6 +1165,11 @@ def make_ts_config(
         total_steps=int(total_steps),
         alpha_start=float(cfg.get("alpha_start", 0.999)),
         alpha_end=float(cfg.get("alpha_end", 0.995)),
+        alpha_schedule=schedule,
+        alpha_tau=tau,
         seed=int(cfg.get("seed", 42)),
         reference_load_path=str(ref_path) if ref_path else None,
+        early_reference_load_path=str(early_path) if early_path else None,
+        late_reference_load_path=str(late_path) if late_path else None,
+        ema_seed_mode=seed_mode,  # type: ignore[arg-type]
     )

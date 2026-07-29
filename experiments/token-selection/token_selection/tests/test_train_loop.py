@@ -73,6 +73,27 @@ def test_folded_ce_ignores_positions_outside_the_mask():
     assert touched == {2}
 
 
+def test_masked_z_loss_matches_olmo_core_formula():
+    from token_selection.olmo_ext.train_module import masked_z_from_token_z, per_token_z_loss
+
+    torch.manual_seed(2)
+    logits = torch.randn(2, 6, 16, dtype=torch.float64, requires_grad=True)
+    mask = torch.ones(2, 6, dtype=torch.bool)
+    mask[:, 0] = False
+    lam = 1e-5
+    token_z = per_token_z_loss(logits, z_loss_multiplier=lam)
+    z_sum = masked_z_from_token_z(token_z, mask)
+    # Independent: z on shifted logits, mask on target positions 1..T-1.
+    shift = logits[:, :-1, :].float()
+    z_sq = shift.logsumexp(-1).pow(2)
+    expected = (lam * z_sq * mask[:, 1:]).sum()
+    assert torch.allclose(z_sum, expected, rtol=1e-9, atol=1e-9)
+    z_sum.backward()
+    assert logits.grad is not None
+    assert logits.grad[:, -1].abs().sum() == 0  # last logit row unused (no next target)
+
+
+
 class Tiny(nn.Module):
     def __init__(self, v: int = 32, d: int = 16):
         super().__init__()

@@ -39,6 +39,35 @@ def test_token_select_state_restores_ema_and_step() -> None:
     assert restored.ema.alpha == restored.current_alpha()
 
 
+def test_token_select_state_refhq_seed_mode(tmp_path):
+    """ema_seed_mode=refhq loads history from reference .pt; zero mode stays empty."""
+    torch.save({"weight": torch.tensor([4.0, 6.0])}, tmp_path / "ref.pt")
+
+    cfg = TokenSelectConfig(
+        method="rel_ema",
+        t0_steps=0,
+        total_steps=10,
+        alpha_start=0.9985,
+        alpha_end=0.9985,
+        ema_seed_mode="refhq",
+        reference_load_path=str(tmp_path / "ref.pt"),
+    )
+    model = Tiny()
+    model.weight.data.fill_(0.0)
+    state = TokenSelectState(cfg, model, build_history_module=False)
+    assert state.ema is not None
+    assert state.ema.has_history
+    assert torch.allclose(state.ema.history("weight"), torch.tensor([4.0, 6.0]))
+
+    zero = TokenSelectState(
+        TokenSelectConfig(method="rel_ema", ema_seed_mode="zero", alpha_start=0.5),
+        Tiny(),
+        build_history_module=False,
+    )
+    assert zero.ema is not None
+    assert not zero.ema.has_history
+
+
 def test_rel_callback_persists_and_advances_once_per_trainer_step() -> None:
     cfg = TokenSelectConfig(method="rel_ema", t0_steps=0, total_steps=10, alpha_start=0.5)
     model = Tiny()

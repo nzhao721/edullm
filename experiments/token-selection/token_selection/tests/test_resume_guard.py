@@ -217,9 +217,9 @@ def _experiment_cfg() -> dict:
             "sequence_length": 8,
         },
         "s3": {
-            "dataset_bucket": "edullm-dataset-olmo",
+            "dataset_bucket": "edullm-datasets",
             "checkpoint_bucket": "edullm-checkpoints",
-            "prefix": "token-selection/rho-excess-10b-scratch-v1",
+            "prefix": "token-sel/rho-1",
         },
         "model": {
             "name": "OLMo-2-370M-scratch",
@@ -300,6 +300,9 @@ def test_fingerprint_covers_the_fairness_critical_fields(tmp_path):
         "rel_k",
         "rel_alpha_start",
         "rel_alpha_end",
+        "alpha_schedule",
+        "alpha_tau",
+        "ema_seed_mode",
         "reference_load_path",
     ):
         assert key in fp

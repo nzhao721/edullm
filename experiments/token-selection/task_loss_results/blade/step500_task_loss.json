@@ -1,0 +1,21 @@
+{
+  "run_name": "blade-step500",
+  "checkpoint": "/scratch/users/nzhao2/checkpoints/token-selection-370m/blade/checkpoints/step500",
+  "format": "state_pt",
+  "step": 500,
+  "task_loss_bpb": {
+    "mmlu_stem_test_rc_5shot_bpb": 8.73225212097168,
+    "mmlu_humanities_test_rc_5shot_bpb": 4.041971683502197,
+    "mmlu_social_sciences_test_rc_5shot_bpb": 3.69266676902771,
+    "mmlu_other_test_rc_5shot_bpb": 4.943700313568115,
+    "hellaswag_val_rc_5shot_bpb": 3.893989086151123,
+    "arc_challenge_test_rc_5shot_bpb": 4.2596588134765625,
+    "arc_easy_test_rc_5shot_bpb": 3.6998403072357178,
+    "piqa_val_rc_5shot_bpb": 4.180622577667236,
+    "csqa_val_rc_5shot_bpb": 3.135000705718994,
+    "socialiqa_val_rc_5shot_bpb": 3.520514726638794,
+    "openbookqa_test_rc_5shot_bpb": 3.700984477996826,
+    "mmlu_avg_test_rc_5shot_bpb": 5.3526477217674255,
+    "core7_avg_rc_5shot_bpb": 3.770087242126465
+  }
+}

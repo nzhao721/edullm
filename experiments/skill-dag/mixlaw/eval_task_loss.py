@@ -1,11 +1,8 @@
 #!/usr/bin/env python3
 """Full OLMo-ladder task-loss evaluation of a finished mixture checkpoint.
 
-This produces the numbers the mixing law is actually fitted to. During training
-only a cheap subset of labels is evaluated on a capped number of batches; here the
-complete 20-label OLMES 5-shot RC suite is run to convergence on the whole task
-set, which matters because the mixing law is fitted across only 24 points and
-per-label noise propagates directly into the coefficients.
+This produces the numbers the mixing law is fitted to. By default only the six
+in-run curve labels are evaluated; pass ``--full-suite`` for all 20 ladder labels.
 
 Task loss is bits-per-byte of the gold continuation:
 
@@ -39,7 +36,12 @@ from olmo.tokenizer import Tokenizer
 from olmo.torch_util import get_local_rank
 from olmo.util import add_cached_path_clients, prepare_cli_environment
 
-from mixlaw_common import LADDER_TASK_LOSS_LABELS, task_family
+from mixlaw_common import (
+    CURVE_TASK_LOSS_LABELS,
+    LADDER_TASK_LOSS_LABELS,
+    patch_torch_load_for_olmo_checkpoints,
+    task_family,
+)
 
 log = logging.getLogger("eval_task_loss")
 
@@ -88,6 +90,7 @@ def evaluate_label(
 
 
 def main() -> None:
+    patch_torch_load_for_olmo_checkpoints()
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--checkpoint", type=Path, required=True, help="Unsharded OLMo checkpoint dir")
     ap.add_argument("--out", type=Path, required=True, help="Where task_loss_final.json is written")
@@ -98,7 +101,12 @@ def main() -> None:
         "--labels",
         nargs="*",
         default=None,
-        help="Subset of the 20 ladder bpb labels (default: all)",
+        help="Subset of ladder bpb labels (default: six in-run curve labels)",
+    )
+    ap.add_argument(
+        "--full-suite",
+        action="store_true",
+        help="Evaluate all 20 ladder bpb labels instead of the curve subset",
     )
     ap.add_argument(
         "--max-batches",
@@ -108,7 +116,12 @@ def main() -> None:
     )
     args = ap.parse_args()
 
-    labels = list(args.labels) if args.labels else list(LADDER_TASK_LOSS_LABELS)
+    if args.labels is not None:
+        labels = list(args.labels)
+    elif args.full_suite:
+        labels = list(LADDER_TASK_LOSS_LABELS)
+    else:
+        labels = list(CURVE_TASK_LOSS_LABELS)
     unknown = [lbl for lbl in labels if lbl not in LADDER_TASK_LOSS_LABELS]
     if unknown:
         raise SystemExit(f"not OLMo-ladder task-loss labels: {unknown}")

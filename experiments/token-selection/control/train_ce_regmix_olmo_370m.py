@@ -1,20 +1,20 @@
 #!/usr/bin/env python3
 """Plain CE control pretraining on RegMix 10B (token-selection baseline).
 
-Matches BLADE proxy **warmup** architecture + wall-clock train stack
-(``train_blade_olmo_370m.py``), without BLADE token selection / reference:
+Architecture matches RefHQ CE exactly (``reference/train_olmo3_370m_refhq.py``):
 
-  * ``TransformerConfig.olmo2_370M`` (full attn, no SWA)
-  * ``TransformerTrainModule`` — HSDP bf16, SkipStepAdamW, CosWithWarmup,
-    ``compile_model=True``, ``z_loss_multiplier=1e-5``
-  * fused LM-head CE when liger-kernel is available (no full logits)
-  * sequence=2048, global_batch=4_194_304, rank_microbatch=65_536
-  * train corpus: RegMix 10B (same as BLADE proxy)
-  * persistent checkpoints every 250 steps (all kept)
-  * ephemeral checkpoints every 50 steps (latest only; overwritten)
-  * multi-GPU via ``torchrun`` + HSDP
+  * ``TransformerConfig.olmo2_370M`` — d_model=1024, 16L/16H, full attn (no SWA)
+  * vocab 100352, seq 2048, GBS 4_194_304, rank microbatch 65_536
+  * SkipStepAdamW + CosWithWarmup LR 4e-4 warmup 24 alpha_f 0.1
+  * z_loss 1e-5, compile_model=True, from scratch
+  * HSDP bf16 train module; world size from torchrun (no hardcoded GPU count)
 
-Launch via ``torchrun`` + your own launcher script. Does **not** call AWS.
+Permanent checkpoint ladder (shared helper): step 0, every 125, final;
+omit last on-grid if within 125 of final (2384 → skip 2375).
+Post-save hook launches full 20-label OLMo-ladder task_loss_bpb eval.
+
+Data: s3://edullm-datasets/regmix/regmix-10b/ (local memmap paths via CLI).
+Does **not** call AWS.
 """
 from __future__ import annotations
 
@@ -22,11 +22,11 @@ import argparse
 import json
 import logging
 import os
-import shutil
+import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Iterator, List, Optional
+from typing import Any, Dict, Iterator, List, Optional, Set
 
 os.environ["WANDB_DISABLED"] = "1"
 os.environ["WANDB_MODE"] = "disabled"
@@ -44,6 +44,11 @@ for _var in (
 ):
     os.environ.pop(_var, None)
 
+# Shared package lives under experiments/token-selection/
+_TS_ROOT = Path(__file__).resolve().parents[1]
+if str(_TS_ROOT) not in sys.path:
+    sys.path.insert(0, str(_TS_ROOT))
+
 import numpy as np
 import torch
 import torch.distributed as dist
@@ -51,6 +56,7 @@ from torch.utils.data import DataLoader, Dataset, RandomSampler
 from torch.utils.data.distributed import DistributedSampler
 
 from olmo_core.config import DType
+from olmo_core.data import TokenizerConfig
 from olmo_core.distributed.parallel import DataParallelType
 from olmo_core.distributed.utils import get_rank, get_world_size, is_distributed
 from olmo_core.nn.attention import AttentionBackendName
@@ -68,18 +74,43 @@ from olmo_core.train.train_module import (
 )
 from olmo_core.utils import seed_all
 
+from token_selection.olmo_ext.checkpoint_ladder import (
+    DEFAULT_CHECKPOINT_INTERVAL,
+    permanent_checkpoint_steps,
+)
+from token_selection.olmo_ext.s3_layout import arm_prefix
+from token_selection.olmo_ext.task_loss_hook import trigger_task_loss_eval
+
+try:
+    from torch.distributed.checkpoint.state_dict import (
+        StateDictOptions,
+        get_model_state_dict,
+        get_optimizer_state_dict,
+        set_model_state_dict,
+        set_optimizer_state_dict,
+    )
+except Exception:  # pragma: no cover
+    StateDictOptions = None  # type: ignore
+    get_model_state_dict = None  # type: ignore
+    get_optimizer_state_dict = None  # type: ignore
+    set_model_state_dict = None  # type: ignore
+    set_optimizer_state_dict = None  # type: ignore
+
 log = logging.getLogger("train_ce_regmix_olmo2_370m")
 
 SEQ_LEN = 2048
-EMBEDDING_SIZE = 100_352
+TOKENIZER_ID = "allenai/dolma2-tokenizer"
+EMBEDDING_SIZE = 100_352  # TokenizerConfig.dolma2().padded_vocab_size()
 GLOBAL_BATCH_TOKENS = 4_194_304
 MICROBATCH_TOKENS = 65_536
 PEAK_LR = 4.0e-4
-
-
-# ---------------------------------------------------------------------------
-# Bookkeeping stub so TrainModule.optim_step / metrics work without Trainer.fit
-# ---------------------------------------------------------------------------
+DEFAULT_SEED = 6198
+# Clean new run_id — do not append to old edullm-370M-ce-regmix10b prefix.
+DEFAULT_RUN_ID = "control-regmix10b-v1"
+DEFAULT_LENGTH_TOKENS = 10_000_000_000  # → 2384 steps at GBS 4_194_304
+CONFIG_NAME = "OLMo-2-370M-scratch"
+ARM = "control"
+S3_PREFIX = arm_prefix(ARM)  # token-sel/control
 
 
 @dataclass
@@ -99,11 +130,6 @@ class _Bookkeeping:
 
     def record_ce_loss(self, *args: Any, **kwargs: Any) -> None:
         return None
-
-
-# ---------------------------------------------------------------------------
-# Data (same memmap path as BLADE proxy)
-# ---------------------------------------------------------------------------
 
 
 class MemmapTokenDataset(Dataset):
@@ -216,54 +242,46 @@ class InfiniteBatchStream:
 
 
 def next_rank_input_ids(stream: InfiniteBatchStream, n_seqs: int, device: torch.device) -> torch.Tensor:
-    """Concatenate microbatches until we have ``n_seqs`` sequences for this rank."""
     chunks: List[torch.Tensor] = []
     got = 0
     while got < n_seqs:
         x = stream.next_batch()["input_ids"]
         chunks.append(x)
         got += x.size(0)
-    out = torch.cat(chunks, dim=0)[:n_seqs]
-    return out.to(device, non_blocking=True)
-
-
-# ---------------------------------------------------------------------------
-# Model / train module (BLADE warmup / GPU7 stack)
-# ---------------------------------------------------------------------------
+    return torch.cat(chunks, dim=0)[:n_seqs].to(device, non_blocking=True)
 
 
 def resolve_attn_backend() -> AttentionBackendName:
-    """Prefer flash_attn when available; else PyTorch SDPA.
-
-    Env ``OLMO_ATTN_BACKEND``: ``auto`` (default), ``flash_2``/``flash``, or ``torch``.
-    """
-    prefer = os.environ.get("OLMO_ATTN_BACKEND", "auto").strip().lower()
+    """Match RefHQ default (torch) unless OLMO_ATTN_BACKEND overrides."""
+    prefer = os.environ.get("OLMO_ATTN_BACKEND", "torch").strip().lower()
     if prefer in ("torch", "sdpa", "eager"):
         return AttentionBackendName.torch
-    want_flash = prefer in ("auto", "flash_2", "flash", "flash2")
-    if want_flash:
+    if prefer in ("flash_2", "flash", "flash2", "auto"):
         try:
             import flash_attn  # noqa: F401
 
             backend = AttentionBackendName.flash_2
             backend.get_class().assert_supported()
-            log.info("attn_backend=flash_2 (flash_attn available)")
+            log.info("attn_backend=flash_2")
             return backend
         except Exception as e:
-            if prefer != "auto":
-                log.warning(
-                    "OLMO_ATTN_BACKEND=%s but flash_attn unavailable (%s); using torch",
-                    prefer,
-                    e,
-                )
-            else:
-                log.info("flash_attn unavailable (%s); attn_backend=torch (SDPA)", e)
-    return AttentionBackendName.torch
+            log.warning("flash_attn unavailable (%s); using torch", e)
+            return AttentionBackendName.torch
+    try:
+        return AttentionBackendName(prefer)
+    except Exception:
+        log.warning("Unknown OLMO_ATTN_BACKEND=%s; using torch", prefer)
+        return AttentionBackendName.torch
 
 
 def build_olmo2_config(*, fused_ce: bool) -> TransformerConfig:
+    vocab_size = TokenizerConfig.dolma2().padded_vocab_size()
+    if vocab_size != EMBEDDING_SIZE:
+        raise SystemExit(
+            f"dolma2 padded vocab {vocab_size} != expected EMBEDDING_SIZE {EMBEDDING_SIZE}"
+        )
     cfg = TransformerConfig.olmo2_370M(
-        vocab_size=EMBEDDING_SIZE,
+        vocab_size=vocab_size,
         attn_backend=resolve_attn_backend(),
     )
     if fused_ce:
@@ -276,12 +294,6 @@ def build_olmo2_config(*, fused_ce: bool) -> TransformerConfig:
 
 
 def patch_liger_fused_ce_compat() -> bool:
-    """Make olmo_core fused CE work with liger-kernel>=0.8 (4-tuple returns).
-
-    liger 0.8+ returns ``(loss, z_loss, token_acc, predicted_tokens)`` while older
-    olmo_core unpacks 3 values. Also zero ``lse_square_scale`` when
-    ``compute_z_loss=False`` so fused CE matches plain CE (no silent z-term).
-    """
     try:
         import importlib
 
@@ -294,9 +306,7 @@ def patch_liger_fused_ce_compat() -> bool:
 
     apply_fn = getattr(cel, "_fused_linear_cross_entropy_loss", None)
     if apply_fn is None:
-        log.warning("fused CE apply fn missing; cannot patch")
         return False
-
     if getattr(cel, "_edullm_fused_ce_patched", False):
         return True
 
@@ -352,7 +362,6 @@ def patch_liger_fused_ce_compat() -> bool:
 
 
 def try_enable_fused_ce() -> bool:
-    """Enable olmo_core fused LM-head CE via liger-kernel (same CE, no full logits)."""
     try:
         import liger_kernel  # noqa: F401
     except Exception:
@@ -361,7 +370,6 @@ def try_enable_fused_ce() -> bool:
     if not patch_liger_fused_ce_compat():
         log.warning("liger present but fused CE compat patch failed; leaving default CE")
         return False
-    log.info("liger-kernel available — enabling fused_linear CE")
     return True
 
 
@@ -413,11 +421,55 @@ def build_train_module(
     return train_module
 
 
-# ---------------------------------------------------------------------------
-# Checkpointing
-#   persistent: step{N}/ every --save-interval (kept forever)
-#   ephemeral:  ephemeral/step{N}/ every --ephemeral-save-interval (latest only)
-# ---------------------------------------------------------------------------
+def _cpu_plain_tensor(t: Any) -> torch.Tensor:
+    if torch.is_tensor(t) and type(t).__name__ == "Tensor":
+        return t.detach().cpu()
+    full = getattr(t, "full_tensor", None)
+    if callable(full):
+        try:
+            return full().detach().cpu()
+        except Exception:
+            pass
+    local = getattr(t, "to_local", None)
+    if callable(local):
+        try:
+            return local().detach().cpu()
+        except Exception:
+            pass
+    if torch.is_tensor(t):
+        return t.detach().cpu()
+    raise TypeError(f"cannot convert {type(t)} to CPU tensor")
+
+
+def _plainify_state_tree(obj: Any) -> Any:
+    if torch.is_tensor(obj) or type(obj).__name__ == "DTensor":
+        return _cpu_plain_tensor(obj)
+    if isinstance(obj, dict):
+        return {k: _plainify_state_tree(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        seq = [_plainify_state_tree(v) for v in obj]
+        return type(obj)(seq) if not isinstance(obj, list) else seq
+    return obj
+
+
+def gather_train_module_state_dict(train_module: TransformerTrainModule) -> dict[str, Any]:
+    if get_model_state_dict is None or StateDictOptions is None:
+        return _plainify_state_tree(train_module.state_dict_to_save())
+
+    opts = StateDictOptions(full_state_dict=True, cpu_offload=True)
+    model_sd = get_model_state_dict(train_module.model, options=opts)
+    optim_sd: Any = None
+    if get_optimizer_state_dict is not None:
+        try:
+            optim_sd = get_optimizer_state_dict(
+                train_module.model, train_module.optim, options=opts
+            )
+        except Exception as e:
+            log.warning("full optimizer state gather failed (%s); saving model only", e)
+    return {
+        "model": _plainify_state_tree(model_sd),
+        "optim": _plainify_state_tree(optim_sd) if optim_sd is not None else None,
+    }
 
 
 def save_checkpoint(
@@ -426,54 +478,84 @@ def save_checkpoint(
     train_module: TransformerTrainModule,
     args: argparse.Namespace,
     meta: dict,
-    *,
-    ephemeral: bool = False,
 ) -> None:
-    """All ranks must call ``state_dict_to_save`` (HSDP gather); rank 0 writes."""
-    state_tm = train_module.state_dict_to_save()
+    """All ranks must call (HSDP gather); rank 0 writes full unsharded state.pt."""
+    train_module_sd = gather_train_module_state_dict(train_module)
     if get_rank() != 0:
         return
     path.mkdir(parents=True, exist_ok=True)
     state = {
         "step": step,
-        "train_module": state_tm,
+        "train_module": train_module_sd,
         "args": vars(args),
         "meta": meta,
         "architecture": "olmo_core.TransformerConfig.olmo2_370M",
-        "train_stack": "TransformerTrainModule/HSDP/SkipStepAdamW (BLADE-warmup-matched)",
+        "config_name": CONFIG_NAME,
+        "train_stack": "TransformerTrainModule/HSDP/SkipStepAdamW (RefHQ-matched)",
         "method": "plain_ce",
-        "ephemeral": bool(ephemeral),
+        "arm": ARM,
+        "run_id": args.name,
+        "checkpoint_format": "full_state_dict_v1",
     }
     tmp = path / "state.pt.tmp"
     torch.save(state, tmp)
     tmp.replace(path / "state.pt")
     (path / "step.txt").write_text(str(step) + "\n")
-    kind = "ephemeral" if ephemeral else "persistent"
-    log.info("Saved %s checkpoint → %s (step=%s)", kind, path, step)
+    n_model = len(train_module_sd.get("model") or {})
+    log.info(
+        "Saved permanent full checkpoint → %s (step=%s, model_tensors=%d, has_optim=%s)",
+        path,
+        step,
+        n_model,
+        train_module_sd.get("optim") is not None,
+    )
+    try:
+        from token_selection.olmo_ext.s3_export import (
+            export_arm_checkpoint,
+            export_arm_task_loss_dir,
+        )
 
-
-def prune_old_ephemeral(ephemeral_root: Path, keep_step: int) -> None:
-    """Delete prior ephemeral step dirs; keep only ``keep_step``."""
-    if not ephemeral_root.is_dir():
-        return
-    for p in list(ephemeral_root.iterdir()):
-        if not p.is_dir() or not p.name.startswith("step"):
-            continue
-        try:
-            step = int(p.name.replace("step", "").split("-")[0])
-        except ValueError:
-            continue
-        if step != keep_step:
-            shutil.rmtree(p, ignore_errors=True)
-            log.info("Pruned ephemeral checkpoint %s", p)
+        export_arm_checkpoint(ARM, path)
+        tl_dir = getattr(args, "task_loss_results_dir", None)
+        if tl_dir:
+            export_arm_task_loss_dir(ARM, tl_dir)
+    except Exception as exc:  # noqa: BLE001 — never kill training
+        log.warning("S3 export after checkpoint failed: %s", exc)
 
 
 def load_checkpoint(path: Path, train_module: TransformerTrainModule) -> int:
     ckpt = torch.load(path / "state.pt", map_location="cpu", weights_only=False)
-    train_module.load_state_dict(ckpt["train_module"])
+    tm_sd = ckpt["train_module"]
+    fmt = ckpt.get("checkpoint_format")
+    if (
+        fmt == "full_state_dict_v1"
+        and isinstance(tm_sd, dict)
+        and "model" in tm_sd
+        and set_model_state_dict is not None
+        and StateDictOptions is not None
+    ):
+        opts = StateDictOptions(full_state_dict=True, strict=True)
+        set_model_state_dict(train_module.model, tm_sd["model"], options=opts)
+        if tm_sd.get("optim") is not None and set_optimizer_state_dict is not None:
+            try:
+                set_optimizer_state_dict(
+                    train_module.model,
+                    train_module.optim,
+                    tm_sd["optim"],
+                    options=opts,
+                )
+            except Exception as e:
+                log.warning("optimizer restore failed (%s); continuing with model weights", e)
+        else:
+            try:
+                train_module.load_state_dict({"model": tm_sd["model"], "optim": tm_sd.get("optim")})
+            except Exception:
+                pass
+    else:
+        train_module.load_state_dict(tm_sd)
     _move_optim_state_to_param_device(train_module.optim)
     step = int(ckpt["step"])
-    log.info("Resumed from %s at step=%s", path, step)
+    log.info("Resumed from %s at step=%s format=%s", path, step, fmt or "legacy_sharded")
     return step
 
 
@@ -503,53 +585,52 @@ def _checkpoint_step(path: Path) -> int:
 
 
 def find_latest_checkpoint(save_folder: Path) -> Optional[Path]:
-    """Prefer newest among persistent ``step*`` and ephemeral ``ephemeral/step*``."""
-    cands: List[Path] = []
-    if save_folder.is_dir():
-        cands.extend(
-            p
-            for p in save_folder.iterdir()
-            if p.is_dir() and p.name.startswith("step") and (p / "state.pt").is_file()
-        )
-    eph = save_folder / "ephemeral"
-    if eph.is_dir():
-        cands.extend(
-            p
-            for p in eph.iterdir()
-            if p.is_dir() and p.name.startswith("step") and (p / "state.pt").is_file()
-        )
+    if not save_folder.is_dir():
+        return None
+    cands = [
+        p
+        for p in save_folder.iterdir()
+        if p.is_dir() and p.name.startswith("step") and (p / "state.pt").is_file()
+    ]
     if not cands:
         return None
     return max(cands, key=_checkpoint_step)
 
 
-# ---------------------------------------------------------------------------
-# Main
-# ---------------------------------------------------------------------------
+def _maybe_task_loss(args: argparse.Namespace, ckpt_dir: Path, step: int) -> None:
+    if get_rank() != 0:
+        return
+    results_dir = Path(args.task_loss_results_dir)
+    trigger_task_loss_eval(
+        ckpt_dir,
+        run_name=f"{args.name}-step{step}",
+        out_path=results_dir / f"step{step}_task_loss.json",
+        eval_script=args.task_loss_eval_script,
+        enabled=None if args.task_loss_on_save else False,
+    )
 
 
 def parse_args() -> argparse.Namespace:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--name", required=True)
+    ap.add_argument("--name", default=DEFAULT_RUN_ID, help=f"Run id (default: {DEFAULT_RUN_ID})")
     ap.add_argument("--train-paths-file", required=True)
     ap.add_argument("--save-folder", required=True)
     ap.add_argument("--progress-dir", required=True)
-    ap.add_argument("--length-tokens", type=int, required=True)
+    ap.add_argument("--length-tokens", type=int, default=DEFAULT_LENGTH_TOKENS)
     ap.add_argument(
         "--device-batch-size",
         type=int,
         default=MICROBATCH_TOKENS // SEQ_LEN,
         help="Sequences per microbatch (default 32 = 65536 tokens)",
     )
-    ap.add_argument("--save-interval", type=int, default=250, help="Persistent checkpoint every N steps")
     ap.add_argument(
-        "--ephemeral-save-interval",
+        "--save-interval",
         type=int,
-        default=50,
-        help="Non-persistent checkpoint every N steps (keeps only the latest under ephemeral/)",
+        default=DEFAULT_CHECKPOINT_INTERVAL,
+        help="Permanent ladder interval (default 125)",
     )
     ap.add_argument("--num-workers", type=int, default=4)
-    ap.add_argument("--seed", type=int, default=6198)
+    ap.add_argument("--seed", type=int, default=DEFAULT_SEED)
     ap.add_argument("--load-path", type=str, default=None)
     ap.add_argument("--fresh", action="store_true")
     ap.add_argument("--compile", dest="compile", action="store_true", default=True)
@@ -557,6 +638,25 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--lr-warmup-steps", type=int, default=24)
     ap.add_argument("--lr-alpha-f", type=float, default=0.1)
     ap.add_argument("--log-interval", type=int, default=10)
+    ap.add_argument(
+        "--task-loss-results-dir",
+        type=str,
+        default=None,
+        help="Where to write step{{N}}_task_loss.json (default: ../task_loss_results/control)",
+    )
+    ap.add_argument(
+        "--task-loss-eval-script",
+        type=str,
+        default=None,
+        help="Override path to eval_task_loss_olmo_core.py",
+    )
+    ap.add_argument(
+        "--task-loss-on-save",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Launch full 20-label task_loss eval on each permanent checkpoint (default: on; "
+        "also gated by TASK_LOSS_EVAL env)",
+    )
     return ap.parse_args()
 
 
@@ -566,6 +666,12 @@ def main() -> None:
         level=logging.INFO,
         format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
     )
+    if args.task_loss_results_dir is None:
+        args.task_loss_results_dir = str(_TS_ROOT / "task_loss_results" / ARM)
+    try:
+        torch.set_float32_matmul_precision("high")
+    except Exception:
+        pass
     prepare_training_environment()
     try:
         _run(args)
@@ -584,11 +690,14 @@ def _run(args: argparse.Namespace) -> None:
     if GLOBAL_BATCH_TOKENS % (world_size * rank_micro_tokens) != 0:
         raise SystemExit(
             f"global_batch_tokens {GLOBAL_BATCH_TOKENS} not divisible by "
-            f"world_size*rank_micro ({world_size}*{rank_micro_tokens})"
+            f"world_size*rank_micro ({world_size}*{rank_micro_tokens}). "
+            f"Adjust --device-batch-size or WORLD_SIZE so the product divides evenly."
         )
     seqs_per_rank = GLOBAL_BATCH_TOKENS // (SEQ_LEN * world_size)
     tokens_per_step = GLOBAL_BATCH_TOKENS
     total_steps = int(args.length_tokens) // tokens_per_step
+    ladder = permanent_checkpoint_steps(total_steps, int(args.save_interval))
+    ladder_set: Set[int] = set(ladder)
     lr = float(PEAK_LR)
 
     progress_dir = Path(args.progress_dir)
@@ -596,14 +705,20 @@ def _run(args: argparse.Namespace) -> None:
     if rank == 0:
         progress_dir.mkdir(parents=True, exist_ok=True)
         save_folder.mkdir(parents=True, exist_ok=True)
+        Path(args.task_loss_results_dir).mkdir(parents=True, exist_ok=True)
 
     meta = {
         "architecture": "olmo_core.TransformerConfig.olmo2_370M",
-        "matched_teammate_run": "rel-ema-5b-scratch-v1 / BLADE warmup stack",
+        "config_name": CONFIG_NAME,
+        "arm": ARM,
         "method": "plain_ce",
-        "control_for": "BLADE / token-selection experiments",
+        "run_id": args.name,
+        "s3_prefix": S3_PREFIX,
+        "matched_reference": "experiments/token-selection/reference/train_olmo3_370m_refhq.py",
         "train_stack": "TransformerTrainModule HSDP bf16 SkipStepAdamW compile",
-        "loss": "LM-head CE (fused_linear when liger available)",
+        "loss": "LM-head CE (fused_linear when liger available); no token masking",
+        "tokenizer": TOKENIZER_ID,
+        "vocab_size": EMBEDDING_SIZE,
         "length_tokens": int(args.length_tokens),
         "global_batch_tokens": GLOBAL_BATCH_TOKENS,
         "sequence_length": SEQ_LEN,
@@ -615,26 +730,33 @@ def _run(args: argparse.Namespace) -> None:
         "lr": lr,
         "lr_warmup_steps": int(args.lr_warmup_steps),
         "lr_alpha_f": float(args.lr_alpha_f),
+        "z_loss_multiplier": 1e-5,
+        "max_grad_norm": 1.0,
         "compile": bool(args.compile),
         "attn_backend": str(resolve_attn_backend()),
         "save_interval": int(args.save_interval),
-        "ephemeral_save_interval": int(args.ephemeral_save_interval),
-        "checkpoints": (
-            f"persistent every {int(args.save_interval)}; "
-            f"ephemeral every {int(args.ephemeral_save_interval)} (latest only)"
-        ),
-        "train_dataset": "s3://edullm-dataset-regmix/regmix-10b/",
+        "permanent_checkpoint_steps": ladder,
+        "max_checkpoints": None,
+        "ephemeral": False,
+        "train_dataset": "s3://edullm-datasets/regmix/regmix-10b/",
         "seed": args.seed,
+        "task_loss_on_save": bool(args.task_loss_on_save),
+        "task_loss_results_dir": args.task_loss_results_dir,
     }
     if rank == 0:
         (progress_dir / "run_meta.json").write_text(json.dumps(meta, indent=2) + "\n")
         (progress_dir / "total_steps.txt").write_text(str(total_steps) + "\n")
+        (progress_dir / "checkpoint_ladder.json").write_text(
+            json.dumps({"steps": ladder, "interval": int(args.save_interval)}, indent=2) + "\n"
+        )
         (progress_dir / "run_plan.txt").write_text(
             "\n".join(
                 [
+                    f"run_id={args.name}",
                     "architecture=olmo_core.TransformerConfig.olmo2_370M",
-                    "method=plain_ce",
-                    "train_stack=TransformerTrainModule/HSDP/SkipStepAdamW (BLADE-warmup-matched)",
+                    "method=plain_ce (full CE, no token masking)",
+                    f"s3_prefix={S3_PREFIX}",
+                    f"tokenizer={TOKENIZER_ID} vocab={EMBEDDING_SIZE}",
                     f"world_size={world_size}",
                     f"sequence_length={SEQ_LEN}",
                     f"total_steps={total_steps}",
@@ -642,21 +764,25 @@ def _run(args: argparse.Namespace) -> None:
                     f"seqs_per_rank={seqs_per_rank}",
                     f"lr={lr}  cos_warmup={args.lr_warmup_steps}  alpha_f={args.lr_alpha_f}",
                     f"compile={args.compile}",
-                    f"save_interval={args.save_interval} (persistent)",
-                    f"ephemeral_save_interval={args.ephemeral_save_interval} (latest only)",
-                    "train=s3://edullm-dataset-regmix/regmix-10b/",
+                    f"permanent_ladder={ladder}",
+                    "train=s3://edullm-datasets/regmix/regmix-10b/",
                     "",
                 ]
             )
         )
         log.info(
-            "Plan: plain CE olmo2_370M world=%d total=%d mbs=%d seqs/rank=%d lr=%.3e",
+            "Plan: plain CE olmo2_370M run_id=%s world=%d total=%d ladder_n=%d "
+            "(omit near-final grid if needed) mbs=%d seqs/rank=%d lr=%.3e",
+            args.name,
             world_size,
             total_steps,
+            len(ladder),
             mbs,
             seqs_per_rank,
             lr,
         )
+        if total_steps == 2384 and 2375 in ladder_set:
+            raise SystemExit("BUG: ladder for 2384 must omit 2375")
 
     train_paths = read_paths(Path(args.train_paths_file))
     train_ds = MemmapTokenDataset(train_paths, SEQ_LEN)
@@ -696,6 +822,16 @@ def _run(args: argparse.Namespace) -> None:
 
     if is_distributed():
         dist.barrier()
+
+    # Step-0 init snapshot (pre-train) when starting fresh.
+    if start_step == 0 and 0 in ladder_set:
+        if is_distributed():
+            dist.barrier()
+        ckpt0 = save_folder / "step0"
+        save_checkpoint(ckpt0, 0, train_module, args, meta)
+        _maybe_task_loss(args, ckpt0, 0)
+        if is_distributed():
+            dist.barrier()
 
     for step in range(start_step, total_steps):
         books.global_step = step
@@ -755,38 +891,17 @@ def _run(args: argparse.Namespace) -> None:
                     + "\n"
                 )
 
-        persist = global_step % args.save_interval == 0 or global_step == total_steps
-        eph_iv = int(args.ephemeral_save_interval)
-        ephemeral = eph_iv > 0 and global_step % eph_iv == 0 and not persist
-        if persist or ephemeral:
+        if global_step in ladder_set:
             if is_distributed():
                 dist.barrier()
-            if persist:
-                save_checkpoint(
-                    save_folder / f"step{global_step}",
-                    global_step,
-                    train_module,
-                    args,
-                    meta,
-                    ephemeral=False,
-                )
-            else:
-                eph_root = save_folder / "ephemeral"
-                save_checkpoint(
-                    eph_root / f"step{global_step}",
-                    global_step,
-                    train_module,
-                    args,
-                    meta,
-                    ephemeral=True,
-                )
-                if get_rank() == 0:
-                    prune_old_ephemeral(eph_root, global_step)
+            ckpt_dir = save_folder / f"step{global_step}"
+            save_checkpoint(ckpt_dir, global_step, train_module, args, meta)
+            _maybe_task_loss(args, ckpt_dir, global_step)
             if is_distributed():
                 dist.barrier()
 
     if rank == 0:
-        log.info("Training complete at step=%d world_size=%d", total_steps, world_size)
+        log.info("Training complete at step=%d world_size=%d run_id=%s", total_steps, world_size, args.name)
 
 
 if __name__ == "__main__":

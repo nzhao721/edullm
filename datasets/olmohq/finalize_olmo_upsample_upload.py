@@ -97,8 +97,8 @@ def select_shards(
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--run-dir", type=Path, required=True)
-    parser.add_argument("--bucket", default="edullm-dataset-olmohq")
-    parser.add_argument("--prefix", default="olmo-mix-1124-30b")
+    parser.add_argument("--bucket", default="edullm-datasets")
+    parser.add_argument("--prefix", default="olmo100b/olmo-mix-1124-30b")
     parser.add_argument("--region", default="us-east-1")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--dry-run", action="store_true")

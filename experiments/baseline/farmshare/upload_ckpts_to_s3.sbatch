@@ -11,7 +11,7 @@
 set -euo pipefail
 
 : "${RUN_DIR:?}"
-: "${BUCKET:=edullm-olmo2-370m-cpt-checkpoints}"
+: "${BUCKET:=edullm-checkpoints}"
 : "${AWS_DEFAULT_REGION:=us-east-1}"
 : "${AWS_SESSION_ENV:?}"
 
@@ -23,7 +23,7 @@ set +a
 unset AWS_PROFILE
 
 CKPT="${RUN_DIR}/checkpoints/edullm-370M-30B"
-PREFIX=edullm-370M-30B
+PREFIX=olmo2-370m-cpt/edullm-370M-30B
 
 echo "[$(date -Is)] upload start bucket=s3://${BUCKET}/${PREFIX}/"
 aws sts get-caller-identity --output json

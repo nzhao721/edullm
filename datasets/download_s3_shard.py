@@ -22,7 +22,7 @@ def main() -> int:
     parser.add_argument("--manifest", type=Path, required=True)
     parser.add_argument("--index", type=int, required=True)
     parser.add_argument("--local-root", type=Path, required=True)
-    parser.add_argument("--src-bucket", default="edullm-dataset-olmohq")
+    parser.add_argument("--src-bucket", default="edullm-datasets")
     parser.add_argument("--region", default="us-east-1")
     parser.add_argument(
         "--local-mirror",
@@ -38,7 +38,7 @@ def main() -> int:
         return 2
     item = json.loads(lines[args.index])
     rel = item["path"]
-    key = item.get("key") or f"olmo-mix-1124-30b/{rel}"
+    key = item.get("key") or f"olmo100b/olmo-mix-1124-30b/{rel}"
     expected = int(item["size"])
     dest = args.local_root / rel
     dest.parent.mkdir(parents=True, exist_ok=True)

@@ -48,8 +48,8 @@ def main() -> int:
         choices=sorted(BUDGET_PROFILES),
         help="Token budget profile (default: 4B HQ; regmix-5p5: ~5.514B RegMix weights)",
     )
-    parser.add_argument("--s3-bucket", default="edullm-dataset-olmohq")
-    parser.add_argument("--s3-prefix", default="hq-reference-v1")
+    parser.add_argument("--s3-bucket", default="edullm-datasets")
+    parser.add_argument("--s3-prefix", default="olmo100b/hq-reference-v1")
     parser.add_argument(
         "--domains",
         nargs="*",

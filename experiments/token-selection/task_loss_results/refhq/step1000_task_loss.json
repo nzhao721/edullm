@@ -1,0 +1,21 @@
+{
+  "run_name": "refhq-step1000",
+  "checkpoint": "/scratch/users/nzhao2/agent-runs/refhq-models-all-20260727T220851Z/unsharded/step1000",
+  "format": "state_pt",
+  "step": 1000,
+  "task_loss_bpb": {
+    "mmlu_stem_test_rc_5shot_bpb": 2.6696901321411133,
+    "mmlu_humanities_test_rc_5shot_bpb": 1.291804552078247,
+    "mmlu_social_sciences_test_rc_5shot_bpb": 1.567661166191101,
+    "mmlu_other_test_rc_5shot_bpb": 2.0379247665405273,
+    "hellaswag_val_rc_5shot_bpb": 1.2424036264419556,
+    "arc_challenge_test_rc_5shot_bpb": 1.7288789749145508,
+    "arc_easy_test_rc_5shot_bpb": 1.5930603742599487,
+    "piqa_val_rc_5shot_bpb": 1.5970101356506348,
+    "csqa_val_rc_5shot_bpb": 2.1094486713409424,
+    "socialiqa_val_rc_5shot_bpb": 1.802948236465454,
+    "openbookqa_test_rc_5shot_bpb": 2.156320333480835,
+    "mmlu_avg_test_rc_5shot_bpb": 1.8917701542377472,
+    "core7_avg_rc_5shot_bpb": 1.74715290750776
+  }
+}

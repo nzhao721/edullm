@@ -129,6 +129,49 @@ def test_frozen_ref_not_updated_by_optim_or_train_steps():
     assert (sum(kept) / len(kept)) > (sum(dropped) / len(dropped))
 
 
+def test_learnability_loop_dual_ref_scoring():
+    """Two frozen refs; score path runs two history forwards; selection active."""
+
+    class Tiny(nn.Module):
+        def __init__(self, seed: int):
+            super().__init__()
+            torch.manual_seed(seed)
+            self.embed = nn.Embedding(16, 8)
+            self.out = nn.Linear(8, 16, bias=False)
+
+        def forward(self, x):
+            return self.out(self.embed(x))
+
+    torch.manual_seed(0)
+    model = Tiny(0)
+    early = FrozenReference.from_module(Tiny(1))
+    late = FrozenReference.from_module(Tiny(2))
+    early_snap = {k: v.clone() for k, v in early.shadow.items()}
+    late_snap = {k: v.clone() for k, v in late.shadow.items()}
+    cfg = TokenSelectConfig(method="learnability", k=0.5, t0_steps=0, total_steps=2)
+    loop = TokenSelectLoop(
+        model, cfg, frozen_ref_early=early, frozen_ref_late=late
+    )
+    ids = torch.randint(0, 16, (2, 8))
+    out = loop.train_step(ids)
+    assert out["method"] == "learnability"
+    assert out["compute"]["fwd_passes_history"] == 2
+    assert out["mean_score_kept"] is not None
+    assert 0.0 < out["selected_frac"] <= 1.0
+    assert all(torch.equal(early_snap[k], early.shadow[k]) for k in early_snap)
+    assert all(torch.equal(late_snap[k], late.shadow[k]) for k in late_snap)
+
+
+def test_average_reference_state_dicts():
+    from token_selection.olmo_ext.train_module import average_reference_state_dicts
+
+    a = {"w": torch.tensor([0.0, 2.0])}
+    b = {"w": torch.tensor([2.0, 4.0])}
+    c = {"w": torch.tensor([4.0, 6.0])}
+    avg = average_reference_state_dicts([a, b, c])
+    assert torch.allclose(avg["w"], torch.tensor([2.0, 4.0]))
+
+
 def test_load_weights_rejects_shape_mismatch():
     live = M((1.0, 2.0))
     frozen = FrozenReference.from_module(live)

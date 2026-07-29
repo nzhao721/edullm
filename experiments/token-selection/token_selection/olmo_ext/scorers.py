@@ -1,4 +1,4 @@
-"""Loss masks for full-token, REL, RHO-1 excess-loss, and middle-perplexity scoring.
+"""Loss masks for full-token, REL, RHO-1, middle-PPL, attention, and learnability.
 
 Polarity matches OLMo-core ``label_mask``: ``True`` = token contributes to loss.
 """
@@ -10,8 +10,9 @@ from typing import Literal, Optional
 import torch
 from torch import Tensor
 
-MethodName = Literal["full", "rel_ema", "rho_excess", "middle_ppl"]
-
+MethodName = Literal[
+    "full", "rel_ema", "rho_excess", "middle_ppl", "attention_topk", "learnability"
+]
 
 def _per_row_keep_counts(valid2d: Tensor, k: float) -> tuple[Tensor, Tensor]:
     """Return ``(n_valid, n_keep)`` per row for fraction ``k`` of valid positions."""
@@ -162,6 +163,34 @@ def middle_ppl_mask(
     return middle_k_mask(current_loss, k, valid=valid)
 
 
+def learnability_mask(
+    early_loss: Tensor,
+    late_loss: Tensor,
+    k: float,
+    *,
+    valid: Optional[Tensor] = None,
+) -> Tensor:
+    """Keep tokens with highest learnability ``L_early − L_late``.
+
+    Larger score = larger early→late improvement under frozen RefHQ refs.
+    """
+    return top_k_mask(early_loss - late_loss, k, valid=valid)
+
+
+def attention_topk_mask(
+    attention_score: Tensor,
+    k: float,
+    *,
+    valid: Optional[Tensor] = None,
+) -> Tensor:
+    """Keep top ``k`` by last-layer attention-received (higher = more important).
+
+    ``attention_score[i]`` is the mean-over-heads causal column sum
+    ``sum_{j>=i} A[j, i]`` (ssToken-adapted for causal LM).
+    """
+    return top_k_mask(attention_score, k, valid=valid)
+
+
 def build_mask(
     *,
     method: MethodName = "rel_ema",
@@ -169,11 +198,14 @@ def build_mask(
     current_loss: Optional[Tensor] = None,
     history_loss: Optional[Tensor] = None,
     reference_loss: Optional[Tensor] = None,
+    early_loss: Optional[Tensor] = None,
+    late_loss: Optional[Tensor] = None,
+    attention_score: Optional[Tensor] = None,
     shape_ref: Optional[Tensor] = None,
     valid: Optional[Tensor] = None,
     warmup: bool = False,
 ) -> Tensor:
-    """Build loss mask for ``full``, ``rel_ema``, ``rho_excess``, or ``middle_ppl``."""
+    """Build loss mask for supported token-selection methods."""
     if method == "full" or warmup:
         ref = shape_ref if shape_ref is not None else current_loss
         if ref is None:
@@ -195,6 +227,17 @@ def build_mask(
             raise ValueError("middle_ppl mask requires current_loss")
         return middle_ppl_mask(current_loss, k, valid=valid)
 
+    if method == "attention_topk":
+        if attention_score is None:
+            raise ValueError("attention_topk mask requires attention_score")
+        return attention_topk_mask(attention_score, k, valid=valid)
+
+    if method == "learnability":
+        if early_loss is None or late_loss is None:
+            raise ValueError("learnability mask requires early_loss and late_loss")
+        return learnability_mask(early_loss, late_loss, k, valid=valid)
+
     raise ValueError(
-        f"Unknown method {method!r}; expected 'full', 'rel_ema', 'rho_excess', or 'middle_ppl'"
+        f"Unknown method {method!r}; expected 'full', 'rel_ema', 'rho_excess', "
+        f"'middle_ppl', 'attention_topk', or 'learnability'"
     )

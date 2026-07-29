@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # One-time data preparation for the 24 mixing-law probes.
 #
-# Source: s3://edullm-dataset-olmohq/olmo-mix-1124-30b (raw json.gz shards).
+# Source: s3://edullm-datasets/olmo100b/olmo-mix-1124-30b (raw json.gz shards).
 # Does NOT sync the full ~130 GiB tree. Instead:
 #   1. pulls the tiny plan/manifest.jsonl inventory
 #   2. randomly selects only enough shards to cover peak demand at TOKENS_PER_PARAM
@@ -18,7 +18,7 @@ set -euo pipefail
 WORK="${WORK:-/opt/edullm/mixlaw}"
 CODE_DIR="${CODE_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
 VENV="${VENV:-$WORK/venv}"
-OLMOHQ_S3="${OLMOHQ_S3:-s3://edullm-dataset-olmohq/olmo-mix-1124-30b}"
+OLMOHQ_S3="${OLMOHQ_S3:-s3://edullm-datasets/olmo100b/olmo-mix-1124-30b}"
 RAW_DIR="${RAW_DIR:-$WORK/olmohq/data}"
 TOKENIZED_DIR="${TOKENIZED_DIR:-$WORK/tokenized}"
 SLICE_DIR="${SLICE_DIR:-$WORK/slices}"

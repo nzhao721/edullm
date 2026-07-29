@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# RegMix-weighted ~5.514B HQ reference on FarmShare -> s3://edullm-dataset-refhq/
+# RegMix-weighted ~5.514B HQ reference on FarmShare -> s3://edullm-datasets/refhq/
 # Max parallelization: all 7 domains download+build concurrently (no % throttle).
 set -Eeuo pipefail
 
@@ -12,8 +12,8 @@ REUSE_ROOT="${REUSE_ROOT:-/scratch/users/${SUNET}/hq-reference-v1}"
 DOMAIN_LIST="${DOMAIN_LIST:-dclm starcoder pes2o arxiv open-web-math algebraic-stack wiki}"
 SEED="${SEED:-42}"
 BUDGET_PROFILE="${BUDGET_PROFILE:-regmix-5p5}"
-S3_BUCKET="${S3_BUCKET:-edullm-dataset-refhq}"
-S3_PREFIX="${S3_PREFIX:-refhq-regmix-5p5b-v1}"
+S3_BUCKET="${S3_BUCKET:-edullm-datasets}"
+S3_PREFIX="${S3_PREFIX:-refhq/refhq-regmix-5p5b-v1}"
 HF_TOKEN_SRC="${HF_TOKEN_SRC:-${REUSE_ROOT}/.hf_token}"
 HQ_SCRIPTS="${RUN_DIR}/datasets/refhq/scripts"
 

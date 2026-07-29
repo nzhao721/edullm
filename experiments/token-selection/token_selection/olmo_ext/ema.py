@@ -14,10 +14,14 @@ full-size module copy is needed under FSDP.
 from __future__ import annotations
 
 import contextlib
+import math
 from typing import Dict, Iterable, Iterator, Mapping, MutableMapping, Optional, Tuple
 
 import torch
 from torch import Tensor, nn
+
+# ``linear`` = legacy piecewise schedule; ``exp`` = α(t)=1−exp(−t/τ) (rel-ema-exp).
+DEFAULT_ALPHA_TAU = 300.0
 
 
 def _local_tensor(t: Tensor) -> Tensor:
@@ -33,6 +37,20 @@ def _copy_into_param_(dst: Tensor, src: Tensor) -> None:
     _local_tensor(dst).copy_(_local_tensor(src))
 
 
+def alpha_exp(step: int, *, tau: float = DEFAULT_ALPHA_TAU) -> float:
+    """Exponential α schedule: ``α(t) = 1 − exp(−t/τ)``.
+
+    At ``t=0``, α=0 (first EMA update fully adopts the observed weights). As ``t``
+    grows, α → 1 (history mixes more slowly). Used by the REL no-init arm with
+    bias-corrected EMA from zero — do **not** seed from RefHQ / θ₀.
+    """
+    if tau <= 0:
+        raise ValueError(f"alpha_exp tau must be > 0, got {tau}")
+    if step < 0:
+        raise ValueError(f"alpha_exp step must be >= 0, got {step}")
+    return float(1.0 - math.exp(-float(step) / float(tau)))
+
+
 def alpha_at_step(
     step: int,
     *,
@@ -40,18 +58,70 @@ def alpha_at_step(
     total_steps: int,
     alpha_start: float,
     alpha_end: float,
+    schedule: str = "linear",
+    tau: float = DEFAULT_ALPHA_TAU,
 ) -> float:
-    """Piecewise α schedule: constant during warmup, then linear decay to alpha_end.
+    """Resolve EMA α for this optimizer step.
 
-    During steps ``[0, t0)`` return ``alpha_start`` (history is updated but REL is off).
-    During ``[t0, total_steps]`` linearly interpolate from ``alpha_start`` → ``alpha_end``.
-    If ``total_steps <= t0``, stay at ``alpha_start``.
+    Schedules
+    ---------
+    ``linear`` (default, legacy):
+        Constant ``alpha_start`` during steps ``[0, t0)``, then linear
+        interpolation from ``alpha_start`` → ``alpha_end`` over
+        ``[t0, total_steps]``. If ``total_steps <= t0``, stay at ``alpha_start``.
+        For a constant-α arm (e.g. RefHQ-seeded REL with α=0.9985), set
+        ``alpha_start == alpha_end``. Selection warmup (REL off) is controlled
+        separately by ``t0`` via ``in_warmup``; this function only sets the EMA
+        blend factor.
+    ``exp``:
+        ``α(t) = 1 − exp(−t/τ)`` (see :func:`alpha_exp`). Ignores ``alpha_start``,
+        ``alpha_end``, and ``t0`` for the α value. Used by ``rel-ema-exp`` (τ=300).
     """
+    name = str(schedule or "linear").strip().lower()
+    if name == "exp":
+        return alpha_exp(step, tau=tau)
+    if name != "linear":
+        raise ValueError(
+            f"Unknown alpha schedule {schedule!r}; expected 'linear' or 'exp'"
+        )
     if total_steps <= t0 or step < t0:
         return float(alpha_start)
     denom = max(total_steps - t0, 1)
     frac = min(max((step - t0) / denom, 0.0), 1.0)
     return float(alpha_start + frac * (alpha_end - alpha_start))
+
+
+def alpha_for_half_life(half_life_steps: float) -> float:
+    """Return α such that ``α ** half_life_steps == 0.5``.
+
+    Example: ~20% of a 2384-step run is H≈476.8 → α≈0.9985.
+    """
+    if half_life_steps <= 0:
+        raise ValueError(f"half_life_steps must be > 0, got {half_life_steps}")
+    return float(0.5 ** (1.0 / float(half_life_steps)))
+
+
+def _distribute_full_to_local(src: Tensor, param: Tensor) -> Tensor:
+    """Slice a full/global tensor into the rank-local shard matching ``param``."""
+    try:
+        from torch.distributed.tensor import distribute_tensor
+    except ImportError:  # pragma: no cover - older torch
+        from torch.distributed._tensor import distribute_tensor  # type: ignore
+
+    device_mesh = getattr(param, "device_mesh", None)
+    placements = getattr(param, "placements", None)
+    if device_mesh is None or placements is None:
+        raise ValueError(
+            "cannot shard a full seed tensor onto a non-DTensor parameter; "
+            f"src shape {tuple(src.shape)} vs local shadow needs a device_mesh"
+        )
+    local = _local_tensor(param)
+    dt = distribute_tensor(
+        src.to(device=local.device, dtype=local.dtype),
+        device_mesh,
+        placements,
+    )
+    return _local_tensor(dt)
 
 
 class EMAHistory:
@@ -154,6 +224,69 @@ class EMAHistory:
 
     def set_alpha(self, alpha: float) -> None:
         self.alpha = float(alpha)
+
+    @torch.no_grad()
+    def seed_from_state_dict(
+        self,
+        module: nn.Module,
+        state_dict: Mapping[str, Tensor],
+    ) -> None:
+        """Initialize history so the debiased weights equal ``state_dict`` immediately.
+
+        Sets each shadow buffer to the matching seed tensor and ``correction = 1.0``,
+        so :meth:`history` / :meth:`swap_to` return the seed on the first REL score
+        (before any optimizer step). Later :meth:`update` calls continue the usual
+        recurrence; with constant α and ``correction=1``, the correction stays at 1
+        and the shadow is a textbook EMA starting from the seed.
+
+        **Only** the RefHQ-init REL arm (``rel-ema-refhq``) should call this. The
+        bias-corrected zero-init path used by ``rel-ema-exp`` must leave the
+        accumulator at zero and never seed from an external checkpoint.
+        """
+        missing = [n for n in self._shadow if n not in state_dict]
+        if missing:
+            raise KeyError(
+                f"EMA seed state_dict missing parameters: {sorted(missing)[:8]}"
+                + ("…" if len(missing) > 8 else "")
+            )
+        live = {n: p for n, p in module.named_parameters()}
+        for name, shadow in self._shadow.items():
+            value = state_dict[name]
+            if not isinstance(value, Tensor):
+                raise TypeError(f"EMA seed entry {name!r} must be a Tensor")
+            src = _local_tensor(value).detach()
+            if tuple(src.shape) == tuple(shadow.shape):
+                shadow.copy_(src.to(device=shadow.device, dtype=shadow.dtype))
+                continue
+            param = live.get(name)
+            if param is not None and tuple(src.shape) == tuple(param.shape):
+                local_src = _distribute_full_to_local(src, param)
+                if tuple(local_src.shape) != tuple(shadow.shape):
+                    raise ValueError(
+                        f"EMA seed {name!r}: distributed local shape "
+                        f"{tuple(local_src.shape)} != shadow shape {tuple(shadow.shape)}"
+                    )
+                shadow.copy_(local_src.to(device=shadow.device, dtype=shadow.dtype))
+                continue
+            raise ValueError(
+                f"EMA seed {name!r} shape {tuple(src.shape)} matches neither "
+                f"shadow {tuple(shadow.shape)} nor parameter global shape "
+                f"{tuple(param.shape) if param is not None else None}"
+            )
+        self._correction = 1.0
+
+    @classmethod
+    def from_module_seeded(
+        cls,
+        module: nn.Module,
+        state_dict: Mapping[str, Tensor],
+        *,
+        alpha: float = 0.9985,
+    ) -> "EMAHistory":
+        """Build an EMA and immediately seed history from ``state_dict`` (RefHQ arm only)."""
+        ema = cls.from_module(module, alpha=alpha)
+        ema.seed_from_state_dict(module, state_dict)
+        return ema
 
     @torch.no_grad()
     def update(self, named_params: Iterable[Tuple[str, Tensor]], *, alpha: Optional[float] = None) -> None:

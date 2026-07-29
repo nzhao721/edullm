@@ -56,8 +56,8 @@ def provision_bucket(bucket: str, region: str) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--run-dir", type=Path, required=True)
-    parser.add_argument("--dst-bucket", default="edullm-dataset-regmix")
-    parser.add_argument("--dst-prefix", default="regmix-10b")
+    parser.add_argument("--dst-bucket", default="edullm-datasets")
+    parser.add_argument("--dst-prefix", default="regmix/regmix-10b")
     parser.add_argument("--region", default="us-east-1")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
@@ -164,7 +164,7 @@ def main() -> int:
 
     readme = f"""# RegMix-optimized OLMo-mix 10B
 
-- Source: s3://{summary.get('source_bucket', 'edullm-dataset-olmohq')}/{summary.get('source_prefix', 'olmo-mix-1124-30b')}
+- Source: s3://{summary.get('source_bucket', 'edullm-datasets')}/{summary.get('source_prefix', 'olmo100b/olmo-mix-1124-30b')}
 - Method: random whole-shard sample from source, then document-shuffle trim to RegMix-mapped budgets
 - Seed: {summary.get('seed', 42)}
 - Tokenizer: allenai/dolma2-tokenizer (OLMo-2 canonical; EOS=100257)

@@ -56,6 +56,34 @@ def main() -> None:
                 f"rho_excess reference.load_path does not exist: {ref_raw!r} "
                 f"(resolved {ref_path}). Sync the checkpoint locally first."
             )
+    if method == "rel_ema":
+        ema_block = cfg.get("ema") or {}
+        seed_mode = str(
+            ema_block.get("seed_mode") or cfg.get("ema_seed_mode") or "zero"
+        ).strip().lower()
+        if seed_mode == "refhq":
+            ref_raw = str(((cfg.get("reference") or {}).get("load_path")) or "")
+            ref_path = Path(ref_raw)
+            if not ref_path.is_absolute():
+                ref_path = ROOT / ref_path
+            if not ref_path.exists():
+                raise SystemExit(
+                    f"rel_ema refhq seed reference.load_path does not exist: {ref_raw!r} "
+                    f"(resolved {ref_path}). Export RefHQ step1315 to a local .pt first."
+                )
+    if method == "learnability":
+        ref = cfg.get("reference") or {}
+        for key in ("early", "late"):
+            block = ref.get(key) or {}
+            raw = str(block.get("load_path") or "")
+            path = Path(raw)
+            if not path.is_absolute():
+                path = ROOT / path
+            if not path.exists():
+                raise SystemExit(
+                    f"learnability reference.{key}.load_path does not exist: {raw!r} "
+                    f"(resolved {path}). Export early/late RefHQ .pt files first."
+                )
 
     try:
         tokens_s3 = resolve_tokens_s3(cfg)

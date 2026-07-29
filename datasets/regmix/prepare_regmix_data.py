@@ -4,7 +4,7 @@
 Expects a local copy of the already-tokenized corpus:
 
   <train-tokenized-root>/<domain>/<domain>.npy
-  # from s3://edullm-dataset-regmix/regmix-10b/tokenized
+  # from s3://edullm-datasets/regmix/regmix-10b/tokenized
 
 Writes:
   <work>/train_tokenized/paths_train.txt
@@ -99,7 +99,7 @@ def main() -> int:
     summary = {
         "train": {
             **train_info,
-            "s3": "s3://edullm-dataset-regmix/regmix-10b/tokenized",
+            "s3": "s3://edullm-datasets/regmix/regmix-10b/tokenized",
             "tokenized_root": str(args.train_tokenized_root.resolve()),
             "published_tokens": REGMIX_TOKENS,
         },

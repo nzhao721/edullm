@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Tokenize a *working pool* from olmohq raw shards for the 24 mixing-law probes.
 
-The olmohq bucket (``s3://edullm-dataset-olmohq/olmo-mix-1124-30b``) stores raw
+The olmohq pool (``s3://edullm-datasets/olmo100b/olmo-mix-1124-30b``) stores raw
 ``data/<domain>/*.json.gz`` documents, not uint32 memmaps. Training needs memmaps,
 but tokenizing the entire ~95B-token pool would waste ~400 GiB and hours of CPU.
 

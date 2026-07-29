@@ -3,14 +3,17 @@
 
 Expects local copies of the already-tokenized corpora:
 
-  <train-tokenized-root>/<domain>/<domain>.npy   # s3://edullm-dataset-regmix/regmix-10b/tokenized
-  <ref-tokenized-root>/<domain>/<domain>.npy     # s3://edullm-dataset-refhq/refhq-regmix-5p5b-v1/tokenized
+  <train-tokenized-root>/<domain>/<domain>.npy   # s3://edullm-datasets/regmix/regmix-10b/tokenized
+  <ref-tokenized-root>/<domain>/<domain>.npy     # s3://edullm-datasets/refhq/refhq-regmix-5p5b-v1/tokenized
 
 Writes:
   <work>/train_tokenized/paths_train.txt
   <work>/ref_tokenized/paths_refhq.txt
   <work>/length_tokens.txt
   <work>/blade_data_summary.json
+
+Does **not** call AWS — point ``--train-tokenized-root`` / ``--ref-tokenized-root``
+at local paths you already synced.
 """
 from __future__ import annotations
 
@@ -111,17 +114,25 @@ def main() -> int:
     summary = {
         "train": {
             **train_info,
-            "s3": "s3://edullm-dataset-regmix/regmix-10b/tokenized",
+            "s3": "s3://edullm-datasets/regmix/regmix-10b/tokenized",
             "tokenized_root": str(args.train_tokenized_root.resolve()),
             "published_tokens": REGMIX_TOKENS,
         },
         "refhq": {
             **ref_info,
-            "s3": "s3://edullm-dataset-refhq/refhq-regmix-5p5b-v1/tokenized",
+            "s3": "s3://edullm-datasets/refhq/refhq-regmix-5p5b-v1/tokenized",
             "tokenized_root": str(args.ref_tokenized_root.resolve()),
             "published_tokens": REFHQ_TOKENS,
         },
         "length_tokens": int(args.length_tokens),
+        "blade_schedule": {
+            "tau": 375,
+            "K": 75,
+            "gamma": 0.6,
+            "lambda_pen": 1.0,
+            "blade_start": 500,
+            "sync_steps": [500, 875, 1250, 1625, 2000],
+        },
     }
     (work / "blade_data_summary.json").write_text(json.dumps(summary, indent=2) + "\n")
     print(json.dumps(summary, indent=2), flush=True)

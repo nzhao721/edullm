@@ -25,8 +25,8 @@ def main() -> int:
     args = parser.parse_args()
 
     plan = json.loads(args.plan.read_text(encoding="utf-8"))
-    bucket = args.bucket or plan.get("s3_bucket") or "edullm-dataset-refhq"
-    prefix = args.prefix or plan.get("s3_prefix") or "refhq-regmix-5p5b-v1"
+    bucket = args.bucket or plan.get("s3_bucket") or "edullm-datasets"
+    prefix = args.prefix or plan.get("s3_prefix") or "refhq/refhq-regmix-5p5b-v1"
     scratch_root = Path(plan["scratch_root"])
     tokenized_root = scratch_root / "tokenized"
 

@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
-# Build RegMix-aligned 10B mix on FarmShare from edullm-dataset-olmohq, upload to edullm-dataset-regmix.
+# Build RegMix-aligned 10B mix on FarmShare from edullm-datasets/olmo100b, upload to edullm-datasets/regmix.
 set -Eeuo pipefail
 
 SUNET="${SUNET:-nzhao2}"
 RUN_NAME="${RUN_NAME:-regmix-10b-$(date +%Y%m%d-%H%M%S)}"
 RUN_DIR="${RUN_DIR:-/scratch/users/${SUNET}/agent-runs/${RUN_NAME}}"
 EDULLM_ROOT="${EDULLM_ROOT:-/scratch/users/${SUNET}/agent-runs/edullm-farmshare-staging}"
-SRC_BUCKET="${SRC_BUCKET:-edullm-dataset-olmohq}"
-SRC_PREFIX="${SRC_PREFIX:-olmo-mix-1124-30b}"
-DST_BUCKET="${DST_BUCKET:-edullm-dataset-regmix}"
-DST_PREFIX="${DST_PREFIX:-regmix-10b}"
+SRC_BUCKET="${SRC_BUCKET:-edullm-datasets}"
+SRC_PREFIX="${SRC_PREFIX:-olmo100b/olmo-mix-1124-30b}"
+DST_BUCKET="${DST_BUCKET:-edullm-datasets}"
+DST_PREFIX="${DST_PREFIX:-regmix/regmix-10b}"
 SEED="${SEED:-42}"
 # Prefer the local olmohq upsample mirror when present (hardlink/copy by size).
 LOCAL_MIRROR="${LOCAL_MIRROR:-/scratch/users/${SUNET}/agent-runs/olmo-mix-upsample-20260723-103547/data}"

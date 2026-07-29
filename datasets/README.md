@@ -1,13 +1,13 @@
 # Dataset pipelines
 
-Build scripts for corpora published on S3 (see [`S3_DATASETS.md`](../S3_DATASETS.md)).
+Build scripts for corpora published on S3 (see [`S3_DATASETS.md`](../S3_DATASETS.md); bucket consolidation as of **2026-07-27** in [S3 consolidation](../S3_DATASETS.md#s3-consolidation-2026-07-27)).
 
 | Directory | S3 bucket / prefix | Description |
 |-----------|-------------------|-------------|
-| [`olmo/`](olmo/) | `edullm-dataset-olmo/olmo-mix-1124-30b/` | ~30B trimmed sample from `allenai/olmo-mix-1124` |
-| [`olmohq/`](olmohq/) | `edullm-dataset-olmohq/olmo-mix-1124-30b/` | ~100B upsampled / rebalanced pool (feeds RegMix) |
-| [`regmix/`](regmix/) | `edullm-dataset-regmix/regmix-10b/` | 10B RegMix-weighted mix from olmohq |
-| [`refhq/`](refhq/) | `edullm-dataset-refhq/refhq-regmix-5p5b-v1/` | 5.5B HQ-filtered reference corpus (HF sources) |
+| [`olmo/`](olmo/) | `edullm-datasets/olmo30b/olmo-mix-1124-30b/` | ~30B trimmed sample from `allenai/olmo-mix-1124` |
+| [`olmohq/`](olmohq/) | `edullm-datasets/olmo100b/olmo-mix-1124-30b/` | ~100B upsampled / rebalanced pool (feeds RegMix) |
+| [`regmix/`](regmix/) | `edullm-datasets/regmix/regmix-10b/` | 10B RegMix-weighted mix from olmohq |
+| [`refhq/`](refhq/) | `edullm-datasets/refhq/refhq-regmix-5p5b-v1/` | 5.5B HQ-filtered reference corpus (HF sources) |
 
 ## Shared dataset utilities (this directory)
 

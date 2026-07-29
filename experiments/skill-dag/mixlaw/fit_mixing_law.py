@@ -45,7 +45,7 @@ from typing import Callable, Optional, Sequence
 
 import numpy as np
 
-from mixlaw_common import DOMAINS, load_mixtures, task_family
+from mixlaw_common import CURVE_FAMILIES, CURVE_TASK_LOSS_LABELS, DOMAINS, load_mixtures, macro_curve, task_family
 
 DATA_NAME = "mixlaw_data.json"
 
@@ -66,6 +66,18 @@ def cmd_collect(args: argparse.Namespace) -> None:
             continue
 
         payload = json.loads(final.read_text(encoding="utf-8"))
+        labels = {
+            k: float(v)
+            for k, v in payload["labels"].items()
+            if k in CURVE_TASK_LOSS_LABELS
+        }
+        families = {
+            k: float(v) for k, v in payload["task_families"].items() if k in CURVE_FAMILIES
+        }
+        if set(families) != set(CURVE_FAMILIES):
+            raise SystemExit(
+                f"{mix.run_name}: expected curve families {CURVE_FAMILIES}, got {sorted(families)}"
+            )
         curve = []
         curve_path = progress / "task_loss.jsonl"
         if curve_path.is_file():
@@ -81,9 +93,9 @@ def cmd_collect(args: argparse.Namespace) -> None:
                 "tag": mix.tag,
                 "run_name": mix.run_name,
                 "weights": mix.weights,
-                "task_loss_labels": payload["labels"],
-                "task_loss_families": payload["task_families"],
-                "macro_mean": payload["macro_mean"],
+                "task_loss_labels": labels,
+                "task_loss_families": families,
+                "macro_mean": macro_curve(families),
                 "curve": curve,
                 "meta": json.loads(meta_path.read_text(encoding="utf-8"))
                 if meta_path.is_file()
@@ -267,6 +279,36 @@ def extrapolate(step_law: dict, step: int) -> float:
 # --------------------------------------------------------------------------- #
 # simplex optimization
 # --------------------------------------------------------------------------- #
+def sample_feasible_mixtures(
+    rng: np.random.Generator,
+    floors: Sequence[float],
+    caps: Sequence[float],
+    n: int,
+) -> np.ndarray:
+    """Sample mixture weights inside per-domain box constraints (sum to 1)."""
+    n_domains = len(floors)
+    floor_v = np.asarray(floors, dtype=float)
+    cap_v = np.asarray(caps, dtype=float)
+    if np.all(floor_v <= 1e-12) and np.all(cap_v >= 1.0 - 1e-12):
+        return rng.dirichlet(np.ones(n_domains), size=n)
+
+    base = float(floor_v.sum())
+    if base > 1.0 + 1e-9:
+        raise RuntimeError(f"infeasible mixture box: floor sum={base}")
+    budget = 1.0 - base
+    slack = cap_v - floor_v
+    samples = np.zeros((n, n_domains), dtype=float)
+    for i in range(n):
+        s = rng.dirichlet(np.ones(n_domains))
+        w = slack * s
+        w_sum = float(w.sum())
+        if w_sum <= 0:
+            samples[i] = floor_v
+        else:
+            samples[i] = floor_v + budget * (w / w_sum)
+    return samples
+
+
 def optimize_simplex(
     objective: Callable[[np.ndarray], float],
     n_domains: int,
@@ -325,10 +367,8 @@ def cmd_fit(args: argparse.Namespace) -> None:
 
     R = np.array([[run["weights"][d] for d in DOMAINS] for run in runs], dtype=float)
 
-    # Which targets to fit: every task family present in every run.
-    families = sorted(
-        set.intersection(*(set(run["task_loss_families"]) for run in runs))
-    )
+    # Fit only the six in-run curve families (Chinchilla targets when extrapolating).
+    families = list(CURVE_FAMILIES)
     if args.targets:
         unknown = [t for t in args.targets if t not in families]
         if unknown:

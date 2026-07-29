@@ -1,45 +1,52 @@
-# RHO-1 excess-loss from-scratch pretraining (Arm 5).
-# RegMix 10B tokens / order contract / scientific knobs shared with the other arms.
-# Architecture + corpus match the GPU6/7 CE control (olmo2_370M + RegMix 10B),
-# with RHO-1 token selection instead of plain CE.
+# RHO-1 excess-loss from-scratch pretraining on RegMix 10B.
+# Canonical arm config: ../rho-1/configs/run_rho_10b.yaml (keep in sync).
+# Architecture matches RefHQ CE 370M (TransformerConfig.olmo2_370M).
+# Selection: top 60% by excess = L_curr − L_ref from step 0 (t0=0).
 #
-# Reference: final planned checkpoint of the RefHQ 5.5B CE 370M run
-#   s3://edullm-olmo-370m-ckpts/edullm-370M-refhq-5p5b/checkpoints/step1315/
-#   (planned total_steps=1314; step1625 exists as a later extended save — not used)
-# Export to a local model.pt before --launch (see experiments/token-selection/reference/aws/export_refhq_reference.py).
+# Discarded prior run: rho-excess-10b-scratch-v1 (~step200) — do not resume.
+#
+# Frozen reference: RefHQ 370M step1315
+#   s3://edullm-checkpoints/olmo-370m/edullm-370M-refhq-5p5b/checkpoints/step1315/
+# Export to a local model.pt before --launch:
+#   python experiments/token-selection/reference/export_refhq_reference.py \
+#     --work-dir <work> --output <path>/refhq_step1315_model.pt
 
-run_id: rho-excess-10b-scratch-v1
+run_id: rho-1-regmix10b-v1
 seed: 42
-output_dir: token_selection/data/rho_10b
+output_dir: rho-1/data/rho_10b
+arm: rho-1
 
 methods: [rho_excess]
 
 k: 0.6
-t0_frac: 0.02
+t0_steps: 0
+t0_frac: 0
 # Unused by rho_excess (no EMA); kept so shared helpers/metrics payloads stay uniform.
 alpha_start: 0.99
 alpha_end: 0.98
 
 # Frozen RHO reference. REQUIRED before --launch (fail closed if null / REPLACE_ME).
 # Must be a local path to a .pt/.pth state dict (or a directory containing model.pt).
-# Sync + unshard from S3 first; remote s3:// URIs are refused at load time.
+# Sync + unshard from S3 first via reference/export_refhq_reference.py;
+# remote s3:// URIs are refused at load time.
 reference:
   load_path: null
   # Provenance only (not read by the trainer). Launch scripts fill load_path after export.
-  s3_uri: s3://edullm-olmo-370m-ckpts/edullm-370M-refhq-5p5b/checkpoints/step1315/
+  s3_uri: s3://edullm-checkpoints/olmo-370m/edullm-370M-refhq-5p5b/checkpoints/step1315/
   step: 1315
   planned_total_steps: 1314
-  dataset: s3://edullm-dataset-refhq/refhq-regmix-5p5b-v1/
+  dataset: s3://edullm-datasets/refhq/refhq-regmix-5p5b-v1/
 
 data:
-  tokens_s3: s3://edullm-dataset-regmix/regmix-10b/tokenized
+  tokens_s3: s3://edullm-datasets/regmix/regmix-10b/tokenized
   tokenizer: allenai/dolma2-tokenizer
   sequence_length: 2048
 
 s3:
-  dataset_bucket: edullm-dataset-olmo
+  dataset_bucket: edullm-datasets
   checkpoint_bucket: edullm-checkpoints
-  prefix: token-selection/rho-excess-10b-scratch-v1
+  # Checkpoints + results → s3://edullm-checkpoints/token-sel/rho-1/
+  prefix: token-sel/rho-1
   profile: sbsandbox
 
 model:
@@ -63,32 +70,32 @@ train:
   data_loader_initial_epoch: 0
   data_loader_chunk_size: 1
   # Tokens per rank microbatch. GBS must stay divisible by world_size * this.
-  # Hardware knob (not fingerprinted). B200 often uses 65536; Farmshare L40S (48 GiB)
-  # rank_microbatch_size: tune per GPU memory (e.g. 16384 on 48 GiB L40S, 32768+ on B200).
+  # Hardware knob (not fingerprinted). Tune per GPU memory (e.g. 16384 on 48 GiB).
   rank_microbatch_size: 65536
-  # Match CE/BLADE stack on the B200 host (HSDP + SkipStepAdamW + compile).
-  # Farmshare 4× L40S resume keeps hsdp; torch DCP loads the 8-GPU step200 shards.
   dp_type: hsdp
   optim_type: skip_step_adamw
   compile_model: true
+  max_grad_norm: 1.0
+  z_loss_multiplier: 1.0e-5
   # Wall-clock kernel only (not fingerprinted): auto -> flash_2 if flash_attn works.
   attn_backend: auto
-  # Set by the AWS launcher: single index or comma list (e.g. "6,7").
-  # On Slurm/Farmshare leave empty so CUDA_VISIBLE_DEVICES from the allocator wins.
+  # Leave empty so CUDA_VISIBLE_DEVICES from the outer launcher / Slurm wins.
   cuda_visible_devices: ""
-  # Informational; torchrun --nproc_per_node is the authority at launch.
-  num_gpus: 2
+  # Informational only; torchrun --nproc_per_node is the authority at launch.
+  num_gpus: null
   num_workers: 8
-  # total_steps = max_tokens // GBS = 2384; T0 ≈ 48 (t0_frac=0.02)
-  checkpoint_every_steps: 250
+  # Permanent ladder: {0, 125, …, 2250, 2384} (omit 2375). No ephemeral.
+  checkpoint_every_steps: 125
   checkpoint_keep_last: null
-  # Extra permanent at the selection warmup boundary (T0 ≈ 48).
-  checkpoint_milestone_steps: [48]
+  ephemeral_checkpoint_every_steps: null
   pre_train_checkpoint: true
-  save_async: true
-  # Auto-pruned resume snaps; must be < checkpoint_every_steps.
-  ephemeral_checkpoint_every_steps: 50
+  save_async: false
 
 eval:
   block_unit: sequence
   metrics_filename: metrics.json
+  task_loss:
+    enabled: true
+    results_dir: task_loss_results/rho-1
+    # Optional: command_template with {step},{checkpoint},{out},{run_id}
+    # Or set TOKEN_SELECTION_TASK_LOSS_EVAL_SCRIPT / TOKEN_SELECTION_TASK_LOSS_CMD.

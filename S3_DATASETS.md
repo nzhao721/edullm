@@ -1,12 +1,65 @@
 # eduLLM S3 Datasets Inventory
 
-Read-only inventory of training/data corpora in **sbsandbox** (`056956104102`), as of **2026-07-27** (last scan **~2026-07-27 13:00 UTC** / morning PDT).
+Read-only inventory of training/data corpora in **sbsandbox** (`056956104102`), as of **2026-07-27** (last scan **~2026-07-27 18:30 UTC** / evening PDT). All corpora live under **`s3://edullm-datasets/`** as directory prefixes.
 
 Checkpoint-only buckets and non-corpus prefixes are **not** treated as datasets below. See [`S3_CHECKPOINTS.md`](S3_CHECKPOINTS.md) for checkpoint detail.
 
+---
+
+## S3 consolidation (2026-07-27)
+
+On **2026-07-27**, per-family dataset buckets were consolidated into a single bucket in **sbsandbox** (`056956104102`):
+
+**`s3://edullm-datasets/`** — all training corpora live here as top-level directory prefixes. Legacy per-family bucket names are **deprecated**; use the canonical paths below.
+
+**Legacy bucket deletion (2026-07-27):** Twelve eduLLM legacy buckets were deleted after consolidation: six `edullm-dataset-*`, four `memorysplit-*` (except stephen source), and two checkpoint buckets (see [`S3_CHECKPOINTS.md`](S3_CHECKPOINTS.md#s3-consolidation-2026-07-27)). Ten were removed in the first pass (afternoon UTC); `edullm-dataset-curriculum-p1-jul23` and `edullm-dataset-olmo` required a second pass (~18:30 UTC) to purge versioned delete markers. The only retained legacy **source** bucket is `memorysplit-stephen-056956104102-us-east-1` (see memorysplit table below).
+
+### Top-level prefixes on `edullm-datasets`
+
+| Prefix | Contents |
+|--------|----------|
+| `olmo30b/` | OLMo-mix-1124 ~30B trimmed corpus |
+| `olmo100b/` | OLMo-mix-1124 rebalanced / HQ pool |
+| `mixlaw/` | Skill-dag 370M validation mixtures (10B each) |
+| `regmix/` | RegMix-optimized mixes |
+| `refhq/` | RefHQ filtered corpora |
+| `datamix1-jul22/` | Week-one Data Mix 1 |
+| `curriculum-p1-jul23/` | Curriculum releases |
+| `olmo-150b-dolma2/` | OLMo 150B Dolma2 tokenized sample |
+| `mythos-rdt/` | Mythos RDT shards and FarmShare mixes |
+| `p1hypothesis/` | P1 hypothesis corpus packages |
+| `memorysplit/` | Memory-split experiment corpora (see below) |
+
+### Legacy `edullm-dataset-*` → `edullm-datasets/`
+
+| Legacy bucket | Canonical prefix | Status |
+|---------------|------------------|--------|
+| `edullm-dataset-regmix` | `regmix/` | **Deleted** 2026-07-27 |
+| `edullm-dataset-curriculum-p1-jul23` | `curriculum-p1-jul23/` | **Deleted** 2026-07-27 |
+| `edullm-dataset-datamix1-jul22` | `datamix1-jul22/` | **Deleted** 2026-07-27 |
+| `edullm-dataset-olmo` | `olmo30b/` | **Deleted** 2026-07-27 |
+| `edullm-dataset-olmohq` | `olmo100b/` | **Deleted** 2026-07-27 |
+| `edullm-dataset-refhq` | `refhq/` | **Deleted** 2026-07-27 |
+
+### Legacy `memorysplit-*` → `edullm-datasets/memorysplit/`
+
+| Legacy bucket | Canonical prefix | Status |
+|---------------|------------------|--------|
+| `memorysplit-adarsh-056956104102` | `memorysplit/adarsh/` | **Deleted** 2026-07-27 |
+| `memorysplit-corpus-056956104102-us-east-1` | `memorysplit/corpus/` | **Deleted** 2026-07-27 |
+| `memorysplit-sid-056956104102` | `memorysplit/sid/` | **Deleted** 2026-07-27 |
+| `memorysplit-stephen-056956104102-us-east-1` | `memorysplit/stephen/` | **Complete** at destination — source bucket **retained** (10 objects under `corpus/` still in source; copies verified at destination; source delete blocked by bucket policy on `corpus/*`) |
+| `memorysplit-training-056956104102-us-east-1` | `memorysplit/training/` | **Deleted** 2026-07-27 |
+
+**Legacy bucket cleanup (complete 2026-07-27):** All twelve targeted eduLLM legacy buckets (six `edullm-dataset-*`, four `memorysplit-*` except stephen source, and two checkpoint buckets in [`S3_CHECKPOINTS.md`](S3_CHECKPOINTS.md)) are **deleted**. Only `memorysplit-stephen-056956104102-us-east-1` remains as a source holdout (see row above).
+
+Checkpoint bucket consolidation (`edullm-checkpoints`) is documented in [`S3_CHECKPOINTS.md`](S3_CHECKPOINTS.md#s3-consolidation-2026-07-27).
+
+---
+
 **Creator attribution** uses CloudTrail `CreateBucket` management events (principal = assumed role `Intern-<name>-sbsandbox` / session `broker-<name>-…`). Object-level `PutObject` uploaders are **not** available via `lookup-events` (S3 data events are not returned).
 
-**Scan delta vs prior (~01:30 UTC 2026-07-27):** No new dataset buckets or corpus prefixes; manifest `LastModified` timestamps unchanged (`tokenized_manifest.json` 2026-07-26T15:29:11Z; RefHQ `final_manifest.json` 2026-07-26T12:13:09Z). Deleted historical buckets `edullm-dataset-skilldag` / `edullm-dataset-v1` remain absent (404).
+**Scan delta vs prior (~01:30 UTC 2026-07-27):** Dataset bucket consolidation into `edullm-datasets/` completed for regmix, refhq, olmo, olmohq, datamix1, and curriculum prefixes (see [S3 consolidation](#s3-consolidation-2026-07-27)). Manifest `LastModified` timestamps unchanged (`tokenized_manifest.json` 2026-07-26T15:29:11Z; RefHQ `final_manifest.json` 2026-07-26T12:13:09Z). Deleted historical buckets `edullm-dataset-skilldag` / `edullm-dataset-v1` remain absent (404).
 
 ---
 
@@ -14,12 +67,13 @@ Checkpoint-only buckets and non-corpus prefixes are **not** treated as datasets 
 
 | Dataset | S3 location | Token budget | Creator (CloudTrail) | Bucket created | Text on S3 | Tokenized on S3 | Tokenizer |
 |---------|-------------|-------------:|----------------------|----------------|:----------:|:---------------:|-----------|
-| OLMo-mix-1124 ~30B (trimmed) | `s3://edullm-dataset-olmo/olmo-mix-1124-30b/` | **31.334B** measured dolma2 | **nathan.zhao** (`CreateBucket`) | 2026-07-23 00:48:49Z (us-east-1) | Yes | **Yes** (218 shards) | `allenai/dolma2-tokenizer` |
-| OLMo-mix-1124 rebalanced / HQ pool | `s3://edullm-dataset-olmohq/olmo-mix-1124-30b/` | **100.179B** measured dolma2 | **nathan.zhao** (`CreateBucket`) | 2026-07-23 18:10:00Z (us-east-1) | Yes | **Yes** (317 shards) | `allenai/dolma2-tokenizer` |
-| RegMix-optimized 10B | `s3://edullm-dataset-regmix/regmix-10b/` | 10.000B measured | **nathan.zhao** (`CreateBucket`) | 2026-07-25 19:51:19Z (us-east-1) | Yes | Yes | `allenai/dolma2-tokenizer` |
-| RefHQ RegMix 5.5B v1 | `s3://edullm-dataset-refhq/refhq-regmix-5p5b-v1/` | 5.514B measured | **nathan.zhao** (`CreateBucket`) | 2026-07-26 12:11:47Z (us-east-1) | Yes | Yes | `allenai/dolma2-tokenizer` |
-| Week-one Data Mix 1 (370M 1.25×C) | `s3://edullm-dataset-datamix1-jul22/` | 9.282B packed | **eric.wu** (`CreateBucket`) | 2026-07-23 02:55:47Z (us-east-2) | No | Yes (packed only) | `allenai/dolma2-tokenizer` @ `5292e5d…` |
-| Curriculum release 370m-1.25xc-static-v1 | `s3://edullm-dataset-curriculum-p1-jul23/releases/370m-1.25xc-static-v1/` | 9.282B | **eric.wu** (`CreateBucket`) | 2026-07-23 08:14:32Z (us-east-2) | No | Yes (packed only) | `allenai/dolma2-tokenizer` @ `5292e5d…` |
+| OLMo-mix-1124 ~30B (trimmed) | `s3://edullm-datasets/olmo30b/olmo-mix-1124-30b/` | **31.334B** measured dolma2 | **nathan.zhao** (`CreateBucket`) | 2026-07-23 00:48:49Z (us-east-1) | Yes | **Yes** (218 shards) | `allenai/dolma2-tokenizer` |
+| OLMo-mix-1124 rebalanced / HQ pool | `s3://edullm-datasets/olmo100b/olmo-mix-1124-30b/` | **126.651B** active measured (post top-up trim) | **nathan.zhao** (`CreateBucket`) | 2026-07-23 18:10:00Z (us-east-1); top-up 2026-07-29 | Yes | **Yes** (active inventory) | `allenai/dolma2-tokenizer` |
+| Mixlaw 370M validation (10B×8) | `s3://edullm-datasets/mixlaw/` | **10B** per mix | **nathan.zhao** | 2026-07-29 READY | Via mixes | **Yes** | `allenai/dolma2-tokenizer` |
+| RegMix-optimized 10B | `s3://edullm-datasets/regmix/regmix-10b/` | 10.000B measured | **nathan.zhao** (`CreateBucket`) | 2026-07-25 19:51:19Z (us-east-1) | Yes | Yes | `allenai/dolma2-tokenizer` |
+| RefHQ RegMix 5.5B v1 | `s3://edullm-datasets/refhq/refhq-regmix-5p5b-v1/` | 5.514B measured | **nathan.zhao** (`CreateBucket`) | 2026-07-26 12:11:47Z (us-east-1) | Yes | Yes | `allenai/dolma2-tokenizer` |
+| Week-one Data Mix 1 (370M 1.25×C) | `s3://edullm-datasets/datamix1-jul22/` | 9.282B packed | **eric.wu** (`CreateBucket`) | 2026-07-23 02:55:47Z (us-east-2) | No | Yes (packed only) | `allenai/dolma2-tokenizer` @ `5292e5d…` |
+| Curriculum release 370m-1.25xc-static-v1 | `s3://edullm-datasets/curriculum-p1-jul23/releases/370m-1.25xc-static-v1/` | 9.282B | **eric.wu** (`CreateBucket`) | 2026-07-23 08:14:32Z (us-east-2) | No | Yes (packed only) | `allenai/dolma2-tokenizer` @ `5292e5d…` |
 | OLMo 150B Dolma2 sample | `s3://edullm-datasets/olmo-150b-dolma2/` | 155.6B available | Bucket: **tom.liu**; prefix uploader: **not in LookupEvents** | Bucket 2026-07-23 20:16:51Z (us-east-1) | No | Yes | `allenai/dolma2-tokenizer` |
 | Mythos RDT FineWeb-Edu 3B | `s3://edullm-datasets/mythos-rdt/shards/` | 3.0B | Bucket: **tom.liu**; prefix uploader: **not in LookupEvents** | Bucket 2026-07-23 20:16:51Z | No | Yes | `HuggingFaceTB/cosmo2-tokenizer` |
 | Mythos FarmShare broad mix | `s3://edullm-datasets/mythos-rdt/farmshare_40b/` | 24.000B | Bucket: **tom.liu**; prefix uploader: **not in LookupEvents** | Bucket 2026-07-23 20:16:51Z | No | Yes | Cosmo2-family vocab 49,152 |
@@ -29,7 +83,7 @@ Checkpoint-only buckets and non-corpus prefixes are **not** treated as datasets 
 
 ## 1. OLMo-mix-1124 ~30B (document-trimmed)
 
-- **Path:** `s3://edullm-dataset-olmo/olmo-mix-1124-30b/`
+- **Path:** `s3://edullm-datasets/olmo30b/olmo-mix-1124-30b/` (consolidated from `edullm-dataset-olmo` on 2026-07-27)
 - **Total token budget:** target ~30B; plan estimate ~30.04B; **measured dolma2 `total_content_tokens` = 31,334,000,834** (`plan/tokenized_manifest.json`, created 2026-07-26T15:18:29Z)
 - **Creator (CloudTrail):** **nathan.zhao** — `CreateBucket` `edullm-dataset-olmo` as `Intern-nathan.zhao-sbsandbox` / `broker-nathan.zhao-…` (2026-07-23T00:48:49Z, us-east-1). FarmShare run path in README: `olmo-mix-30b-20260722`.
 - **Created:** bucket 2026-07-23; README / plan objects dated 2026-07-22; tokenized upload 2026-07-26
@@ -55,40 +109,59 @@ Checkpoint-only buckets and non-corpus prefixes are **not** treated as datasets 
 
 ## 2. OLMo-mix-1124 rebalanced corpus (olmohq)
 
-- **Path:** `s3://edullm-dataset-olmohq/olmo-mix-1124-30b/`
-- **Total token budget:** plan estimate was ~95.91B; **measured dolma2 `total_content_tokens` = 100,178,990,013** (`plan/tokenized_manifest.json`, created 2026-07-26T15:52:30Z)
-- **Creator (CloudTrail):** **nathan.zhao** — `CreateBucket` `edullm-dataset-olmohq` (2026-07-23T18:10:00Z, us-east-1). FarmShare run path in README: `olmo-mix-rebalance-20260723`.
-- **Created:** bucket 2026-07-23; README 2026-07-24; tokenized upload 2026-07-26
+- **Path:** `s3://edullm-datasets/olmo100b/olmo-mix-1124-30b/` (consolidated from `edullm-dataset-olmohq` on 2026-07-27)
+- **Total token budget:** plan estimate was ~95.91B; **active measured dolma2 after starcoder/pes2o top-up trim = 126,650,704,924** (`plan/tokenized_manifest.json`, updated 2026-07-29). Pre-topup backup: `plan/tokenized_manifest.pre_topup.json` (100.179B / 317 shards). Overshoot inventory kept on S3 as `plan/tokenized_manifest.overshoot.json` (objects retained; excluded from active inventory).
+- **Creator (CloudTrail):** **nathan.zhao** — `CreateBucket` `edullm-dataset-olmohq` (2026-07-23T18:10:00Z, us-east-1). FarmShare run path in README: `olmo-mix-rebalance-20260723`. Top-up run: `olmohq-topup-20260728-185841`.
+- **Created:** bucket 2026-07-23; README 2026-07-24; tokenized upload 2026-07-26; top-up+trim 2026-07-29
 - **Non-tokenized on S3:** **Yes** — text shards under `data/<domain>/`
-- **Tokenized on S3:** **Yes** — 317 flat uint32 `.npy` memmaps under `tokenized/shards/` (+ per-shard `.json`); index `plan/tokenize_index.jsonl`
+- **Tokenized on S3:** **Yes** — flat uint32 `.npy` memmaps under `tokenized/shards/` (+ per-shard `.json`); index `plan/tokenize_index.jsonl`
 - **Tokenizer:** `allenai/dolma2-tokenizer` (EOS `100257`)
+- **Availability gate:** `|plan − measured| / measured ≤ 10%` for all 7 domains (`plan/availability_after_topup.json`)
 
-### Domain splits (dolma2 measured)
+### Domain splits (dolma2 measured, active inventory)
 
-| Domain | Shards | Measured tokens |
-|--------|-------:|----------------:|
-| dclm | 212 | 29.691B |
-| arxiv | 20 | 22.148B |
-| open-web-math | 13 | 13.238B |
-| algebraic-stack | 16 | 12.902B |
-| pes2o | 5 | 12.309B |
-| starcoder | 49 | 6.139B |
-| wiki | 2 | 3.752B |
-| **Total** | **317** | **100.179B** |
+| Domain | Measured tokens | Plan | Rel err |
+|--------|----------------:|-----:|--------:|
+| dclm | 29.691B | 28.600B | 3.7% |
+| arxiv | 22.148B | 20.800B | 6.1% |
+| pes2o | 26.379B | 26.300B | 0.3% |
+| starcoder | 18.541B | 20.300B | 9.5% |
+| open-web-math | 13.238B | 12.200B | 7.8% |
+| algebraic-stack | 12.902B | 11.800B | 8.5% |
+| wiki | 3.752B | 3.660B | 2.4% |
+| **Total** | **126.651B** | — | — |
 
-This pool is the source for RegMix-10B. Measured per-domain totals differ from the earlier OLMo-2-scale plan estimates (especially starcoder / pes2o).
+This pool is the source for RegMix-10B and mixlaw validation slices. **`regmix/regmix-10b` was not modified by the top-up.**
+
+Top-up tooling: `datasets/olmohq/submit_olmohq_topup.sh` → `plan_olmohq_topup.py` / `finalize_olmohq_topup_upload.py` / `trim_olmohq_topup_manifest.py`.
+
+---
+
+## 2b. Mixlaw 370M validation mixtures (10B each)
+
+- **Path:** `s3://edullm-datasets/mixlaw/`
+- **READY:** `2026-07-29T03:24:36Z` (`READY`, `mixlaw_upload_receipt.json`)
+- **Recipe:** `validation_mixtures_10b.json` (8 mixes)
+- **mix01:** server-side copy *from* `s3://edullm-datasets/regmix/regmix-10b/` into `mixlaw/mixes/mix01/` only — **regmix source read-only**
+- **Other mixes:** materialized from olmohq working pool (`olmo-mix-1124`, `mix07`, `mix18`, `ML-min1pct`, `ML-near-opt-3`, `LGB-min1pct`, `LGB-near-opt-5`)
+- **Submit:** `experiments/skill-dag/mixlaw/submit_mixlaw_validation_10b.sh`
 
 ---
 
 ## 3. RegMix-optimized OLMo-mix 10B
 
-- **Path:** `s3://edullm-dataset-regmix/regmix-10b/`
+- **Path:** `s3://edullm-datasets/regmix/regmix-10b/` (consolidated from `edullm-dataset-regmix` on 2026-07-27)
 - **Total token budget:** **10,000,058,051** measured content tokens
 - **Creator (CloudTrail):** **nathan.zhao** — `CreateBucket` `edullm-dataset-regmix` (2026-07-25T19:51:19Z, us-east-1). FarmShare run path in README: `regmix-10b-20260725-124810`.
 - **Created:** bucket + corpus 2026-07-25
-- **Source:** `s3://edullm-dataset-olmohq/olmo-mix-1124-30b`
+- **Source:** `s3://edullm-datasets/olmo100b/olmo-mix-1124-30b`
 - **Non-tokenized on S3:** **Yes** — `data/<domain>/<domain>-regmix.json.gz`
 - **Tokenized on S3:** **Yes** — `tokenized/<domain>/<domain>.npy` (uint32) + `.json` metadata
+- **Difficulty labels on S3:** upload via `datasets/regmix/finalize_regmix_labels_upload.py` / `submit_regmix_labels_upload.sh`
+  - Heuristic (compression / Flesch / MTLD): `s3://edullm-datasets/regmix/regmix-10b/labels/` (`READY`, `SCHEMA.json`, `docs/`, `metrics/`, `metrics_index.jsonl.gz`)
+  - LM learnability: `s3://edullm-datasets/regmix/regmix-10b/lm_labels/` (same portable layout; local FarmShare tree may be `lm_labels/labels/`)
+  - Upload receipt: `labels_upload_manifest.json` at the corpus prefix (paths, byte counts, READY timestamps)
+- **Curriculum training index on S3:** `s3://edullm-datasets/regmix/regmix-10b/curriculum/` — produced by `experiments/curriculum/scripts/build_curriculum_index.py` (doc/chunk ranks + tokenized memmaps for curriculum arms)
 - **Tokenizer:** `allenai/dolma2-tokenizer` (EOS `100257`)
 
 ### Domain splits (RegMix weights → measured)
@@ -107,11 +180,11 @@ This pool is the source for RegMix-10B. Measured per-domain totals differ from t
 
 ## 4. RefHQ RegMix 5.5B v1
 
-- **Path:** `s3://edullm-dataset-refhq/refhq-regmix-5p5b-v1/`
+- **Path:** `s3://edullm-datasets/refhq/refhq-regmix-5p5b-v1/` (consolidated from `edullm-dataset-refhq` on 2026-07-27)
 - **Total token budget:** **5,514,030,574** measured content tokens (`manifests/final_manifest.json`)
 - **Creator (CloudTrail):** **nathan.zhao** — `CreateBucket` `edullm-dataset-refhq` as `Intern-nathan.zhao-sbsandbox` / `broker-nathan.zhao-…` (2026-07-26T12:11:47Z, us-east-1). FarmShare run path in manifests: `refhq-regmix-5p5b-v1`.
 - **Created:** bucket + corpus 2026-07-26
-- **Source:** independent HQ-filtered domain pulls (not sampled from `edullm-dataset-olmohq`); budget profile `regmix-5p5`
+- **Source:** independent HQ-filtered domain pulls (not sampled from `edullm-datasets/olmo100b`); budget profile `regmix-5p5`
 - **Non-tokenized on S3:** **Yes** — Dolma JSONL shards under `<domain>/documents-*.json.gz`
 - **Tokenized on S3:** **Yes** — `tokenized/<domain>/<domain>.npy` (uint32) + `.json` metadata
 - **Tokenizer:** `allenai/dolma2-tokenizer` (EOS `100257`)
@@ -134,7 +207,7 @@ Manifests: `manifests/plan.json`, `manifests/final_manifest.json`, `manifests/to
 
 ## 5. Week-one Data Mix 1 — 370M 1.25×C
 
-- **Path:** `s3://edullm-dataset-datamix1-jul22/`
+- **Path:** `s3://edullm-datasets/datamix1-jul22/` (consolidated from `edullm-dataset-datamix1-jul22` on 2026-07-27)
 - **Total token budget:** **9,281,564,672** packed tokens (2,266,007 × 4096-token sequences)
 - **Creator (CloudTrail):** **eric.wu** — `CreateBucket` `edullm-dataset-datamix1-jul22` as `Intern-eric.wu-sbsandbox` (2026-07-23T02:55:47Z, **us-east-2**). Upstream HF view: `ericrcwu/week1-general-20b-dolma2-v1` @ `5b5503d35e58c0b5e33d0d6b51a074cc8d79f172`.
 - **Created:** bucket 2026-07-23 (us-east-2); README dated 2026-07-22 / 2026-07-23
@@ -161,7 +234,7 @@ Manifest: `views/370m-1.25xc/manifest.json`
 
 ## 6. Curriculum release `370m-1.25xc-static-v1`
 
-- **Path:** `s3://edullm-dataset-curriculum-p1-jul23/releases/370m-1.25xc-static-v1/`
+- **Path:** `s3://edullm-datasets/curriculum-p1-jul23/releases/370m-1.25xc-static-v1/` (consolidated from `edullm-dataset-curriculum-p1-jul23` on 2026-07-27)
 - **Total token budget:** **9,281,564,672** (same canonical population as datamix1)
 - **Creator (CloudTrail):** **eric.wu** — `CreateBucket` `edullm-dataset-curriculum-p1-jul23` (2026-07-23T08:14:32Z, **us-east-2**). Same week-one mix packaging (release schema `edullm-curriculum/v1`).
 - **Created:** bucket + `release.json` 2026-07-23

@@ -1,0 +1,106 @@
+# REL RefHQ-init, constant-α arm (Arm 3).
+# ONLY arm that seeds EMA history buffers from RefHQ step1315.
+# Trainable model still initializes from scratch on RegMix 10B.
+#
+# Near-clone of rel-ema-exp: controlled knobs match; independent diffs are only
+#   ema.seed_mode=refhq + constant α=0.9985 (vs zero + α(t)=1−exp(−t/300)).
+#
+# Score: top-60% REL = L_hist − L_curr  (t0=0, selection from step 0)
+# α = 0.9985 constant ≈ 20% half-life on a 2384-step run
+#   (α^H = 1/2 ⇒ H = ln(0.5)/ln(0.9985) ≈ 462 ≈ 0.2 · 2384)
+#
+# Reference seed (EMA history only — not a frozen RHO ref):
+#   s3://edullm-checkpoints/olmo-370m/edullm-370M-refhq-5p5b/checkpoints/step1315/
+# load_path may stay null: --launch auto-materializes from s3_uri.
+# Optional override: REF_PT=/path/to/refhq_step1315_model.pt
+
+run_id: rel-ema-refhq-10b-scratch-v1
+seed: 42
+output_dir: rel-ema-refhq/data/rel_ema_refhq_10b
+arm: rel-ema-refhq
+
+methods: [rel_ema]
+
+k: 0.6
+# Selection-mask warmup off: REL active from step 0.
+t0_steps: 0
+t0_frac: 0.0
+
+# Constant α (alpha_start == alpha_end). schedule=linear is the constant path;
+# do NOT use schedule=exp here (that is rel-ema-exp only).
+alpha_schedule: linear
+alpha_start: 0.9985
+alpha_end: 0.9985
+
+# Seed EMA history from RefHQ (rel-ema-refhq ONLY; rel-ema-exp must keep seed_mode: zero).
+ema:
+  seed_mode: refhq
+  schedule: linear  # constant α via alpha_start == alpha_end (not exp)
+# Local path optional — null + s3_uri → auto-materialize at --launch.
+reference:
+  load_path: null
+  s3_uri: s3://edullm-checkpoints/olmo-370m/edullm-370M-refhq-5p5b/checkpoints/step1315/
+  step: 1315
+  planned_total_steps: 1314
+  dataset: s3://edullm-datasets/refhq/refhq-regmix-5p5b-v1/
+
+data:
+  tokens_s3: s3://edullm-datasets/regmix/regmix-10b/tokenized
+  tokenizer: allenai/dolma2-tokenizer
+  sequence_length: 2048
+
+s3:
+  dataset_bucket: edullm-datasets
+  checkpoint_bucket: edullm-checkpoints
+  # Checkpoints + results → s3://edullm-checkpoints/token-sel/rel-ema-refhq/
+  prefix: token-sel/rel-ema-refhq
+  profile: sbsandbox
+
+model:
+  name: OLMo-2-370M-scratch
+  arch: olmo2_370M
+  init_mode: scratch
+  init_seed: 42
+  load_path: null
+
+olmo_core:
+  repository: https://github.com/edu-llm/OLMo-core
+  revision: 99e0009ed67679c90da970ec5ba439c9459e3757
+
+train:
+  max_tokens: 10000000000
+  global_batch_size: 4194304
+  lr: 4.0e-4
+  lr_alpha_f: 0.1
+  warmup_steps: 24
+  data_loader_seed: 42
+  data_loader_initial_epoch: 0
+  data_loader_chunk_size: 1
+  # Tokens per rank microbatch. GBS must stay divisible by world_size * this.
+  # Hardware knob (not fingerprinted). Tune per GPU memory (e.g. 16384 on 48 GiB).
+  rank_microbatch_size: 65536
+  dp_type: hsdp
+  optim_type: skip_step_adamw
+  compile_model: true
+  max_grad_norm: 1.0
+  z_loss_multiplier: 1.0e-5
+  attn_backend: auto
+  # Leave empty: discover devices from torchrun / CUDA_VISIBLE_DEVICES / Slurm.
+  cuda_visible_devices: ""
+  # Informational only; torchrun --nproc_per_node is the authority at launch.
+  num_gpus: null
+  num_workers: 8
+  # Permanent ladder via shared checkpointer helper: {0,125,…,2250,2384} (skip 2375).
+  checkpoint_every_steps: 125
+  checkpoint_keep_last: null
+  pre_train_checkpoint: true
+  save_async: false
+  # No ephemeral prune (omit ephemeral_checkpoint_every_steps).
+
+eval:
+  block_unit: sequence
+  metrics_filename: metrics.json
+  task_loss:
+    enabled: true
+    # Relative to experiments/token-selection/ when not absolute.
+    results_dir: task_loss_results/rel-ema-refhq

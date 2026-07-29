@@ -86,9 +86,14 @@ def validate_scratch_config(
     """Reject any configuration that would accidentally become continued pretraining.
 
     When ``method='rho_excess'`` (or it is the only configured method), also require a
-    non-null ``reference.load_path``. Smoke configs may omit the path and supply an
-    in-memory frozen twin instead.
+    local ``reference.load_path`` **or** ``reference.s3_uri`` (materialized at launch).
+    When ``method='rel_ema'`` with ``ema.seed_mode='refhq'``, same for RefHQ seed.
+    When ``method='learnability'``, require early/late local paths **or** S3 provenance
+    (``s3_uri`` / ``s3_uris`` + ``steps``). Smoke configs may omit paths and supply
+    in-memory frozen twins instead.
     """
+    from token_selection.olmo_ext.refhq_materialize import reference_source_ok
+
     model = cfg.get("model") or {}
     if model.get("init_mode") != "scratch":
         raise ValueError("model.init_mode must be 'scratch' for this token-selection experiment")
@@ -107,13 +112,31 @@ def validate_scratch_config(
         methods = cfg.get("methods") or []
         if len(methods) == 1:
             resolved = str(methods[0])
-    if resolved == "rho_excess":
-        ref = cfg.get("reference") or {}
-        load_path = ref.get("load_path")
-        if load_path is None or str(load_path).strip() in ("", "null", "None", "REPLACE_ME"):
+    if resolved == "rel_ema":
+        ema_block = cfg.get("ema") or {}
+        seed_mode = str(
+            ema_block.get("seed_mode") or cfg.get("ema_seed_mode") or "zero"
+        ).strip().lower()
+        if seed_mode not in ("zero", "refhq"):
             raise ValueError(
-                "rho_excess requires reference.load_path (local path to a frozen reference "
-                "checkpoint). Sync the checkpoint locally first if it lives on S3."
+                f"ema.seed_mode / ema_seed_mode={seed_mode!r} unsupported; "
+                "expected 'zero' or 'refhq'"
+            )
+    if resolved in ("rho_excess", "rel_ema", "learnability"):
+        if not reference_source_ok(cfg, method=resolved):
+            if resolved == "rho_excess":
+                raise ValueError(
+                    "rho_excess requires reference.load_path (local .pt) or "
+                    "reference.s3_uri (auto-materialized at --launch)"
+                )
+            if resolved == "rel_ema":
+                raise ValueError(
+                    "rel_ema with ema.seed_mode='refhq' requires reference.load_path "
+                    "or reference.s3_uri (auto-materialized at --launch)"
+                )
+            raise ValueError(
+                "learnability requires reference.early/late load_path or S3 provenance "
+                "(early.s3_uri + late.s3_uris/steps); auto-materialized at --launch"
             )
 
 

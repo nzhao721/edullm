@@ -8,9 +8,13 @@ Layout:
   LOCAL (produced on the train box, not synced from the token bucket):
     tokens/manifest.json <- build_token_manifest, derived from the sidecars
     order/               <- freeze_order after the manifest exists
-  OUTPUTS (this run):
-    metrics/     -> s3://<dataset_bucket>/<prefix>/metrics/
-    checkpoints/ -> s3://<checkpoint_bucket>/<prefix>/
+  OUTPUTS (this run) — published under edullm-checkpoints/token-sel/<arm>/:
+    checkpoints/         -> s3://edullm-checkpoints/token-sel/<arm>/checkpoints/
+    task_loss_results/   -> s3://edullm-checkpoints/token-sel/<arm>/task_loss_results/
+    metrics/             -> s3://edullm-checkpoints/token-sel/<arm>/metrics/
+
+``s3.prefix`` in each arm YAML must be ``token-sel/<arm>`` (see
+``token_selection.olmo_ext.s3_layout``).
 
 Required object tags (apply via bucket policy / sync tooling as org requires):
   Project, Environment, ManagedBy, Owner.
@@ -55,15 +59,9 @@ def sync_dir(
     mirror: bool = False,
     keep: tuple[str, ...] = (),
 ) -> None:
+    local = Path(local)
     local.mkdir(parents=True, exist_ok=True)
-    # ``--delete`` mirrors destination to source. Used when downloading tokens so a
-    # stale local shard cannot linger. Metrics/checkpoints stay additive.
-    extra = ["--delete"] if mirror else []
-    # Excluded destination files survive ``--delete``. The derived token manifest is
-    # local-only, so without this a re-sync of the corpus would silently remove it and
-    # invalidate the frozen order contract that fingerprints it.
-    for pattern in keep if mirror else ():
-        extra += ["--exclude", pattern]
+    remote = remote if remote.endswith("/") else remote + "/"
     if upload:
         if not any(local.iterdir()):
             if mirror:
@@ -71,18 +69,25 @@ def sync_dir(
                     f"Refusing mirrored (--delete) upload of empty {local} to {remote}."
                 )
             print(f"WARNING: {local} is empty; nothing to upload", file=sys.stderr)
-        _aws(profile, ["s3", "sync", str(local), remote, *extra])
-    else:
-        _aws(profile, ["s3", "sync", remote, str(local), *extra])
+            return
+    cmd = ["s3", "sync", str(local), remote] if upload else ["s3", "sync", remote, str(local)]
+    # For download of inputs we may want --delete; for upload of outputs we do not.
+    if mirror:
+        cmd.append("--delete")
+    # Keep locally-derived files (e.g. manifest.json) from being deleted by --delete.
+    for pattern in keep:
+        cmd.extend(["--exclude", pattern])
+    cmd.extend(["--only-show-errors"])
+    _aws(profile, cmd)
 
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--config", type=Path, default=ROOT / "token_selection/configs/run_rho_10b.yaml")
+    ap.add_argument("--config", type=Path, default=ROOT / "rho-1/configs/run_rho_10b.yaml")
     ap.add_argument("--direction", choices=["upload", "download"], required=True)
     ap.add_argument(
         "--what",
-        choices=["tokens", "metrics", "checkpoints", "all"],
+        choices=["tokens", "metrics", "checkpoints", "task_loss", "all"],
         default="all",
     )
     ap.add_argument(
@@ -99,6 +104,8 @@ def main() -> None:
     if shutil.which("aws") is None:
         raise SystemExit("aws CLI not found on PATH")
 
+    arm_root = s3_uri(cfg, bucket_key="checkpoint_bucket").rstrip("/")
+
     # (name, local, remote, read_only_input, keep_through_mirror)
     targets: list[tuple[str, Path, str, bool, tuple[str, ...]]] = []
     if args.what in ("tokens", "all"):
@@ -106,20 +113,28 @@ def main() -> None:
             ("tokens", out / "tokens", resolve_tokens_s3(cfg) + "/", True, ("manifest.json",))
         )
     if args.what in ("metrics", "all"):
-        targets.append(("metrics", out / "metrics", s3_uri(cfg, "metrics"), False, ()))
+        targets.append(
+            ("metrics", out / "metrics", f"{arm_root}/metrics/", False, ())
+        )
     if args.what in ("checkpoints", "all"):
-        remote = s3_uri(cfg, bucket_key="checkpoint_bucket")
-        targets.append(("checkpoints", out / "checkpoints", remote.rstrip("/") + "/", False, ()))
+        targets.append(
+            ("checkpoints", out / "checkpoints", f"{arm_root}/checkpoints/", False, ())
+        )
+    if args.what in ("task_loss", "all"):
+        # Prefer arm-local results dir under package sibling task_loss_results/<arm>
+        # when present; else output_dir/task_loss_results.
+        tl_local = out / "task_loss_results"
+        targets.append(
+            ("task_loss_results", tl_local, f"{arm_root}/task_loss_results/", False, ())
+        )
 
     for name, local, remote, read_only, keep in targets:
         if upload and read_only:
             raise SystemExit(
                 f"Refusing to upload {name!r} to {remote}. Pre-tokenized inputs are "
-                "read-only; only metrics and checkpoints are published from a run."
+                "read-only; only metrics, checkpoints, and task_loss_results are published."
             )
         if not upload and not read_only and args.what == "all":
-            # ``--what all --direction download`` should not pull run outputs by default;
-            # only tokens are an input. Skip metrics/checkpoints on download-all.
             print(f"=== skip download {name} (run output; use --what {name} to pull)")
             continue
         mirror = read_only and not upload and not args.no_mirror

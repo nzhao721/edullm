@@ -1,6 +1,6 @@
 # eduLLM S3 Checkpoints Inventory
 
-Read-only inventory of model / training checkpoints in **sbsandbox** (`056956104102`), as of **2026-07-27** (scan **~2026-07-27 13:00 UTC**).
+Read-only inventory of model / training checkpoints in **sbsandbox** (`056956104102`), as of **2026-07-27** (scan **~2026-07-27 18:30 UTC**). All checkpoints live under **`s3://edullm-checkpoints/`** as directory prefixes.
 
 Access stayed read-only via sb-aws. Progress JSON / `STATUS.txt` values below are point-in-time snapshots from that scan and may advance for live runs.
 
@@ -8,40 +8,66 @@ For training corpora, see [`S3_DATASETS.md`](S3_DATASETS.md).
 
 ---
 
-## Buckets
+## S3 consolidation (2026-07-27)
+
+On **2026-07-27**, per-run checkpoint buckets were consolidated into a single bucket in **sbsandbox** (`056956104102`):
+
+**`s3://edullm-checkpoints/`** — all model checkpoints live here as top-level directory prefixes. Legacy per-run bucket names are **deprecated**; use the canonical paths below.
+
+**Legacy bucket deletion (2026-07-27):** Both legacy checkpoint buckets below were deleted after consolidation (see [`S3_DATASETS.md`](S3_DATASETS.md#s3-consolidation-2026-07-27) for dataset and memorysplit cleanup).
+
+| Legacy bucket | Canonical prefix | Status |
+|---------------|------------------|--------|
+| `edullm-olmo-370m-ckpts` | `olmo-370m/` | **Deleted** 2026-07-27 |
+| `edullm-olmo2-370m-cpt-checkpoints` | `olmo2-370m-cpt/` | **Deleted** 2026-07-27 |
+
+Dataset and memorysplit consolidations are documented in [`S3_DATASETS.md`](S3_DATASETS.md#s3-consolidation-2026-07-27).
+
+---
+
+## Bucket layout
 
 | Bucket | Region (CreateBucket) | Creator (CloudTrail) | Created (UTC) | Role |
 |--------|----------------------|----------------------|---------------|------|
-| `edullm-olmo-370m-ckpts` | us-east-1 | **nathan.zhao** | 2026-07-23T23:58:10Z | Primary 370M training / experiment checkpoint store |
-| `edullm-checkpoints` | us-east-1 | First: **nathan.zhao** (2026-07-22); later recreations: **grant.matherne** (2026-07-25) | 2026-07-25T22:03:18Z (current) | Token-selection / MixLaw / Rel-EMA experiments |
-| `edullm-olmo2-370m-cpt-checkpoints` | us-east-1 | **nathan.zhao** | 2026-07-26T11:39:38Z | Unsharded OLMo2 370M CPT ladder checkpoints |
+| `edullm-checkpoints` | us-east-1 | First: **nathan.zhao** (2026-07-22); later recreations: **grant.matherne** (2026-07-25) | 2026-07-25T22:03:18Z (current) | Canonical checkpoint store for all eduLLM training runs |
+
+### Top-level prefixes on `edullm-checkpoints`
+
+| Prefix | Role |
+|--------|------|
+| `olmo-370m/` | Primary 370M training / experiment checkpoints (formerly `edullm-olmo-370m-ckpts`) |
+| `olmo2-370m-cpt/` | Unsharded OLMo2 370M CPT ladder checkpoints (formerly `edullm-olmo2-370m-cpt-checkpoints`) |
+| `token-sel/` | Active token-selection arm exports (`<arm>/checkpoints/`, `task_loss_results/`, …) |
+| `token-selection/` | Legacy token-selection runs (pre-rebuild; do not append new saves) |
 
 ---
 
 ## Summary
 
-| Run / prefix | Bucket | Arch / method | Data | Steps on S3 | Status (scan) |
-|--------------|--------|---------------|------|-------------|---------------|
-| `edullm-370M-refhq-5p5b` | `edullm-olmo-370m-ckpts` | OLMo2 370M CE | RefHQ RegMix 5.5B | 125…1625 (+ tmp) | **Complete** |
-| `edullm-370M-blade-regmix10b` | `edullm-olmo-370m-ckpts` | OLMo2 370M BLADE | RegMix 10B + RefHQ ref | 250…2384 | **Complete** |
-| `edullm-370M-ce-regmix10b` | `edullm-olmo-370m-ckpts` | OLMo2 370M plain CE | RegMix 10B | 250…2384 | **Complete** |
-| `edullm-370M-30B` CPT unsharded | `edullm-olmo2-370m-cpt-checkpoints` | OLMo2 370M (config.yaml) | FarmShare tokenized 30B | 5000, 10000, 15000 | Checkpoints present |
-| `token-selection/rel-ema-10b-scratch-v1` | `edullm-checkpoints` | OLMo2 370M Rel-EMA | ~10B budget | 0…2386 | Weights present (final step 2386) |
-| `token-selection/rho-excess-10b-scratch-v1` | `edullm-checkpoints` | OLMo2 370M ρ-excess | RegMix 10B + RefHQ ref | 0, 48, 50, 100, 150, 200 | **In progress** (early; 2384 planned) |
-| `token-selection/mixlaw-pilot` | `edullm-checkpoints` | DataDecide-60M × 24 mixes | MixLaw pilot | logs + progress only | Complete (no weight checkpoints) |
-| `olmo3-370m/run-10b-equal` | `edullm-olmo-370m-ckpts` | OLMo3 370M | 10B equal mix | 0, 3179, 6358, 9537, 12704, 12716 | Checkpoints present |
-| `olmo3-370m/trial/{equal,scaled}` | `edullm-olmo-370m-ckpts` | OLMo3 370M trials | equal / scaled | 0, 380–382 | Early trial saves |
-| `linear-attn-vs-gdn/*` | `edullm-olmo-370m-ckpts` | Linear attn vs GDN | (see runs) | up to 12716 | Multi-variant |
-| `mamba3-370m/*` | `edullm-olmo-370m-ckpts` | Mamba3 370M (Vishnu) | various | see table | Multiple short / mid runs |
-| `olmo400m-championship` | `edullm-olmo-370m-ckpts` | Championship tooling + ladder `model.pt` | — | `ladder/step15000/model.pt` | Code + one weight drop |
-| `p1hypothesis/.../packages` | `edullm-olmo-370m-ckpts` | Packed ladder ckpt | Allen Zhu stage1 | multipart pack | Archive only |
-| `code/`, `code-refhq-b200/`, `code-rho-b200/` | `edullm-olmo-370m-ckpts` | Training scripts | — | — | Code drops (not weights) |
-| `lean-split/relay/` | `edullm-olmo-370m-ckpts` | Source tarball | — | — | Relay artifact |
-| `token-selection/lean-split/` | `edullm-checkpoints` | Lean staging | — | — | `staging/lean-split-src.tgz` + smoke check |
+| Run / prefix | S3 prefix (`edullm-checkpoints/…`) | Arch / method | Data | Steps on S3 | Status (scan) |
+|--------------|-------------------------------------|---------------|------|-------------|---------------|
+| `edullm-370M-refhq-5p5b` | `olmo-370m/edullm-370M-refhq-5p5b/` | OLMo2 370M CE | RefHQ RegMix 5.5B | 125…1125, 1315 | **Complete** |
+| `edullm-370M-blade-regmix10b` | `olmo-370m/edullm-370M-blade-regmix10b/` | OLMo2 370M BLADE | RegMix 10B + RefHQ ref | 250…2384 | **Complete** |
+| `edullm-370M-ce-regmix10b` | `olmo-370m/edullm-370M-ce-regmix10b/` | OLMo2 370M plain CE | RegMix 10B | 250…2384 | **Complete** |
+| `edullm-370M-30B` CPT unsharded | `olmo2-370m-cpt/edullm-370M-30B/` | OLMo2 370M (config.yaml) | FarmShare tokenized 30B | 5000, 10000, 15000, 20000 | Checkpoints present |
+| `token-selection/rel-ema-10b-scratch-v1` | `token-selection/rel-ema-10b-scratch-v1/` | OLMo2 370M Rel-EMA | ~10B budget | 0…2386 | Weights present (final step 2386) |
+| `token-selection/rho-excess-10b-scratch-v1` | `token-selection/rho-excess-10b-scratch-v1/` | OLMo2 370M ρ-excess | RegMix 10B + RefHQ ref | 0, 48, 50, 100, 150, 200 | **In progress** (early; 2384 planned) |
+| `token-selection/mixlaw-pilot` | `token-selection/mixlaw-pilot/` | DataDecide-60M × 24 mixes | MixLaw pilot | logs + progress only | Complete (no weight checkpoints) |
+| `olmo3-370m/run-10b-equal` | `olmo-370m/olmo3-370m/run-10b-equal/` | OLMo3 370M | 10B equal mix | 0, 3179, 6358, 9537, 12704, 12716 | Checkpoints present |
+| `olmo3-370m/trial/{equal,scaled}` | `olmo-370m/olmo3-370m/trial/{equal,scaled}/` | OLMo3 370M trials | equal / scaled | 0, 380–382 | Early trial saves |
+| `linear-attn-vs-gdn/*` | `olmo-370m/linear-attn-vs-gdn/` | Linear attn vs GDN | (see runs) | up to 12716 | Multi-variant |
+| `mamba3-370m/*` | `olmo-370m/mamba3-370m/` | Mamba3 370M (Vishnu) | various | see table | Multiple short / mid runs |
+| `olmo400m-championship` | `olmo-370m/olmo400m-championship/` | Championship tooling + ladder `model.pt` | — | `ladder/step15000/model.pt` | Code + one weight drop |
+| `p1hypothesis/.../packages` | `olmo-370m/p1hypothesis/.../packages/` | Packed ladder ckpt | Allen Zhu stage1 | multipart pack | Archive only |
+| `code/`, `code-refhq-b200/`, `code-rho-b200/` | `olmo-370m/code/`, … | Training scripts | — | — | Code drops (not weights) |
+| `lean-split/relay/` | `olmo-370m/lean-split/relay/` | Source tarball | — | — | Relay artifact |
+| `token-selection/lean-split/` | `token-selection/lean-split/` | Lean staging | — | — | `staging/lean-split-src.tgz` + smoke check |
 
 ---
 
-## 1. `s3://edullm-olmo-370m-ckpts/`
+## 1. `s3://edullm-checkpoints/olmo-370m/`
+
+Consolidated from `edullm-olmo-370m-ckpts` on 2026-07-27.
 
 Primary shared checkpoint bucket (nathan.zhao). Top-level prefixes:
 
@@ -56,7 +82,7 @@ p1hypothesis/
 
 - **Architecture:** `olmo_core.TransformerConfig.olmo2_370M` (`OLMo-2-370M-scratch`, reordered_norm, SiLU FFN hidden 4096, QK-norm, RoPE θ=500000)
 - **Method:** plain CE (reference job matched to Rel-EMA stack; RefHQ data)
-- **Dataset:** `s3://edullm-dataset-refhq/refhq-regmix-5p5b-v1/`
+- **Dataset:** `s3://edullm-datasets/refhq/refhq-regmix-5p5b-v1/`
 - **Budget:** 5,514,030,574 tokens → **1314** planned steps; saves every 125
 - **Hyperparams:** lr `4e-4`, warmup 24, α_f 0.1, global batch 4,194,304 tokens, seq 2048, seed 6198, compile on, attn backend `torch`
 - **Status:** `progress/status.json` → `stage=complete` (updated 2026-07-26T22:49:56Z)
@@ -65,10 +91,9 @@ p1hypothesis/
 | Step | Notes |
 |-----:|-------|
 | 125, 250, 375, 500, 625, 750, 875, 1000, 1125 | Permanent save grid |
-| 1250 | Present |
-| 1250-tmp | Temporary / intermediate |
-| 1315, 1375, 1500 | Post-plan / extended saves |
-| **1625** | Latest observed (olmo-core `model_and_optim/*.distcp` + `config.json`) |
+| **1315** | **Canonical** end-of-budget reference (`post_train` after 1314 steps) |
+
+Contaminated probe prefixes (`step1250`, `step1250-tmp`, `step1375`, `step1500`, `step1625`) were **removed** from S3 on 2026-07-27.
 
 Format: distributed olmo-core checkpoint (`model_and_optim/__0_*.distcp`, `.metadata`, `config.json`, `data_paths.txt`).
 
@@ -76,8 +101,8 @@ Format: distributed olmo-core checkpoint (`model_and_optim/__0_*.distcp`, `.meta
 
 - **Architecture:** OLMo2 370M
 - **Method:** **BLADE** (warmup 509 steps + 1875 BLADE steps; τ=375, K=75, γ=0.6, λ=1.0; 5 BLADE blocks)
-- **Train data:** `s3://edullm-dataset-regmix/regmix-10b/`
-- **Reference data:** `s3://edullm-dataset-refhq/refhq-regmix-5p5b-v1/`
+- **Train data:** `s3://edullm-datasets/regmix/regmix-10b/`
+- **Reference data:** `s3://edullm-datasets/refhq/refhq-regmix-5p5b-v1/`
 - **Budget:** 10,000,058,051 tokens → **2384** steps; world size 2; lr `4e-4`
 - **Matched teammate run:** `rel-ema-5b-scratch-v1` / GPU7 RefHQ CE stack
 - **Status:** `progress/status.json` → `stage=complete` (updated 2026-07-27T07:56:08Z)
@@ -88,7 +113,7 @@ Format: distributed olmo-core checkpoint (`model_and_optim/__0_*.distcp`, `.meta
 
 - **Architecture:** OLMo2 370M
 - **Method:** **plain CE** control for BLADE / token-selection
-- **Train data:** `s3://edullm-dataset-regmix/regmix-10b/`
+- **Train data:** `s3://edullm-datasets/regmix/regmix-10b/`
 - **Budget:** same 10.000B / **2384** steps; world size 2; lr `4e-4`; save every 250
 - **Status:** `progress/status.json` → `stage=complete` (updated 2026-07-27T09:38:15Z)
 - **Checkpoints on S3** (`checkpoints/`): `step250`, `step500`, `step750`, `step1000`, `step1250`, `step1500`, `step1750`, `step2000`, `step2250`, **`step2384`**
@@ -155,7 +180,30 @@ Multipart packed checkpoint archive:
 
 ## 2. `s3://edullm-checkpoints/`
 
-Token-selection experiment bucket. Current top-level: `token-selection/`.
+### Active layout — `token-sel/<arm>/` (token-selection rebuild)
+
+All **new** token-selection arm checkpoints and experiment results publish under:
+
+```text
+s3://edullm-checkpoints/token-sel/<arm>/
+  checkpoints/
+  task_loss_results/
+  metrics/       # optional
+  progress/      # optional
+```
+
+Arm directories match `experiments/token-selection/<arm>/`
+(`control`, `blade`, `rho-1`, `rel-ema-exp`, `rel-ema-refhq`, `middle-ppl-token`,
+`middle-ppl-doc`, `attention`, `learnability-token`, `learnability-doc`).
+See `experiments/token-selection/token_selection/olmo_ext/s3_layout.py`.
+
+Historical prefixes under `token-selection/` (below) are orphaned for the rebuild;
+do not append new saves there.
+
+### 2.0 Legacy — `token-selection/` (pre-rebuild)
+
+Former top-level for token-selection experiments. Kept for inventory of completed /
+discarded runs only.
 
 ### 2.1 `token-selection/rel-ema-10b-scratch-v1/rel_ema/` — weights present
 
@@ -187,8 +235,8 @@ Representative `mix01/progress/run_meta.json`:
 - **Model:** `OLMo-2-370M-scratch` / `olmo2_370M`
 - **Tokenizer:** `allenai/dolma2-tokenizer`
 - **OLMo revision:** `99e0009ed67679c90da970ec5ba439c9459e3757`
-- **Train data:** `s3://edullm-dataset-regmix/regmix-10b/tokenized`
-- **Reference:** `s3://edullm-olmo-370m-ckpts/edullm-370M-refhq-5p5b/checkpoints/step1315/`
+- **Train data:** `s3://edullm-datasets/regmix/regmix-10b/tokenized`
+- **Reference:** `s3://edullm-checkpoints/olmo-370m/edullm-370M-refhq-5p5b/checkpoints/step1315/`
 - **Train shape:** seq 2048, global batch 4,194,304 tokens, lr `4e-4`, warmup 24, **2384** total steps, 8× GPU HSDP
 - **Status (scan):** `stage=train` (updated 2026-07-27T10:37:13Z); early checkpoints only
 - **Steps on S3:** `step0`, `step48`, `step50`, `step100`, `step150`, `step200` under `checkpoints/`
@@ -205,9 +253,9 @@ Scratch prefixes: `blade/`, `mixlaw/`, `refhq370m/` (not treated as published ch
 
 ---
 
-## 3. `s3://edullm-olmo2-370m-cpt-checkpoints/`
+## 3. `s3://edullm-checkpoints/olmo2-370m-cpt/`
 
-Dedicated CPT / unsharded ladder store.
+Dedicated CPT / unsharded ladder store (moved from `edullm-olmo2-370m-cpt-checkpoints` on 2026-07-27).
 
 ### 3.1 `edullm-370M-30B/`
 

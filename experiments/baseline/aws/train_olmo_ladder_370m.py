@@ -383,7 +383,7 @@ def build_config(args: argparse.Namespace) -> TrainConfig:
         "flash_attention": resolve_flash_attention(),
         "activation_checkpointing": os.environ.get("OLMO_ACTIVATION_CHECKPOINTING", "0"),
         "fused_loss": os.environ.get("OLMO_FUSED_LOSS", "1") == "1",
-        "dataset": "s3://edullm-dataset-refhq/refhq-regmix-5p5b-v1/",
+        "dataset": "s3://edullm-datasets/refhq/refhq-regmix-5p5b-v1/",
     }
     Path(args.progress_dir).mkdir(parents=True, exist_ok=True)
     (Path(args.progress_dir) / "run_meta.json").write_text(json.dumps(meta, indent=2) + "\n")

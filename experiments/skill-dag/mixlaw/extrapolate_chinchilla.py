@@ -96,7 +96,6 @@ def extrapolate_runs(data: dict, target_step: int, seed: int) -> dict:
                 "run_name": run["run_name"],
                 "tag": run["tag"],
                 "weights": run["weights"],
-                "macro_all_13_measured": float(run["macro_mean"]),
                 "macro_curve_6_measured": float(np.mean(measured_curve)),
                 "macro_curve_6_chinchilla": float(np.mean(chinchilla_curve))
                 if len(chinchilla_curve) == len(curve_families)
@@ -129,7 +128,6 @@ def print_comparison(report: dict) -> None:
             (
                 run["macro_curve_6_measured"],
                 run["macro_curve_6_chinchilla"],
-                run["macro_all_13_measured"],
                 run["run_name"],
                 run["tag"],
             )
@@ -144,9 +142,9 @@ def print_comparison(report: dict) -> None:
     print(f"Step ratio: {report['step_ratio']:.2f}x\n")
 
     print("=== Rankings (macro over 6 curve families) ===")
-    print(f"{'rank':>4}  {'mix':>6}  {'tag':<12}  {'meas@pilot':>11}  {'extrap@chin':>11}  {'delta':>8}  {'all13@pilot':>11}")
-    for i, (m6, c6, m13, name, tag) in enumerate(rows, 1):
-        print(f"{i:4d}  {name:>6}  {tag:<12}  {m6:11.4f}  {c6:11.4f}  {c6-m6:+8.4f}  {m13:11.4f}")
+    print(f"{'rank':>4}  {'mix':>6}  {'tag':<12}  {'meas@pilot':>11}  {'extrap@chin':>11}  {'delta':>8}")
+    for i, (m6, c6, name, tag) in enumerate(rows, 1):
+        print(f"{i:4d}  {name:>6}  {tag:<12}  {m6:11.4f}  {c6:11.4f}  {c6-m6:+8.4f}")
 
     best_meas = min(rows, key=lambda r: r[0])
     best_chin = min(rows, key=lambda r: r[1])
@@ -156,14 +154,6 @@ def print_comparison(report: dict) -> None:
         print("Ranking changed after extrapolation.")
     else:
         print("Same best mixture before and after extrapolation (on curve families).")
-
-    print("\n=== Rankings (macro over all 13 families, pilot only — not extrapolated) ===")
-    rows13 = sorted(
-        ((r["macro_all_13_measured"], r["run_name"], r["tag"]) for r in report["runs"]),
-        key=lambda r: r[0],
-    )
-    for i, (m13, name, tag) in enumerate(rows13[:8], 1):
-        print(f"{i:4d}  {name:>6}  {tag:<12}  {m13:11.4f}")
 
 
 def main() -> None:

@@ -21,6 +21,44 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
+_TORCH_LOAD_PATCHED = False
+
+
+def patch_torch_load_for_olmo_checkpoints() -> None:
+    """PyTorch >=2.6 defaults torch.load(weights_only=True); OLMo checkpoints need False."""
+    global _TORCH_LOAD_PATCHED
+    if _TORCH_LOAD_PATCHED:
+        return
+    import torch
+
+    _orig_torch_load = torch.load
+
+    def _torch_load_trusted(*args, **kwargs):
+        kwargs.setdefault("weights_only", False)
+        return _orig_torch_load(*args, **kwargs)
+
+    torch.load = _torch_load_trusted  # type: ignore[assignment]
+    try:
+        import pathlib as _pathlib
+
+        _safe = [_pathlib.Path, _pathlib.PosixPath, _pathlib.WindowsPath]
+        try:
+            from pathlib import _local as _pathlib_local  # type: ignore[attr-defined]
+
+            _safe.extend(
+                [
+                    getattr(_pathlib_local, "Path", None),
+                    getattr(_pathlib_local, "PosixPath", None),
+                    getattr(_pathlib_local, "WindowsPath", None),
+                ]
+            )
+        except Exception:
+            pass
+        torch.serialization.add_safe_globals([x for x in _safe if x is not None])
+    except Exception:
+        pass
+    _TORCH_LOAD_PATCHED = True
+
 # --- DataDecide 60M, exactly as published -----------------------------------
 # allenai/DataDecide-dolma1_7-60M/config.json + DataDecide Appendix Table 2:
 #   batch 96 seq | hidden 384 | LR 5.8e-3 | 57.1M non-embedding | 12 heads
@@ -54,7 +92,7 @@ PAD_TOKEN_ID = 100_277
 MEMMAP_DTYPE = "uint32"
 BYTES_PER_TOKEN = 4
 
-# --- OLMoHQ 30B pool (edullm-dataset-olmohq) ---------------------------------
+# --- OLMoHQ 30B pool (edullm-datasets/olmo100b) ---------------------------------
 # Raw document shards live under olmo-mix-1124-30b/data/<domain>/*.json.gz.
 # There is no pre-tokenized copy on this bucket; prepare_data.sh builds a
 # *working pool* of uint32 memmaps sized to the peak per-domain demand of the
@@ -70,7 +108,7 @@ DOMAINS: tuple[str, ...] = (
     "wiki",
 )
 
-OLMOHQ_S3 = "s3://edullm-dataset-olmohq/olmo-mix-1124-30b"
+OLMOHQ_S3 = "s3://edullm-datasets/olmo100b/olmo-mix-1124-30b"
 OLMOHQ_DATA_PREFIX = "data"
 # Local layout after prepare: tokenized/<domain>/<domain>.npy
 TOKENIZED_PREFIX = "tokenized"
@@ -96,6 +134,21 @@ DOMAIN_BASE_WEIGHTS: dict[str, float] = {
     "open-web-math": 0.0635,
     "algebraic-stack": 0.0615,
     "wiki": 0.0156,
+}
+
+# Natural token fractions in allenai/olmo-mix-1124 (HF card / tech report).
+_OLMO_MIX_1124_DOMAIN_TOKENS: dict[str, float] = {
+    "dclm": 3.70e12,
+    "arxiv": 20.8e9,
+    "starcoder": 83.0e9,
+    "pes2o": 58.6e9,
+    "open-web-math": 12.2e9,
+    "algebraic-stack": 11.8e9,
+    "wiki": 3.66e9,
+}
+_OLMO_MIX_1124_TOTAL = sum(_OLMO_MIX_1124_DOMAIN_TOKENS.values())
+OLMO_MIX_1124_WEIGHTS: dict[str, float] = {
+    d: _OLMO_MIX_1124_DOMAIN_TOKENS[d] / _OLMO_MIX_1124_TOTAL for d in DOMAINS
 }
 
 # --- Compute budget (≈12 B200 GPU-hours for all 24 mixtures) -----------------
@@ -148,7 +201,8 @@ LADDER_TASK_LOSS_LABELS: tuple[str, ...] = (
 # than a short probe run costs training tokens, so the loss *curve* (used for the
 # step-law extrapolation) is measured on the cheapest reliable labels and the
 # full suite is run once at the end for the mixing-law fit itself. DataDecide
-# found ARC and MMLU give usable small-scale signal most cheaply.
+# found ARC and MMLU give usable small-scale signal most cheaply. Only these six
+# families are used for mixing-law targets (Chinchilla-extrapolated from curves).
 CURVE_TASK_LOSS_LABELS: tuple[str, ...] = (
     "arc_challenge_val_rc_5shot_bpb",
     "arc_easy_val_rc_5shot_bpb",
@@ -166,6 +220,18 @@ def task_family(label: str) -> str:
         if split in stem:
             return stem.split(split)[0]
     return stem
+
+
+# Task families with in-run loss curves (one val label each). Mixing-law fits use
+# only these six; Chinchilla targets come from step-law extrapolation on the curves.
+CURVE_FAMILIES: tuple[str, ...] = tuple(
+    sorted({task_family(label) for label in CURVE_TASK_LOSS_LABELS})
+)
+
+
+def macro_curve(task_loss_families: dict[str, float]) -> float:
+    """Mean task loss over the six curve families."""
+    return sum(float(task_loss_families[f]) for f in CURVE_FAMILIES) / len(CURVE_FAMILIES)
 
 
 def normalize_eval_key(key: str) -> Optional[str]:
@@ -190,10 +256,11 @@ class Mixture:
     id: int
     tag: str
     weights: dict[str, float]
+    name: str | None = None
 
     @property
     def run_name(self) -> str:
-        return f"mix{self.id:02d}"
+        return self.name or f"mix{self.id:02d}"
 
 
 def load_mixtures(path: Path | None = None) -> list[Mixture]:
@@ -219,6 +286,7 @@ def load_mixtures(path: Path | None = None) -> list[Mixture]:
                 id=int(row["id"]),
                 tag=str(row["tag"]),
                 weights={d: w / total for d, w in zip(order, weights)},
+                name=str(row["run_name"]) if row.get("run_name") else None,
             )
         )
 
@@ -242,6 +310,23 @@ def token_budget(tokens_per_param: float) -> tuple[int, int, int]:
         raise SystemExit(f"tokens_per_param={tokens_per_param} yields 0 steps")
     total_seqs = total_steps * GLOBAL_BATCH_SEQS
     return total_seqs, total_steps, total_seqs * SEQ_LEN
+
+
+def token_budget_fixed(total_tokens: int) -> tuple[int, int, int]:
+    """Return (total_sequences, approx_370m_steps, total_tokens) for a fixed token budget.
+
+    Sequences are rounded down to ``SEQ_LEN``. The step count assumes the 370M
+    global batch (4_194_304 tokens) used by the RegMix control trainer.
+    """
+    if total_tokens <= 0:
+        raise SystemExit("total_tokens must be > 0")
+    total_seqs = int(total_tokens) // SEQ_LEN
+    if total_seqs < 1:
+        raise SystemExit(f"total_tokens={total_tokens} yields 0 sequences")
+    realized = total_seqs * SEQ_LEN
+    gbs = 4_194_304
+    total_steps = realized // gbs
+    return total_seqs, total_steps, realized
 
 
 def allocate_sequences(weights: dict[str, float], total_seqs: int) -> dict[str, int]:

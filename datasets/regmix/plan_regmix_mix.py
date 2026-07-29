@@ -172,8 +172,8 @@ def greedy_random_sample(
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--src-bucket", default="edullm-dataset-olmohq")
-    parser.add_argument("--src-prefix", default="olmo-mix-1124-30b")
+    parser.add_argument("--src-bucket", default="edullm-datasets")
+    parser.add_argument("--src-prefix", default="olmo100b/olmo-mix-1124-30b")
     parser.add_argument("--region", default="us-east-1")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--overshoot", type=float, default=OVERSHOOT_FACTOR)

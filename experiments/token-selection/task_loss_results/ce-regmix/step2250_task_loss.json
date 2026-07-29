@@ -1,0 +1,21 @@
+{
+  "run_name": "ce-regmix-step2250",
+  "checkpoint": "/scratch/users/nzhao2/checkpoints/token-selection-370m/ce-regmix/checkpoints/step2250",
+  "format": "state_pt",
+  "step": 2250,
+  "task_loss_bpb": {
+    "mmlu_stem_test_rc_5shot_bpb": 8.242648124694824,
+    "mmlu_humanities_test_rc_5shot_bpb": 4.045066833496094,
+    "mmlu_social_sciences_test_rc_5shot_bpb": 3.5589351654052734,
+    "mmlu_other_test_rc_5shot_bpb": 4.805882930755615,
+    "hellaswag_val_rc_5shot_bpb": 3.621455430984497,
+    "arc_challenge_test_rc_5shot_bpb": 4.093110084533691,
+    "arc_easy_test_rc_5shot_bpb": 3.5277974605560303,
+    "piqa_val_rc_5shot_bpb": 3.602710247039795,
+    "csqa_val_rc_5shot_bpb": 3.173768997192383,
+    "socialiqa_val_rc_5shot_bpb": 3.4054644107818604,
+    "openbookqa_test_rc_5shot_bpb": 3.8876562118530273,
+    "mmlu_avg_test_rc_5shot_bpb": 5.163133263587952,
+    "core7_avg_rc_5shot_bpb": 3.615994691848755
+  }
+}

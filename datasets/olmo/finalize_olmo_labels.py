@@ -65,6 +65,11 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--labels-root", type=Path, required=True)
     parser.add_argument("--manifest", type=Path, required=True)
+    parser.add_argument(
+        "--corpus",
+        default=None,
+        help="Override SCHEMA corpus description (default: OLMo ~30B sample).",
+    )
     args = parser.parse_args()
 
     labels_root = args.labels_root
@@ -139,7 +144,10 @@ def main() -> int:
                     if line.strip():
                         index_handle.write(line if line.endswith("\n") else line + "\n")
 
-    schema_path.write_text(json.dumps(SCHEMA, indent=2) + "\n", encoding="utf-8")
+    schema = dict(SCHEMA)
+    if args.corpus:
+        schema["corpus"] = args.corpus
+    schema_path.write_text(json.dumps(schema, indent=2) + "\n", encoding="utf-8")
     if missing:
         print(
             json.dumps(

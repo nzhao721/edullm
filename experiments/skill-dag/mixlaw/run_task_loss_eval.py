@@ -23,19 +23,7 @@ from olmo.util import add_cached_path_clients, prepare_cli_environment
 
 log = logging.getLogger("task_loss_eval")
 
-TASK_LABELS = [
-    "mmlu_stem_test_rc_5shot_bpb",
-    "mmlu_humanities_test_rc_5shot_bpb",
-    "mmlu_social_sciences_test_rc_5shot_bpb",
-    "mmlu_other_test_rc_5shot_bpb",
-    "hellaswag_val_rc_5shot_bpb",
-    "arc_challenge_test_rc_5shot_bpb",
-    "arc_easy_test_rc_5shot_bpb",
-    "piqa_val_rc_5shot_bpb",
-    "csqa_val_rc_5shot_bpb",
-    "socialiqa_val_rc_5shot_bpb",
-    "openbookqa_test_rc_5shot_bpb",
-]
+from mixlaw_common import CURVE_TASK_LOSS_LABELS
 
 
 def build_eval_config(base_config: Path, load_path: Path, device_eval_batch_size: int) -> TrainConfig:
@@ -48,7 +36,8 @@ def build_eval_config(base_config: Path, load_path: Path, device_eval_batch_size
     # Full downstream eval: do not cap batches (None breaks olmo.train.eval()).
     cfg.eval_subset_num_batches = 10**9
     cfg.evaluators = [
-        EvaluatorConfig(label=label, type=EvaluatorType.downstream) for label in TASK_LABELS
+        EvaluatorConfig(label=label, type=EvaluatorType.downstream)
+        for label in CURVE_TASK_LOSS_LABELS
     ]
     cfg.run_name = f"task-loss-{load_path.name}"
     return cfg
@@ -96,7 +85,7 @@ def main(cfg: TrainConfig, output_path: Path) -> None:
         metrics = trainer.eval()
 
     selected: dict[str, float] = {}
-    for label in TASK_LABELS:
+    for label in CURVE_TASK_LOSS_LABELS:
         for key in (
             f"eval/downstream_bpb/{label}",
             f"eval/downstream_bpb/{label}_bpb",
@@ -107,22 +96,9 @@ def main(cfg: TrainConfig, output_path: Path) -> None:
         else:
             log.warning("Missing metric for %s", label)
 
-    mmlu_keys = [k for k in selected if k.startswith("mmlu_") and k.endswith("_test_rc_5shot_bpb")]
+    mmlu_keys = [k for k in selected if k.startswith("mmlu_") and k.endswith("_val_rc_5shot_bpb")]
     if mmlu_keys:
-        selected["mmlu_avg_test_rc_5shot_bpb"] = sum(selected[k] for k in mmlu_keys) / len(mmlu_keys)
-
-    core_keys = [
-        "hellaswag_val_rc_5shot_bpb",
-        "arc_challenge_test_rc_5shot_bpb",
-        "arc_easy_test_rc_5shot_bpb",
-        "piqa_val_rc_5shot_bpb",
-        "csqa_val_rc_5shot_bpb",
-        "socialiqa_val_rc_5shot_bpb",
-        "openbookqa_test_rc_5shot_bpb",
-    ]
-    present_core = [k for k in core_keys if k in selected]
-    if present_core:
-        selected["core7_avg_rc_5shot_bpb"] = sum(selected[k] for k in present_core) / len(present_core)
+        selected["mmlu_avg_val_rc_5shot_bpb"] = sum(selected[k] for k in mmlu_keys) / len(mmlu_keys)
 
     payload = {
         "load_path": cfg.load_path,

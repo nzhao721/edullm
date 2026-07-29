@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""OLMo-core scratch entry for ``rel_ema``, ``rho_excess``, ``middle_ppl``, and optional ``full``.
+"""OLMo-core scratch entry for ``rel_ema``, ``rho_excess``, ``middle_ppl``,
+``attention_topk``, ``learnability``, and optional ``full``.
 
 Requires edu-llm/OLMo-core installed. Builds trainer configs from the experiment
 YAML and documents the torchrun launch. ``--launch`` fails closed if the requested
@@ -21,6 +22,12 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from token_selection.olmo_ext.checkpoint_ladder import (
+    DEFAULT_CHECKPOINT_INTERVAL,
+    checkpointer_kwargs_for_ladder,
+    permanent_checkpoint_steps,
+)
+from token_selection.olmo_ext.scorers import MethodName
 from token_selection.olmo_ext.train_module import make_ts_config
 from token_selection.scripts import (
     derive_steps,
@@ -37,9 +44,13 @@ from token_selection.scripts.experiment_contract import (
     validate_token_manifest,
     verify_olmo_revision,
 )
-
-MethodName = Literal["full", "rel_ema", "rho_excess", "middle_ppl"]
-_SELECTING = ("rel_ema", "rho_excess", "middle_ppl")
+_SELECTING = (
+    "rel_ema",
+    "rho_excess",
+    "middle_ppl",
+    "attention_topk",
+    "learnability",
+)
 
 # On a shared multi-GPU host, launching without an explicit pin would default to
 # physical GPU 0. Refuse that rather than compete with whatever owns the other devices.
@@ -279,7 +290,18 @@ def build_plan(
         1, int((cfg.get("train") or {}).get("warmup_steps", round(0.01 * total_steps)))
     )
     uses_selection = method in _SELECTING
-    ref_path = str(((cfg.get("reference") or {}).get("load_path")) or "")
+    ref = cfg.get("reference") or {}
+    ref_path = str(ref.get("load_path") or "")
+    early_path = str((ref.get("early") or {}).get("load_path") or "")
+    late_path = str((ref.get("late") or {}).get("load_path") or "")
+    ema_block = cfg.get("ema") or {}
+    ema_seed_mode = str(
+        ema_block.get("seed_mode") or cfg.get("ema_seed_mode") or "zero"
+    ).lower()
+    # RHO freezes RefHQ; RefHQ-seeded REL loads the same exported model.pt into EMA only.
+    needs_reference = method == "rho_excess" or (
+        method == "rel_ema" and ema_seed_mode == "refhq"
+    )
 
     return {
         "run_id": cfg["run_id"],
@@ -288,7 +310,10 @@ def build_plan(
         "init_mode": "scratch",
         "init_seed": int((cfg.get("model") or {}).get("init_seed", cfg["seed"])),
         "load_path": None,
-        "reference_load_path": ref_path if method == "rho_excess" else "",
+        "reference_load_path": ref_path if needs_reference else "",
+        "early_reference_load_path": early_path if method == "learnability" else "",
+        "late_reference_load_path": late_path if method == "learnability" else "",
+        "ema_seed_mode": ema_seed_mode if method == "rel_ema" else "zero",
         "model_name": cfg["model"]["name"],
         "model_arch": str(arch),
         "olmo_revision": olmo_revision,
@@ -319,7 +344,9 @@ def build_plan(
         "dataset_cache": str(out / "dataset_cache" / method),
         "metrics_dir": str(out / "metrics" / method),
         "s3_tokens": resolve_tokens_s3(cfg),
-        "s3_checkpoints": s3_uri(cfg, method, bucket_key="checkpoint_bucket"),
+        "s3_checkpoints": s3_uri(
+            cfg, "checkpoints", method, bucket_key="checkpoint_bucket"
+        ),
         "torchrun_example": (
             "CUDA_VISIBLE_DEVICES=<gpus> python -m torch.distributed.run --standalone "
             "--nproc_per_node=<N> -m token_selection.scripts.train_olmo_template "
@@ -372,13 +399,19 @@ def _run_fingerprint(plan: Dict[str, Any]) -> Dict[str, Any]:
     only carries EMA/optimizer state, not these knobs, which is exactly why they must be
     re-pinned here rather than trusted to the restored state.
 
-    When ``reference_load_path`` is set (RHO), also pin ``reference_content_sha256`` so
-    replacing the file at the same path cannot silently resume a different reference.
-    The hash key is omitted when the path is empty so live REL fingerprints stay
-    backward-compatible.
+    When ``reference_load_path`` is set (RHO or RefHQ-seeded REL), also pin
+    ``reference_content_sha256`` so replacing the file at the same path cannot
+    silently resume a different reference. Learnability pins early/late digests
+    the same way. Hash keys are omitted when paths are empty so zero-init REL
+    fingerprints stay backward-compatible.
     """
     ts_cfg = plan.get("ts_cfg") or {}
     ref_path = str(plan.get("reference_load_path") or "")
+    early_path = str(plan.get("early_reference_load_path") or "")
+    late_path = str(plan.get("late_reference_load_path") or "")
+    ema_seed_mode = str(
+        plan.get("ema_seed_mode") or ts_cfg.get("ema_seed_mode") or "zero"
+    ).lower()
     fingerprint: Dict[str, Any] = {
         "run_id": str(plan["run_id"]),
         "method": str(plan["method"]),
@@ -397,33 +430,57 @@ def _run_fingerprint(plan: Dict[str, Any]) -> Dict[str, Any]:
         "rel_k": float(ts_cfg.get("k", 0.0)),
         "rel_alpha_start": float(ts_cfg.get("alpha_start", 0.0)),
         "rel_alpha_end": float(ts_cfg.get("alpha_end", 0.0)),
+        "alpha_schedule": str(ts_cfg.get("alpha_schedule") or "linear"),
+        "alpha_tau": float(ts_cfg.get("alpha_tau") or 300.0),
+        "ema_seed_mode": ema_seed_mode,
         "reference_load_path": ref_path,
+        "early_reference_load_path": early_path,
+        "late_reference_load_path": late_path,
         "order_contract_sha256": str(plan["data_order"]["contract"]["contract_sha256"]),
     }
-    if ref_path:
-        # Prefer an explicit precomputed hash (tests); otherwise hash the local file.
-        content_sha = plan.get("reference_content_sha256")
-        if not content_sha:
-            path = Path(ref_path)
-            if not path.exists():
-                raise SystemExit(
-                    f"reference.load_path {ref_path!r} does not exist; cannot fingerprint "
-                    "the frozen RHO reference."
-                )
-            from token_selection.scripts.experiment_contract import sha256_file
+    from token_selection.scripts.experiment_contract import sha256_file
 
-            content_sha = sha256_file(path)
-        fingerprint["reference_content_sha256"] = str(content_sha)
+    def _pin_ref(path_key: str, content_key: str, plan_key: str) -> None:
+        path = str(fingerprint.get(path_key) or "")
+        if not path:
+            return
+        content_sha = plan.get(plan_key)
+        if not content_sha:
+            p = Path(path)
+            if not p.exists():
+                raise SystemExit(
+                    f"{path_key}={path!r} does not exist; cannot fingerprint the "
+                    "frozen reference."
+                )
+            content_sha = sha256_file(p)
+        fingerprint[content_key] = str(content_sha)
+
+    _pin_ref("reference_load_path", "reference_content_sha256", "reference_content_sha256")
+    _pin_ref(
+        "early_reference_load_path",
+        "early_reference_content_sha256",
+        "early_reference_content_sha256",
+    )
+    _pin_ref(
+        "late_reference_load_path",
+        "late_reference_content_sha256",
+        "late_reference_content_sha256",
+    )
     return fingerprint
 
 
 def _fingerprint_identity(fp: Mapping[str, Any]) -> Dict[str, Any]:
     """Scientific resume identity: drop host-local provenance fields.
 
-    ``reference_load_path`` is allowed to move across machines (B200 → Farmshare)
-    as long as ``reference_content_sha256`` still matches the same bytes.
+    Reference load paths are allowed to move across machines as long as the
+    corresponding ``*_content_sha256`` digests still match.
     """
-    return {k: v for k, v in fp.items() if k != "reference_load_path"}
+    drop = {
+        "reference_load_path",
+        "early_reference_load_path",
+        "late_reference_load_path",
+    }
+    return {k: v for k, v in fp.items() if k not in drop}
 
 
 def _fingerprints_compatible(prior: Mapping[str, Any], current: Mapping[str, Any]) -> bool:
@@ -620,6 +677,12 @@ def build_trainer(plan: Dict[str, Any], cfg: Dict[str, Any], method: MethodName,
 
         rank_mbz = int(cfg.get("train", {}).get("rank_microbatch_size", seq_len))
         compile_model = bool(cfg.get("train", {}).get("compile_model", False))
+        train_cfg = cfg.get("train", {})
+        # RefHQ / control controlled knobs — YAML spines declare these; do not leave
+        # TransformerTrainModuleConfig defaults (None) for spine arms.
+        max_grad_norm = float(train_cfg.get("max_grad_norm", 1.0))
+        z_raw = train_cfg.get("z_loss_multiplier", 1e-5)
+        z_loss_multiplier = None if z_raw is None else float(z_raw)
         # Default FSDP matches the REL arm. AWS multi-B200 RHO configs may set
         # train.dp_type=hsdp to match the CE/BLADE stack on the same host.
         dp_name_raw = str(cfg.get("train", {}).get("dp_type", "fsdp")).strip().lower()
@@ -641,6 +704,8 @@ def build_trainer(plan: Dict[str, Any], cfg: Dict[str, Any], method: MethodName,
             optim=optim_cfg,
             scheduler=scheduler,
             compile_model=compile_model,
+            max_grad_norm=max_grad_norm,
+            z_loss_multiplier=z_loss_multiplier,
             dp_config=TransformerDataParallelConfig(
                 name=dp_name,
                 param_dtype=DType.bfloat16,
@@ -654,26 +719,35 @@ def build_trainer(plan: Dict[str, Any], cfg: Dict[str, Any], method: MethodName,
             )
 
         # --- trainer -----------------------------------------------------------------
-        train_cfg = cfg.get("train", {})
-        # Permanent checkpoints (kept for post-hoc eval/analysis) plus optional
-        # auto-pruned ephemeral checkpoints for crash/wall-clock resume (used by --resume).
-        # NOTE: OLMo-core's CheckpointerCallback defaults max_checkpoints=3 and *prunes the
-        # oldest permanent checkpoints past that*, so we must set it explicitly (None keeps
-        # every permanent checkpoint) or the analysis snapshots would silently disappear.
-        ckpt_kwargs: Dict[str, Any] = {
-            "save_interval": int(train_cfg.get("checkpoint_every_steps", 1000)),
-            "max_checkpoints": train_cfg.get("checkpoint_keep_last", None),
-        }
+        # Shared permanent ladder: step 0, every interval (skip last grid if within
+        # one interval of final), plus true final. max_checkpoints=None; no ephemeral.
+        interval = int(
+            train_cfg.get("checkpoint_every_steps", DEFAULT_CHECKPOINT_INTERVAL)
+        )
+        total_steps = int(plan["total_steps"])
+        ckpt_kwargs = checkpointer_kwargs_for_ladder(
+            total_steps,
+            interval,
+            # Default False so the task_loss post-save hook sees a complete step dir.
+            save_async=bool(train_cfg.get("save_async", False)),
+        )
+        # Explicit max_checkpoints=None wins over OLMo-core's default of 3.
+        if "checkpoint_keep_last" in train_cfg:
+            ckpt_kwargs["max_checkpoints"] = train_cfg.get("checkpoint_keep_last")
+        # Opt-in ephemeral only when YAML sets it (plan default: none).
         ephemeral_interval = train_cfg.get("ephemeral_checkpoint_every_steps")
         if ephemeral_interval is not None:
             ckpt_kwargs["ephemeral_save_interval"] = int(ephemeral_interval)
         milestone_steps = train_cfg.get("checkpoint_milestone_steps")
-        if milestone_steps:
+        if milestone_steps is not None:
             ckpt_kwargs["fixed_steps"] = [int(step) for step in milestone_steps]
         if train_cfg.get("pre_train_checkpoint") is not None:
-            ckpt_kwargs["pre_train_checkpoint"] = bool(train_cfg.get("pre_train_checkpoint"))
-        if train_cfg.get("save_async") is not None:
-            ckpt_kwargs["save_async"] = bool(train_cfg.get("save_async"))
+            ckpt_kwargs["pre_train_checkpoint"] = bool(
+                train_cfg.get("pre_train_checkpoint")
+            )
+        plan["permanent_checkpoint_steps"] = permanent_checkpoint_steps(
+            total_steps, interval
+        )
         trainer_cfg = (
             TrainerConfig(
                 save_folder=str(plan["save_folder"]),
@@ -748,6 +822,40 @@ def build_trainer(plan: Dict[str, Any], cfg: Dict[str, Any], method: MethodName,
         if method in _SELECTING:
             trainer_cfg = trainer_cfg.with_callback("rel", RELCallback())
 
+        # Immediate full-suite task_loss_bpb on every permanent checkpoint.
+        from token_selection.olmo_ext.task_loss_callback import TaskLossEvalCallback
+
+        eval_cfg = (cfg.get("eval") or {}).get("task_loss") or {}
+        task_loss_enabled = bool(eval_cfg.get("enabled", True))
+        results_dir = Path(
+            str(
+                eval_cfg.get("results_dir")
+                or (
+                    Path(plan["metrics_dir"]).parent.parent
+                    / "task_loss_results"
+                    / str(plan["run_id"])
+                )
+            )
+        )
+        if not results_dir.is_absolute():
+            results_dir = ROOT / results_dir
+        trainer_cfg = trainer_cfg.with_callback(
+            "task_loss_eval",
+            TaskLossEvalCallback(
+                total_steps=total_steps,
+                save_folder=plan["save_folder"],
+                run_id=str(plan["run_id"]),
+                results_dir=results_dir,
+                interval=interval,
+                enabled=task_loss_enabled,
+                command_template=eval_cfg.get("command_template"),
+                eval_script=eval_cfg.get("eval_script"),
+                arm=cfg.get("arm") or None,
+                s3_prefix=str((cfg.get("s3") or {}).get("prefix") or "") or None,
+                s3_export=bool(eval_cfg.get("s3_export", True)),
+            ),
+        )
+
         # --- build -------------------------------------------------------------------
         dataset = dataset_cfg.build()
         model = model_cfg.build(init_device="meta")
@@ -771,13 +879,24 @@ def build_trainer(plan: Dict[str, Any], cfg: Dict[str, Any], method: MethodName,
         }
         if train_module_cfg.autocast_precision is not None:
             module_kwargs["autocast_precision"] = train_module_cfg.autocast_precision.as_pt()
+        # Always use sharded DCP (every rank writes). Never full_state_dict=True
+        # with a rank-0-only torch.save — that drops HSDP shards (CE/BLADE bug).
         if train_module_cfg.state_dict_save_opts is not None:
             module_kwargs["state_dict_save_opts"] = dist_cp_sd.StateDictOptions(
                 **train_module_cfg.state_dict_save_opts
             )
+        else:
+            module_kwargs["state_dict_save_opts"] = dist_cp_sd.StateDictOptions(
+                full_state_dict=False,
+                cpu_offload=True,
+            )
         if train_module_cfg.state_dict_load_opts is not None:
             module_kwargs["state_dict_load_opts"] = dist_cp_sd.StateDictOptions(
                 **train_module_cfg.state_dict_load_opts
+            )
+        else:
+            module_kwargs["state_dict_load_opts"] = dist_cp_sd.StateDictOptions(
+                full_state_dict=False,
             )
         if train_module_cfg.load_key_mapping is not None:
             module_kwargs["load_key_mapping"] = train_module_cfg.load_key_mapping
@@ -835,6 +954,8 @@ def try_launch(plan: Dict[str, Any], cfg: Dict[str, Any], method: MethodName, *,
             )
 
     prepare_training_environment(seed=int(plan["init_seed"]))
+    # Match RefHQ / control: high TF32 matmul precision for bf16 train parity.
+    torch.set_float32_matmul_precision("high")
     seed_all(int(plan["init_seed"]))
     try:
         trainer = build_trainer(plan, cfg, method, resume=resume)
@@ -864,10 +985,21 @@ def try_launch(plan: Dict[str, Any], cfg: Dict[str, Any], method: MethodName, *,
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--config", type=Path, default=ROOT / "token_selection/configs/run_rho_10b.yaml")
+    ap.add_argument(
+        "--config",
+        type=Path,
+        default=ROOT / "rho-1/configs/run_rho_10b.yaml",
+    )
     ap.add_argument(
         "--method",
-        choices=["full", "rel_ema", "rho_excess", "middle_ppl"],
+        choices=[
+            "full",
+            "rel_ema",
+            "rho_excess",
+            "middle_ppl",
+            "attention_topk",
+            "learnability",
+        ],
         required=True,
     )
     ap.add_argument(
@@ -911,9 +1043,35 @@ def main() -> None:
         except RuntimeError as exc:
             raise SystemExit(str(exc)) from exc
     method: MethodName = args.method  # type: ignore[assignment]
-    allowed = cfg.get("methods") or ["full", "rel_ema", "rho_excess", "middle_ppl"]
+    allowed = cfg.get("methods") or [
+        "full",
+        "rel_ema",
+        "rho_excess",
+        "middle_ppl",
+        "attention_topk",
+        "learnability",
+    ]
     if method not in allowed:
         raise SystemExit(f"method {method!r} not in config methods {allowed}")
+
+    # On --launch, materialize null RefHQ load_paths from YAML s3_uri(s) into the
+    # shared local cache (idempotent; multi-rank safe via mkdir lock).
+    if args.launch and method in ("rho_excess", "rel_ema", "learnability"):
+        from token_selection.olmo_ext.refhq_materialize import ensure_reference_paths
+
+        try:
+            filled = ensure_reference_paths(cfg, method=method)
+        except Exception as exc:  # noqa: BLE001 — surface as SystemExit before train
+            raise SystemExit(f"RefHQ reference materialize failed: {exc}") from exc
+        if filled:
+            print(
+                json.dumps({"event": "refhq_materialized", "paths": filled}, indent=2),
+                flush=True,
+            )
+        try:
+            validate_scratch_config(cfg, method=method)
+        except ValueError as exc:
+            raise SystemExit(str(exc)) from exc
 
     plan = build_plan(cfg, method=method, out=out)
     if args.launch:

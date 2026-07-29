@@ -2,7 +2,7 @@
 """Plan and materialize the per-mixture training data for the 24 mixing-law probes.
 
 Source memmaps are the *working pool* built by ``tokenize_working_pool.py`` from
-``s3://edullm-dataset-olmohq/olmo-mix-1124-30b`` raw shards
+``s3://edullm-datasets/olmo100b/olmo-mix-1124-30b`` raw shards
 (``tokenized/<domain>/<domain>.npy``). For each mixture this script draws a
 *random* subsample of that domain stream and writes it to its own memmap, sized
 so that
@@ -47,6 +47,7 @@ from mixlaw_common import (
     memmap_tokens,
     realized_weights,
     token_budget,
+    token_budget_fixed,
 )
 
 PLAN_NAME = "slice_plan.json"
@@ -99,10 +100,36 @@ def _blocks_for_domain(
     return blocks
 
 
+def resolve_mixtures_json(explicit: Path | None) -> Path | None:
+    """Resolve mixtures JSON: CLI flag, then SKILLIT_PROBES_JSON / MIXTURES_JSON env."""
+    if explicit is not None:
+        return explicit
+    for key in ("SKILLIT_PROBES_JSON", "MIXTURES_JSON"):
+        raw = os.environ.get(key, "").strip()
+        if raw:
+            return Path(raw)
+    return None
+
+
 def cmd_plan(args: argparse.Namespace) -> None:
-    mixtures = load_mixtures()
-    tpp = args.tokens_per_param if args.tokens_per_param is not None else DEFAULT_TOKENS_PER_PARAM
-    total_seqs, total_steps, total_tokens = token_budget(tpp)
+    args.mixtures_json = resolve_mixtures_json(args.mixtures_json)
+    mixtures = load_mixtures(args.mixtures_json)
+    # Skip mixtures that reuse an existing S3 corpus (e.g. mix01 → regmix-10b).
+    if args.mixtures_json is not None:
+        payload = json.loads(args.mixtures_json.read_text(encoding="utf-8"))
+        reuse = {
+            int(r["id"])
+            for r in payload["mixtures"]
+            if r.get("reuse_s3")
+        }
+        mixtures = [m for m in mixtures if m.id not in reuse]
+
+    if args.total_tokens is not None:
+        total_seqs, total_steps, total_tokens = token_budget_fixed(args.total_tokens)
+        tpp = None
+    else:
+        tpp = args.tokens_per_param if args.tokens_per_param is not None else DEFAULT_TOKENS_PER_PARAM
+        total_seqs, total_steps, total_tokens = token_budget(tpp)
 
     available: dict[str, int] = {}
     for domain in DOMAINS:
@@ -123,7 +150,7 @@ def cmd_plan(args: argparse.Namespace) -> None:
                 raise SystemExit(
                     f"mix {mix.id} needs {need} {domain} sequences, "
                     f"only {available[domain]} available "
-                    f"(lower --tokens-per-param or raise the domain budget)"
+                    f"(lower --tokens-per-param/--total-tokens or raise the domain budget)"
                 )
             domain_plan[domain] = {
                 "seqs": need,
@@ -151,10 +178,12 @@ def cmd_plan(args: argparse.Namespace) -> None:
         "dtype": MEMMAP_DTYPE,
         "block_seqs": args.block_seqs,
         "tokens_per_param": tpp,
+        "total_tokens_requested": args.total_tokens,
         "total_seqs_per_mix": total_seqs,
         "total_steps_per_mix": total_steps,
         "total_tokens_per_mix": total_tokens,
         "tokenized_dir": str(args.tokenized_dir),
+        "mixtures_json": str(args.mixtures_json) if args.mixtures_json else None,
         "domain_seqs_available": available,
         "mixtures": plan_mixtures,
     }
@@ -267,8 +296,24 @@ def main() -> None:
 
     p = sub.add_parser("plan", help="write slice_plan.json")
     p.set_defaults(func=cmd_plan)
-    p.add_argument("--tokenized-dir", type=Path, required=True, help="Local regmix-10b/tokenized")
+    p.add_argument("--tokenized-dir", type=Path, required=True, help="Local working-pool/tokenized")
     p.add_argument("--out-dir", type=Path, required=True)
+    p.add_argument(
+        "--mixtures-json",
+        type=Path,
+        default=None,
+        help=(
+            "Override mixtures.json (e.g. ../skillit/probes.json or "
+            "validation_mixtures_10b.json). Also reads env SKILLIT_PROBES_JSON "
+            "or MIXTURES_JSON when unset."
+        ),
+    )
+    p.add_argument(
+        "--total-tokens",
+        type=int,
+        default=None,
+        help="Fixed token budget per mixture (e.g. 10000000000 for 370M validation).",
+    )
     p.add_argument(
         "--tokens-per-param",
         type=float,
@@ -276,8 +321,7 @@ def main() -> None:
         help=(
             "Token budget per mixture as a multiple of the 57.1M DataDecide 60M size. "
             "Default 5 (~285M tokens) targets ≈12 B200 GPU-hours for all 24 mixtures "
-            "including final task-loss eval. The olmohq pool supports far more "
-            "(~30B/mix); raise after measuring tok/s on a smoke run."
+            "including final task-loss eval. Ignored when --total-tokens is set."
         ),
     )
     p.add_argument(

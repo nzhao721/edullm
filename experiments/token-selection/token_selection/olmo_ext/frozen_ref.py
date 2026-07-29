@@ -69,7 +69,13 @@ class FrozenReference:
     def __init__(self, named_params: Iterable[Tuple[str, Tensor]]):
         self._shadow: Dict[str, Tensor] = {}
         for name, p in named_params:
-            self._shadow[name] = _local_tensor(p).detach().clone()
+            # Prefer global / full tensors. Using to_local() here would quietly
+            # drop HSDP shards and persist rank-0-only weights into checkpoints.
+            full_fn = getattr(p, "full_tensor", None)
+            if callable(full_fn):
+                self._shadow[name] = full_fn().detach().clone()
+            else:
+                self._shadow[name] = _local_tensor(p).detach().clone()
         if not self._shadow:
             raise ValueError("FrozenReference requires at least one parameter")
 

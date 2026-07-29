@@ -24,8 +24,8 @@ OVERSHOT = [
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--run-dir", type=Path, required=True)
-    parser.add_argument("--bucket", default="edullm-dataset-olmo")
-    parser.add_argument("--prefix", default="olmo-mix-1124-30b")
+    parser.add_argument("--bucket", default="edullm-datasets")
+    parser.add_argument("--prefix", default="olmo30b/olmo-mix-1124-30b")
     parser.add_argument("--region", default="us-east-1")
     args = parser.parse_args()
 

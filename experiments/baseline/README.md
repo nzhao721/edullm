@@ -4,7 +4,7 @@ Train **OLMo-ladder 370M** from scratch on the ~30B FarmShare tokenized corpus
 (`edullm-370M-30B`), using the exact scaling laws and LR schedule from
 [allenai/OLMo-ladder](https://github.com/allenai/OLMo-ladder) (`src/ladder/ladder.py`).
 
-Checkpoints are published under `s3://edullm-olmo2-370m-cpt-checkpoints/edullm-370M-30B/`
+Checkpoints are published under `s3://edullm-checkpoints/olmo2-370m-cpt/edullm-370M-30B/`
 (steps 5000, 10000, 15000). See [`S3_CHECKPOINTS.md`](../../S3_CHECKPOINTS.md) for details.
 
 ## Layout
@@ -48,7 +48,7 @@ torchrun --nproc_per_node=4 \
 4. After training, upload selected unsharded checkpoints:
 
 ```bash
-export RUN_DIR=... AWS_SESSION_ENV=... BUCKET=edullm-olmo2-370m-cpt-checkpoints
+export RUN_DIR=... AWS_SESSION_ENV=... BUCKET=edullm-checkpoints
 sbatch "${EDULLM_ROOT}/experiments/baseline/farmshare/upload_ckpts_to_s3.sbatch"
 ```
 

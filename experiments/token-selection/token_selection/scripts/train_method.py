@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Train ``full``, ``rel_ema``, ``rho_excess``, or ``middle_ppl`` via OLMo-core.
+"""Train shared YAML methods via ``train_olmo_template``.
 
-Production training is delegated to ``train_olmo_template``. This entry point
-validates the config and reports the derived training parameters.
+Supported: ``full``, ``rel_ema``, ``rho_excess``, ``middle_ppl``,
+``attention_topk``, ``learnability``. This entry point validates the config and
+reports derived training parameters.
 """
 
 from __future__ import annotations
@@ -16,13 +17,19 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from typing import Literal
-
+from token_selection.olmo_ext.scorers import MethodName
 from token_selection.olmo_ext.train_module import has_olmo_core, make_ts_config
 from token_selection.scripts import derive_steps, load_config, resolve_output_dir
 from token_selection.scripts.experiment_contract import validate_scratch_config
 
-MethodName = Literal["full", "rel_ema", "rho_excess", "middle_ppl"]
+_ALL: list[MethodName] = [
+    "full",
+    "rel_ema",
+    "rho_excess",
+    "middle_ppl",
+    "attention_topk",
+    "learnability",
+]
 
 
 def main() -> None:
@@ -30,7 +37,7 @@ def main() -> None:
     ap.add_argument("--config", type=Path, default=ROOT / "token_selection/configs/run_rho_10b.yaml")
     ap.add_argument(
         "--method",
-        choices=["full", "rel_ema", "rho_excess", "middle_ppl"],
+        choices=_ALL,
         default=None,
     )
     args = ap.parse_args()
@@ -39,15 +46,23 @@ def main() -> None:
     methods = cfg.get("methods") or []
     if args.method:
         method: MethodName = args.method  # type: ignore[assignment]
-    elif "middle_ppl" in methods and len(methods) == 1:
+    elif len(methods) == 1:
+        method = str(methods[0])  # type: ignore[assignment]
+    elif "learnability" in methods:
+        method = "learnability"
+    elif "attention_topk" in methods:
+        method = "attention_topk"
+    elif "middle_ppl" in methods:
         method = "middle_ppl"
     elif "rho_excess" in methods:
         method = "rho_excess"
+    elif "rel_ema" in methods:
+        method = "rel_ema"
     else:
         method = "rho_excess"
     validate_scratch_config(cfg, method=method)
 
-    allowed = cfg.get("methods") or ["full", "rel_ema", "rho_excess", "middle_ppl"]
+    allowed = cfg.get("methods") or _ALL
     if method not in allowed:
         raise SystemExit(f"method {method!r} not in config methods {allowed}")
 

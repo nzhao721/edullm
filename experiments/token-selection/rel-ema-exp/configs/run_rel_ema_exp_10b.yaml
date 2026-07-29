@@ -1,0 +1,98 @@
+# REL no-init exponential-α arm (Arm 2).
+# Selection: top 60% by REL = L_hist − L_curr from step 0 (t0=0).
+# EMA: bias-corrected from zero (NO RefHQ / θ0 seed); α(t)=1−exp(−t/300).
+# Architecture: RefHQ-matched olmo2_370M. Corpus: RegMix 10B (~2384 steps).
+# New run_id — do NOT reuse rel-ema-10b-scratch-v1.
+#
+# Near-clone of rel-ema-refhq: only EMA seed_mode + α schedule should differ.
+
+run_id: rel-ema-exp-10b-scratch-v1
+seed: 42
+output_dir: rel-ema-exp/data/rel_ema_exp_10b
+arm: rel-ema-exp
+
+methods: [rel_ema]
+
+k: 0.6
+# Selection-mask warmup off: REL active from step 0.
+t0_steps: 0
+t0_frac: 0.0
+
+# α(t)=1−exp(−t/τ). alpha_start/end are unused under schedule=exp (kept for metrics).
+alpha_schedule: exp
+alpha_tau: 300
+alpha_start: 0.0
+alpha_end: 1.0
+
+ema:
+  schedule: exp
+  tau: 300
+  seed_mode: zero   # bias-corrected empty accumulator; never seed from RefHQ
+
+# No frozen reference for this arm (unlike RHO / rel-ema-refhq).
+reference:
+  load_path: null
+
+data:
+  tokens_s3: s3://edullm-datasets/regmix/regmix-10b/tokenized
+  tokenizer: allenai/dolma2-tokenizer
+  sequence_length: 2048
+
+s3:
+  dataset_bucket: edullm-datasets
+  checkpoint_bucket: edullm-checkpoints
+  # Checkpoints + results → s3://edullm-checkpoints/token-sel/rel-ema-exp/
+  prefix: token-sel/rel-ema-exp
+  profile: sbsandbox
+
+model:
+  name: OLMo-2-370M-scratch
+  arch: olmo2_370M
+  init_mode: scratch
+  init_seed: 42
+  load_path: null
+
+olmo_core:
+  repository: https://github.com/edu-llm/OLMo-core
+  revision: 99e0009ed67679c90da970ec5ba439c9459e3757
+
+train:
+  max_tokens: 10000000000
+  global_batch_size: 4194304
+  lr: 4.0e-4
+  lr_alpha_f: 0.1
+  warmup_steps: 24
+  data_loader_seed: 42
+  data_loader_initial_epoch: 0
+  data_loader_chunk_size: 1
+  # Tokens per rank microbatch. GBS must stay divisible by world_size * this.
+  # Hardware knob (not fingerprinted). Tune per GPU memory (e.g. 16384 on 48 GiB).
+  rank_microbatch_size: 65536
+  dp_type: hsdp
+  optim_type: skip_step_adamw
+  compile_model: true
+  z_loss_multiplier: 1.0e-5
+  max_grad_norm: 1.0
+  attn_backend: auto
+  # Leave empty: discover devices from torchrun / CUDA_VISIBLE_DEVICES / Slurm.
+  cuda_visible_devices: ""
+  # Informational only; torchrun --nproc_per_node is the authority at launch.
+  num_gpus: null
+  num_workers: 8
+  # Permanent ladder via shared checkpointer helper: {0,125,…,2250,2384} (skip 2375).
+  checkpoint_every_steps: 125
+  checkpoint_keep_last: null
+  pre_train_checkpoint: true
+  # Default false so task_loss post-save hook sees a complete step dir.
+  save_async: false
+  # No ephemeral prune.
+  ephemeral_checkpoint_every_steps: null
+
+eval:
+  block_unit: sequence
+  metrics_filename: metrics.json
+  task_loss:
+    enabled: true
+    # Relative to experiments/token-selection/ when not absolute.
+    # launch_train.sh rewrites this under $RUN_DIR when preparing a runtime YAML.
+    results_dir: task_loss_results/rel-ema-exp

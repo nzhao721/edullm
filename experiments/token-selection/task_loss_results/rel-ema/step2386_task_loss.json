@@ -1,0 +1,21 @@
+{
+  "run_name": "rel-ema-step2386",
+  "checkpoint": "/scratch/users/nzhao2/agent-runs/relema-models-all-20260727T220851Z/unsharded/step2386",
+  "format": "state_pt",
+  "step": 2386,
+  "task_loss_bpb": {
+    "mmlu_stem_test_rc_5shot_bpb": 3.7529168128967285,
+    "mmlu_humanities_test_rc_5shot_bpb": 1.9763731956481934,
+    "mmlu_social_sciences_test_rc_5shot_bpb": 2.1171188354492188,
+    "mmlu_other_test_rc_5shot_bpb": 2.8104734420776367,
+    "hellaswag_val_rc_5shot_bpb": 1.873200535774231,
+    "arc_challenge_test_rc_5shot_bpb": 2.379159450531006,
+    "arc_easy_test_rc_5shot_bpb": 2.241067886352539,
+    "piqa_val_rc_5shot_bpb": 2.270672559738159,
+    "csqa_val_rc_5shot_bpb": 2.5593135356903076,
+    "socialiqa_val_rc_5shot_bpb": 2.26667857170105,
+    "openbookqa_test_rc_5shot_bpb": 2.786421775817871,
+    "mmlu_avg_test_rc_5shot_bpb": 2.6642205715179443,
+    "core7_avg_rc_5shot_bpb": 2.339502045086452
+  }
+}

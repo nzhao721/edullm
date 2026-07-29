@@ -1,25 +1,31 @@
 #!/usr/bin/env python3
-"""BLADE pretraining with GPU7-matched olmo_core proxy training.
+"""BLADE pretraining on RegMix 10B (token-selection arm).
 
-Proxy warmup + BLADE selected steps use the same train stack as the GPU7
-RefHQ CE run (``train_olmo3_370m_refhq.py`` / REL+EMA shape):
+Architecture / train stack match RefHQ CE (``reference/train_olmo3_370m_refhq.py``):
 
   * ``TransformerConfig.olmo2_370M`` (full attn, no SWA)
   * ``TransformerTrainModule`` — HSDP bf16, SkipStepAdamW, CosWithWarmup,
     ``compile_model=True``, ``z_loss_multiplier=1e-5``
-  * fused LM-head CE when liger-kernel is available (no full logits)
   * sequence=2048, global_batch=4_194_304, rank_microbatch=65_536
+  * peak LR ``4e-4``, warmup 24, ``alpha_f=0.1``
 
-BLADE additions (unchanged intent):
-  * proxy-only warmup for ``total − n_blocks·τ`` steps
-  * BLADE syncs at fixed steps (default 750, 1150, 1550, 1950): reference ← proxy,
-    then ``K`` reference updates; between syncs top-``γ`` excess-loss label mask (γ=0.6)
+Locked BLADE schedule (do not change without a new ``run_id``):
 
-Datasets:
-  * train / proxy: RegMix 10B
-  * reference HQ / val: RefHQ 5.5B
+  * ``total_steps ≈ 2384`` (``10B // 4_194_304``)
+  * ``tau=375``, ``K=75``, ``gamma=0.6``, ``lambda_pen=1.0``
+  * ``blade_start=500`` — steps 0..499 proxy-only full CE
+  * syncs at **exactly** 500, 875, 1250, 1625, 2000 then hold ref through 2384
+  * selection score ``L_ref − L_proxy``, keep top-γ after blade_start
+  * train: RegMix 10B; val/HQ for K updates: RefHQ 5.5B
 
-Launch via ``torchrun`` + your own launcher script. Does **not** call AWS.
+Permanent checkpoints ``{0,125,…,2250,2384}`` (skip 2375) store **proxy (+optim)
+and dynamic reference** (post-K at sync steps; ``null`` before first sync).
+Resume loads both — **never** re-sync ``ref ← proxy`` mid-episode.
+
+On every permanent save, rank 0 triggers async ``task_loss_bpb`` eval on **proxy**
+weights (see ``token_selection.olmo_ext.task_loss_hook``).
+
+Launch via ``torchrun`` (1..N GPUs). Does **not** call AWS.
 """
 from __future__ import annotations
 
@@ -29,12 +35,12 @@ import json
 import logging
 import math
 import os
-import random
+import sys
 import time
 from contextlib import nullcontext
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Iterator, List, Optional, Tuple
+from typing import Any, Dict, Iterator, List, Optional, Set, Tuple
 
 os.environ["WANDB_DISABLED"] = "1"
 os.environ["WANDB_MODE"] = "disabled"
@@ -51,6 +57,11 @@ for _var in (
     "WANDB_ENABLE",
 ):
     os.environ.pop(_var, None)
+
+# Shared package lives next to this arm dir.
+_TS_ROOT = Path(__file__).resolve().parents[1]
+if str(_TS_ROOT) not in sys.path:
+    sys.path.insert(0, str(_TS_ROOT))
 
 import numpy as np
 import torch
@@ -78,16 +89,26 @@ from olmo_core.train.train_module import (
 )
 from olmo_core.utils import seed_all
 
+from token_selection.olmo_ext.checkpoint_ladder import (
+    DEFAULT_CHECKPOINT_INTERVAL,
+    permanent_checkpoint_steps,
+)
+from token_selection.olmo_ext.task_loss_hook import trigger_task_loss_eval
+
 try:
     from torch.distributed.checkpoint.state_dict import (
         StateDictOptions,
         get_model_state_dict,
+        get_optimizer_state_dict,
         set_model_state_dict,
+        set_optimizer_state_dict,
     )
 except Exception:  # pragma: no cover
     StateDictOptions = None  # type: ignore
     get_model_state_dict = None  # type: ignore
+    get_optimizer_state_dict = None  # type: ignore
     set_model_state_dict = None  # type: ignore
+    set_optimizer_state_dict = None  # type: ignore
 
 log = logging.getLogger("train_blade_olmo2_370m")
 
@@ -97,19 +118,21 @@ GLOBAL_BATCH_TOKENS = 4_194_304
 MICROBATCH_TOKENS = 65_536
 PEAK_LR = 4.0e-4
 LABEL_IGNORE_INDEX = -100
+CHECKPOINT_FORMAT = "blade_proxy_ref_v1"
 
-# Fixed BLADE reference-sync steps (not every τ). τ still sets warmup length via
-# blade_steps = n_blade_blocks * τ. Mid-BLADE resume syncs immediately when the
-# resume step is not itself a scheduled sync (reference weights are not checkpointed).
-BLADE_SYNC_STEPS: Tuple[int, ...] = (750, 1150, 1550, 1950)
+# Locked schedule — change requires a new run_id.
+BLADE_START = 500
+BLADE_SYNC_STEPS: Tuple[int, ...] = (500, 875, 1250, 1625, 2000)
+DEFAULT_TAU = 375
+DEFAULT_K = 75
+DEFAULT_GAMMA = 0.6
+DEFAULT_LAMBDA_PEN = 1.0
 
 
-def next_blade_sync_step(after_step: int, *, inclusive: bool = False) -> int:
-    """Return the next scheduled sync step, or a large sentinel if none remain."""
+def next_blade_sync_step(after_completed: int) -> int:
+    """Next sync whose completed-step index is strictly greater than ``after_completed``."""
     for s in BLADE_SYNC_STEPS:
-        if inclusive and s >= after_step:
-            return s
-        if not inclusive and s > after_step:
+        if s > after_completed:
             return s
     return 10**9
 
@@ -253,7 +276,6 @@ class InfiniteBatchStream:
 
 
 def next_rank_input_ids(stream: InfiniteBatchStream, n_seqs: int, device: torch.device) -> torch.Tensor:
-    """Concatenate microbatches until we have ``n_seqs`` sequences for this rank."""
     chunks: List[torch.Tensor] = []
     got = 0
     while got < n_seqs:
@@ -265,16 +287,11 @@ def next_rank_input_ids(stream: InfiniteBatchStream, n_seqs: int, device: torch.
 
 
 # ---------------------------------------------------------------------------
-# Model / train module (GPU7 RefHQ stack)
+# Model / train module
 # ---------------------------------------------------------------------------
 
 
 def resolve_attn_backend() -> AttentionBackendName:
-    """Prefer flash_attn when available; else PyTorch SDPA (often Flash under the hood).
-
-    Env ``OLMO_ATTN_BACKEND``: ``auto`` (default), ``flash_2``/``flash``, or ``torch``.
-    Kernel choice does not change the training objective — only the attn implementation.
-    """
     prefer = os.environ.get("OLMO_ATTN_BACKEND", "auto").strip().lower()
     if prefer in ("torch", "sdpa", "eager"):
         return AttentionBackendName.torch
@@ -289,7 +306,11 @@ def resolve_attn_backend() -> AttentionBackendName:
             return backend
         except Exception as e:
             if prefer != "auto":
-                log.warning("OLMO_ATTN_BACKEND=%s but flash_attn unavailable (%s); using torch", prefer, e)
+                log.warning(
+                    "OLMO_ATTN_BACKEND=%s but flash_attn unavailable (%s); using torch",
+                    prefer,
+                    e,
+                )
             else:
                 log.info("flash_attn unavailable (%s); attn_backend=torch (SDPA)", e)
     return AttentionBackendName.torch
@@ -310,16 +331,11 @@ def build_olmo2_config(*, fused_ce: bool) -> TransformerConfig:
 
 
 def patch_liger_fused_ce_compat() -> bool:
-    """Make olmo_core fused CE work with liger-kernel>=0.8 (4-tuple returns).
-
-    liger 0.8+ returns ``(loss, z_loss, token_acc, predicted_tokens)`` while older
-    olmo_core unpacks 3 values. Also zero ``lse_square_scale`` when
-    ``compute_z_loss=False`` so fused CE matches plain CE (no silent z-term).
-    """
     try:
         import importlib
 
         import liger_kernel  # noqa: F401
+
         cel = importlib.import_module("olmo_core.nn.functional.cross_entropy_loss")
     except Exception as e:
         log.warning("fused CE compat patch skipped (import): %s", e)
@@ -330,7 +346,6 @@ def patch_liger_fused_ce_compat() -> bool:
         log.warning("fused CE apply fn missing; cannot patch")
         return False
 
-    # Idempotent.
     if getattr(cel, "_edullm_fused_ce_patched", False):
         return True
 
@@ -350,7 +365,6 @@ def patch_liger_fused_ce_compat() -> bool:
         softcap=None,
         accum_dtype=None,
     ):
-        # Accuracy: do not fold z-loss into CE when compute_z_loss is False.
         lse_scale = z_loss_multiplier if compute_z_loss else 0.0
         out = apply_fn(
             _input,
@@ -376,7 +390,6 @@ def patch_liger_fused_ce_compat() -> bool:
 
     cel.fused_linear_cross_entropy_loss = _fused_linear_cross_entropy_loss_compat  # type: ignore[attr-defined]
     cel._edullm_fused_ce_patched = True  # type: ignore[attr-defined]
-    # lm_head typically binds the symbol at import time — patch both.
     try:
         import olmo_core.nn.lm_head as lm_head
 
@@ -388,7 +401,6 @@ def patch_liger_fused_ce_compat() -> bool:
 
 
 def try_enable_fused_ce() -> bool:
-    """Enable olmo_core fused LM-head CE via liger-kernel (same CE, no full logits)."""
     try:
         import liger_kernel  # noqa: F401
     except Exception:
@@ -462,7 +474,7 @@ def _autocast_ctx(device: torch.device):
 
 
 def build_reference_model(*, fused_ce: bool) -> nn.Module:
-    """Dense reference copy. Kept small: bf16 autocast + tiny microbatches in K-updates."""
+    """Dense reference copy (bf16 autocast + tiny microbatches in K-updates)."""
     cuda_gc()
     cfg = build_olmo2_config(fused_ce=fused_ce)
     model = cfg.build(init_device="cuda")
@@ -474,7 +486,6 @@ def build_reference_model(*, fused_ce: bool) -> nn.Module:
 
 
 def mean_ce_loss(model: nn.Module, input_ids: torch.Tensor) -> torch.Tensor:
-    """Mean token CE via LM-head (fused when configured)."""
     labels = get_labels({"input_ids": input_ids}, label_ignore_index=LABEL_IGNORE_INDEX)
     n = (labels != LABEL_IGNORE_INDEX).sum().clamp(min=1)
     with _autocast_ctx(input_ids.device):
@@ -494,7 +505,6 @@ def mean_ce_loss(model: nn.Module, input_ids: torch.Tensor) -> torch.Tensor:
 
 
 def per_token_ce(model: nn.Module, input_ids: torch.Tensor) -> torch.Tensor:
-    """Per-position CE aligned with ``get_labels`` layout, shape [B, S]."""
     labels = get_labels({"input_ids": input_ids}, label_ignore_index=LABEL_IGNORE_INDEX)
     with _autocast_ctx(input_ids.device):
         out = model(
@@ -515,17 +525,17 @@ def top_gamma_label_mask(
     labels: torch.Tensor,
     gamma: float,
 ) -> torch.Tensor:
-    """Bool mask over label positions: keep top-γ excess-loss tokens."""
+    """Keep top-γ tokens by BLADE score ``Δ = L_ref − L_proxy`` (paper Eq. 5)."""
     valid = labels != LABEL_IGNORE_INDEX
-    excess = proxy_ce - ref_ce
-    flat = excess[valid]
+    score = ref_ce - proxy_ce
+    flat = score[valid]
     if flat.numel() == 0:
         return valid
     k = max(1, int(math.ceil(gamma * flat.numel())))
     if k >= flat.numel():
         return valid
     thresh = torch.topk(flat, k, largest=True).values[-1]
-    return valid & (excess >= thresh)
+    return valid & (score >= thresh)
 
 
 # ---------------------------------------------------------------------------
@@ -537,7 +547,6 @@ def sync_reference_from_proxy(reference: nn.Module, train_module: TransformerTra
     """Copy full proxy weights into the dense reference model."""
     cuda_gc()
     if get_model_state_dict is not None and StateDictOptions is not None:
-        # cpu_offload avoids a second full GPU copy while gathering HSDP shards.
         opts = StateDictOptions(full_state_dict=True, cpu_offload=True)
         sd = get_model_state_dict(train_module.model, options=opts)
         try:
@@ -572,10 +581,7 @@ def update_reference_k_steps(
     micro_seqs: int,
     log_every: int = 25,
 ) -> float:
-    """Paper Eq. 4: ``K`` steps of ``L_val + λ L_train`` on the reference.
-
-    Uses tiny microbatches so dense-ref activations/logits fit beside the HSDP proxy.
-    """
+    """Paper: ``K`` steps of ``L_val + λ L_train`` on the reference."""
     cuda_gc()
     reference.train()
     for p in reference.parameters():
@@ -598,7 +604,6 @@ def update_reference_k_steps(
         micro_ltrain: List[float] = []
         tokens_done = 0
         for _ in range(n_micro):
-            # Last microbatch may be partial so we still cover seqs_per_rank.
             remain = seqs_per_rank - tokens_done
             this_m = min(micro_seqs, remain)
             if this_m <= 0:
@@ -607,7 +612,6 @@ def update_reference_k_steps(
             val_ids = next_rank_input_ids(ref_stream, this_m, device)
             l_train = mean_ce_loss(reference, train_ids)
             l_val = mean_ce_loss(reference, val_ids)
-            # Weight by microbatch size so partial last step is unbiased.
             weight = float(this_m) / float(seqs_per_rank)
             loss = (l_val + lambda_pen * l_train) * weight
             loss.backward()
@@ -647,11 +651,10 @@ def build_blade_labels(
     gamma: float,
     micro_seqs: int,
 ) -> Tuple[torch.Tensor, float]:
-    """Compute excess-loss top-γ mask and return masked labels + select fraction."""
+    """Top-γ mask by ``L_ref − L_proxy``; return masked labels + select fraction."""
     B = input_ids.size(0)
     labels_full = get_labels({"input_ids": input_ids}, label_ignore_index=LABEL_IGNORE_INDEX)
     select = torch.zeros_like(labels_full, dtype=torch.bool)
-    # Score in microbatches to limit activation memory.
     for start in range(0, B, micro_seqs):
         sl = slice(start, min(B, start + micro_seqs))
         ids = input_ids[sl]
@@ -678,42 +681,215 @@ def build_blade_labels(
 
 
 # ---------------------------------------------------------------------------
-# Checkpointing
+# Checkpointing (proxy + dynamic reference)
 # ---------------------------------------------------------------------------
+
+
+def _cpu_plain_tensor(t: Any) -> torch.Tensor:
+    if torch.is_tensor(t) and type(t).__name__ == "Tensor":
+        return t.detach().cpu()
+    full = getattr(t, "full_tensor", None)
+    if callable(full):
+        try:
+            return full().detach().cpu()
+        except Exception:
+            pass
+    local = getattr(t, "to_local", None)
+    if callable(local):
+        try:
+            return local().detach().cpu()
+        except Exception:
+            pass
+    if torch.is_tensor(t):
+        return t.detach().cpu()
+    raise TypeError(f"cannot convert {type(t)} to CPU tensor")
+
+
+def _plainify_state_tree(obj: Any) -> Any:
+    if torch.is_tensor(obj) or type(obj).__name__ == "DTensor":
+        return _cpu_plain_tensor(obj)
+    if isinstance(obj, dict):
+        return {k: _plainify_state_tree(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        seq = [_plainify_state_tree(v) for v in obj]
+        return type(obj)(seq) if not isinstance(obj, list) else seq
+    return obj
+
+
+def gather_train_module_state_dict(train_module: TransformerTrainModule) -> dict[str, Any]:
+    """All ranks must call. Full unsharded CPU proxy state on every rank."""
+    if get_model_state_dict is None or StateDictOptions is None:
+        return _plainify_state_tree(train_module.state_dict_to_save())
+
+    opts = StateDictOptions(full_state_dict=True, cpu_offload=True)
+    model_sd = get_model_state_dict(train_module.model, options=opts)
+    optim_sd: Any = None
+    if get_optimizer_state_dict is not None:
+        try:
+            optim_sd = get_optimizer_state_dict(
+                train_module.model, train_module.optim, options=opts
+            )
+        except Exception as e:
+            log.warning("full optimizer state gather failed (%s); saving model only", e)
+    return {
+        "model": _plainify_state_tree(model_sd),
+        "optim": _plainify_state_tree(optim_sd) if optim_sd is not None else None,
+    }
+
+
+def gather_reference_state_dict(reference: Optional[nn.Module]) -> Optional[dict[str, Any]]:
+    """Dense reference → CPU state dict (or None before first sync)."""
+    if reference is None:
+        return None
+    return {"model": _plainify_state_tree(reference.state_dict())}
 
 
 def save_checkpoint(
     path: Path,
     step: int,
     train_module: TransformerTrainModule,
+    reference: Optional[nn.Module],
     args: argparse.Namespace,
     meta: dict,
+    *,
+    task_loss_dir: Optional[Path] = None,
+    task_loss_enabled: bool = True,
 ) -> None:
+    """All ranks enter (HSDP gather). Rank 0 writes proxy+ref ``state.pt`` and may spawn eval."""
+    train_module_sd = gather_train_module_state_dict(train_module)
+    ref_sd = gather_reference_state_dict(reference)
+    if get_rank() != 0:
+        return
     path.mkdir(parents=True, exist_ok=True)
     state = {
         "step": step,
-        "train_module": train_module.state_dict_to_save(),
+        "train_module": train_module_sd,
+        "reference": ref_sd,
         "args": vars(args),
         "meta": meta,
         "architecture": "olmo_core.TransformerConfig.olmo2_370M",
-        "train_stack": "TransformerTrainModule/HSDP/SkipStepAdamW (GPU7-matched)",
+        "train_stack": "TransformerTrainModule/HSDP/SkipStepAdamW (RefHQ-matched)",
+        "method": "BLADE",
+        "blade_sync_steps": list(BLADE_SYNC_STEPS),
+        "blade_start": BLADE_START,
+        "selection_score": "L_ref - L_proxy",
+        "checkpoint_format": CHECKPOINT_FORMAT,
+        "has_reference": ref_sd is not None,
     }
     tmp = path / "state.pt.tmp"
     torch.save(state, tmp)
     tmp.replace(path / "state.pt")
     (path / "step.txt").write_text(str(step) + "\n")
-    log.info("Saved checkpoint → %s (step=%s)", path, step)
+    n_model = len(train_module_sd.get("model") or {})
+    log.info(
+        "Saved BLADE checkpoint → %s (step=%s, proxy_tensors=%d, has_ref=%s, has_optim=%s)",
+        path,
+        step,
+        n_model,
+        ref_sd is not None,
+        train_module_sd.get("optim") is not None,
+    )
+    if task_loss_enabled and task_loss_dir is not None:
+        out = task_loss_dir / f"step{step}_task_loss.json"
+        # enabled=None → honor TASK_LOSS_EVAL env (0/false/off disables).
+        trigger_task_loss_eval(
+            path,
+            run_name=str(args.name),
+            out_path=out,
+            eval_script=getattr(args, "task_loss_eval_script", None),
+            async_=True,
+            enabled=None,
+        )
+    try:
+        from token_selection.olmo_ext.s3_export import (
+            export_arm_checkpoint,
+            export_arm_task_loss_dir,
+        )
+
+        export_arm_checkpoint("blade", path)
+        if task_loss_dir is not None:
+            export_arm_task_loss_dir("blade", task_loss_dir)
+    except Exception as exc:  # noqa: BLE001 — never kill training
+        log.warning("S3 export after checkpoint failed: %s", exc)
 
 
-def load_checkpoint(path: Path, train_module: TransformerTrainModule) -> int:
+def load_checkpoint(
+    path: Path,
+    train_module: TransformerTrainModule,
+    *,
+    fused_ref: bool,
+) -> Tuple[int, Optional[nn.Module], Optional[torch.optim.Optimizer]]:
+    """Load proxy (+optim) and dynamic reference. Does **not** re-sync ref←proxy."""
     ckpt = torch.load(path / "state.pt", map_location="cpu", weights_only=False)
-    train_module.load_state_dict(ckpt["train_module"])
-    # torch.load(..., map_location="cpu") can leave Adam moment/step tensors on CPU;
-    # SkipStepAdamW foreach kernels then mix CPU step_sizes with CUDA step_factor.
+    tm_sd = ckpt["train_module"]
+    fmt = ckpt.get("checkpoint_format")
+    if (
+        fmt in (CHECKPOINT_FORMAT, "full_state_dict_v1")
+        and isinstance(tm_sd, dict)
+        and "model" in tm_sd
+        and set_model_state_dict is not None
+        and StateDictOptions is not None
+    ):
+        opts = StateDictOptions(full_state_dict=True, strict=True)
+        set_model_state_dict(train_module.model, tm_sd["model"], options=opts)
+        if tm_sd.get("optim") is not None and set_optimizer_state_dict is not None:
+            try:
+                set_optimizer_state_dict(
+                    train_module.model,
+                    train_module.optim,
+                    tm_sd["optim"],
+                    options=opts,
+                )
+            except Exception as e:
+                log.warning("optimizer restore failed (%s); continuing with model weights", e)
+        else:
+            try:
+                train_module.load_state_dict({"model": tm_sd["model"], "optim": tm_sd.get("optim")})
+            except Exception:
+                pass
+    else:
+        train_module.load_state_dict(tm_sd)
     _move_optim_state_to_param_device(train_module.optim)
+
+    reference: Optional[nn.Module] = None
+    ref_opt: Optional[torch.optim.Optimizer] = None
+    ref_payload = ckpt.get("reference")
+    if isinstance(ref_payload, dict) and ref_payload.get("model") is not None:
+        reference = build_reference_model(fused_ce=fused_ref)
+        try:
+            reference.load_state_dict(ref_payload["model"], strict=True)
+        except Exception:
+            stripped = {
+                (k.split(".", 1)[-1] if k.startswith("module.") else k): v
+                for k, v in ref_payload["model"].items()
+            }
+            reference.load_state_dict(stripped, strict=False)
+        reference.eval()
+        for p in reference.parameters():
+            p.requires_grad_(False)
+        # Optimizer for future K updates (fresh AdamW; K state is not resumed — syncs are rare).
+        ref_opt = torch.optim.AdamW(
+            reference.parameters(),
+            lr=float(PEAK_LR),
+            betas=(0.9, 0.95),
+            weight_decay=0.1,
+            foreach=False,
+        )
+        if get_rank() == 0:
+            log.info("Restored dynamic reference from checkpoint (no re-sync)")
+    elif get_rank() == 0:
+        log.info("Checkpoint has no reference (warmup / pre-sync); will allocate at next sync")
+
     step = int(ckpt["step"])
-    log.info("Resumed from %s at step=%s", path, step)
-    return step
+    if get_rank() == 0:
+        log.info(
+            "Resumed from %s at step=%s format=%s has_ref=%s",
+            path,
+            step,
+            fmt or "legacy",
+            reference is not None,
+        )
+    return step, reference, ref_opt
 
 
 def _move_optim_state_to_param_device(optim: torch.optim.Optimizer) -> None:
@@ -758,7 +934,7 @@ def find_latest_checkpoint(save_folder: Path) -> Optional[Path]:
 
 def parse_args() -> argparse.Namespace:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--name", required=True)
+    ap.add_argument("--name", required=True, help="Run id (e.g. blade-regmix10b-v2)")
     ap.add_argument("--train-paths-file", required=True)
     ap.add_argument("--ref-paths-file", required=True)
     ap.add_argument("--save-folder", required=True)
@@ -774,26 +950,69 @@ def parse_args() -> argparse.Namespace:
         "--ref-device-batch-size",
         type=int,
         default=16,
-        help="Sequences per reference microbatch during K-updates/scoring (default 16; "
-        "max stable beside HSDP proxy on 2x B200; 24 OOMs)",
+        help="Sequences per reference microbatch during K-updates/scoring",
     )
-    ap.add_argument("--save-interval", type=int, default=250)
+    ap.add_argument(
+        "--checkpoint-interval",
+        type=int,
+        default=DEFAULT_CHECKPOINT_INTERVAL,
+        help="Permanent ladder interval (default 125)",
+    )
     ap.add_argument("--num-workers", type=int, default=4)
-    ap.add_argument("--seed", type=int, default=6198)
+    ap.add_argument("--seed", type=int, default=6198, help="Init / data seed (RefHQ-aligned default)")
     ap.add_argument("--load-path", type=str, default=None)
     ap.add_argument("--fresh", action="store_true")
     ap.add_argument("--compile", dest="compile", action="store_true", default=True)
     ap.add_argument("--no-compile", dest="compile", action="store_false")
     ap.add_argument("--lr-warmup-steps", type=int, default=24)
     ap.add_argument("--lr-alpha-f", type=float, default=0.1)
-    ap.add_argument("--tau", type=int, default=375)
-    ap.add_argument("--K", type=int, default=75)
-    ap.add_argument("--n-blade-blocks", type=int, default=5)
-    ap.add_argument("--gamma", type=float, default=0.6)
-    ap.add_argument("--lambda-pen", type=float, default=1.0)
+    ap.add_argument("--tau", type=int, default=DEFAULT_TAU)
+    ap.add_argument("--K", type=int, default=DEFAULT_K)
+    ap.add_argument("--gamma", type=float, default=DEFAULT_GAMMA)
+    ap.add_argument("--lambda-pen", type=float, default=DEFAULT_LAMBDA_PEN)
+    ap.add_argument("--blade-start", type=int, default=BLADE_START)
     ap.add_argument("--max-grad-norm", type=float, default=1.0)
     ap.add_argument("--log-interval", type=int, default=10)
+    ap.add_argument(
+        "--task-loss-dir",
+        type=str,
+        default=None,
+        help="Directory for step{N}_task_loss.json (default: ../task_loss_results/blade)",
+    )
+    ap.add_argument(
+        "--task-loss-eval-script",
+        type=str,
+        default=None,
+        help="Path to eval_task_loss_olmo_core.py (optional; auto-resolved from repo)",
+    )
+    ap.add_argument(
+        "--no-task-loss-eval",
+        action="store_true",
+        help="Do not spawn task_loss eval on permanent checkpoints "
+        "(also gated by TASK_LOSS_EVAL=0 when eval is otherwise enabled)",
+    )
     return ap.parse_args()
+
+
+def _validate_locked_schedule(args: argparse.Namespace) -> None:
+    """Hard-fail on any deviation from the locked BLADE schedule (new run_id required)."""
+    mismatches: List[str] = []
+    if int(args.blade_start) != BLADE_START:
+        mismatches.append(f"--blade-start={args.blade_start} (locked {BLADE_START})")
+    if int(args.tau) != DEFAULT_TAU:
+        mismatches.append(f"--tau={args.tau} (locked {DEFAULT_TAU})")
+    if int(args.K) != DEFAULT_K:
+        mismatches.append(f"--K={args.K} (locked {DEFAULT_K})")
+    if abs(float(args.gamma) - DEFAULT_GAMMA) > 1e-9:
+        mismatches.append(f"--gamma={args.gamma} (locked {DEFAULT_GAMMA})")
+    if abs(float(args.lambda_pen) - DEFAULT_LAMBDA_PEN) > 1e-9:
+        mismatches.append(f"--lambda-pen={args.lambda_pen} (locked {DEFAULT_LAMBDA_PEN})")
+    if mismatches:
+        raise SystemExit(
+            "Locked BLADE schedule mismatch (do not change without a new run_id):\n  - "
+            + "\n  - ".join(mismatches)
+            + f"\n  sync steps remain {list(BLADE_SYNC_STEPS)}"
+        )
 
 
 def main() -> None:
@@ -802,7 +1021,10 @@ def main() -> None:
         level=logging.INFO,
         format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
     )
-
+    try:
+        torch.set_float32_matmul_precision("high")
+    except Exception:
+        pass
     prepare_training_environment()
     try:
         _run(args)
@@ -811,6 +1033,7 @@ def main() -> None:
 
 
 def _run(args: argparse.Namespace) -> None:
+    _validate_locked_schedule(args)
     rank = get_rank()
     world_size = get_world_size()
     device = torch.device("cuda")
@@ -822,53 +1045,85 @@ def _run(args: argparse.Namespace) -> None:
     if GLOBAL_BATCH_TOKENS % (world_size * rank_micro_tokens) != 0:
         raise SystemExit(
             f"global_batch_tokens {GLOBAL_BATCH_TOKENS} not divisible by "
-            f"world_size*rank_micro ({world_size}*{rank_micro_tokens})"
+            f"world_size*rank_micro ({world_size}*{rank_micro_tokens}). "
+            "Adjust --device-batch-size or world size so they divide evenly."
         )
     seqs_per_rank = GLOBAL_BATCH_TOKENS // (SEQ_LEN * world_size)
     tokens_per_step = GLOBAL_BATCH_TOKENS
     total_steps = int(args.length_tokens) // tokens_per_step
-    blade_steps = int(args.n_blade_blocks) * int(args.tau)
-    if blade_steps >= total_steps:
-        raise SystemExit(f"blade_steps={blade_steps} must be < total_steps={total_steps}")
-    warmup_steps = total_steps - blade_steps
-    lr = float(PEAK_LR)
+    blade_start = int(args.blade_start)
+    if blade_start >= total_steps:
+        raise SystemExit(f"blade_start={blade_start} must be < total_steps={total_steps}")
+    for s in BLADE_SYNC_STEPS:
+        if s > total_steps:
+            raise SystemExit(f"sync step {s} exceeds total_steps={total_steps}")
 
+    ckpt_interval = int(args.checkpoint_interval)
+    ladder = permanent_checkpoint_steps(total_steps, ckpt_interval)
+    ladder_set: Set[int] = set(ladder)
+    for s in BLADE_SYNC_STEPS:
+        if s not in ladder_set:
+            raise SystemExit(
+                f"sync step {s} is not on the permanent checkpoint ladder {ladder[:5]}…; "
+                f"interval={ckpt_interval} total={total_steps}"
+            )
+
+    lr = float(PEAK_LR)
     progress_dir = Path(args.progress_dir)
     save_folder = Path(args.save_folder)
+    if args.task_loss_dir:
+        task_loss_dir = Path(args.task_loss_dir)
+    else:
+        task_loss_dir = _TS_ROOT / "task_loss_results" / "blade"
+    task_loss_enabled = not bool(args.no_task_loss_eval)
+
     if rank == 0:
         progress_dir.mkdir(parents=True, exist_ok=True)
         save_folder.mkdir(parents=True, exist_ok=True)
+        if task_loss_enabled:
+            task_loss_dir.mkdir(parents=True, exist_ok=True)
 
     meta = {
         "architecture": "olmo_core.TransformerConfig.olmo2_370M",
-        "matched_teammate_run": "rel-ema-5b-scratch-v1 / GPU7 RefHQ CE stack",
+        "run_id": args.name,
         "method": "BLADE",
         "proxy_train_stack": "TransformerTrainModule HSDP bf16 SkipStepAdamW compile",
-        "proxy_loss": "LM-head CE (+ label_mask top-γ during BLADE)",
-        "reference_loss": "L_val + λ L_train (paper)",
-        "ref_device_batch_size": ref_mbs,
+        "matched_reference": "experiments/token-selection/reference/train_olmo3_370m_refhq.py",
+        "selection_score": "L_ref - L_proxy",
+        "gamma": float(args.gamma),
+        "lambda_pen": float(args.lambda_pen),
+        "tau": int(args.tau),
+        "K": int(args.K),
+        "blade_start": blade_start,
+        "blade_sync_steps": list(BLADE_SYNC_STEPS),
         "length_tokens": int(args.length_tokens),
         "global_batch_tokens": GLOBAL_BATCH_TOKENS,
+        "rank_microbatch_tokens": rank_micro_tokens,
         "sequence_length": SEQ_LEN,
+        "vocab_size": EMBEDDING_SIZE,
         "tokens_per_step": tokens_per_step,
         "total_steps": total_steps,
-        "warmup_steps": warmup_steps,
-        "blade_steps": blade_steps,
-        "n_blade_blocks": args.n_blade_blocks,
-        "tau": args.tau,
-        "K": args.K,
-        "gamma": args.gamma,
-        "lambda_pen": args.lambda_pen,
+        "permanent_checkpoint_steps": ladder,
+        "checkpoint_interval": ckpt_interval,
+        "max_checkpoints": None,
+        "checkpoint_format": CHECKPOINT_FORMAT,
         "device_microbatch_seqs": mbs,
+        "ref_device_batch_size": ref_mbs,
         "seqs_per_rank": seqs_per_rank,
         "world_size": world_size,
         "lr": lr,
         "lr_warmup_steps": int(args.lr_warmup_steps),
+        "lr_alpha_f": float(args.lr_alpha_f),
+        "z_loss_multiplier": 1e-5,
+        "max_grad_norm": float(args.max_grad_norm),
         "compile": bool(args.compile),
         "attn_backend": str(resolve_attn_backend()),
-        "train_dataset": "s3://edullm-dataset-regmix/regmix-10b/",
-        "ref_dataset": "s3://edullm-dataset-refhq/refhq-regmix-5p5b-v1/",
+        "s3_prefix": "token-sel/blade",
+        "train_dataset": "s3://edullm-datasets/regmix/regmix-10b/",
+        "ref_dataset": "s3://edullm-datasets/refhq/refhq-regmix-5p5b-v1/",
         "seed": args.seed,
+        "task_loss_dir": str(task_loss_dir),
+        "task_loss_on_save": task_loss_enabled,
     }
     if rank == 0:
         (progress_dir / "run_meta.json").write_text(json.dumps(meta, indent=2) + "\n")
@@ -877,36 +1132,37 @@ def _run(args: argparse.Namespace) -> None:
             "\n".join(
                 [
                     "architecture=olmo_core.TransformerConfig.olmo2_370M",
-                    "proxy_stack=TransformerTrainModule/HSDP/SkipStepAdamW (GPU7-matched)",
+                    "method=BLADE",
+                    f"run_id={args.name}",
                     f"world_size={world_size}",
-                    f"sequence_length={SEQ_LEN}",
                     f"total_steps={total_steps}",
-                    f"warmup_steps={warmup_steps}",
-                    f"blade_steps={blade_steps}  # {args.n_blade_blocks} × tau={args.tau}",
+                    f"blade_start={blade_start}  # warmup steps 0..{blade_start - 1}",
                     f"blade_sync_steps={list(BLADE_SYNC_STEPS)}",
-                    f"K={args.K}  gamma={args.gamma}  lambda={args.lambda_pen}",
+                    f"tau={args.tau}  K={args.K}  gamma={args.gamma}  lambda={args.lambda_pen}",
+                    "selection_score=L_ref - L_proxy",
+                    f"permanent_checkpoints={ladder}",
+                    f"checkpoint_format={CHECKPOINT_FORMAT}  # proxy+optim + reference",
                     f"global_batch_tokens={GLOBAL_BATCH_TOKENS}  mbs_seqs={mbs}  "
                     f"ref_mbs_seqs={ref_mbs}  seqs_per_rank={seqs_per_rank}",
                     f"lr={lr}  cos_warmup={args.lr_warmup_steps}  alpha_f={args.lr_alpha_f}",
                     f"compile={args.compile}",
-                    "train=s3://edullm-dataset-regmix/regmix-10b/",
-                    "refhq=s3://edullm-dataset-refhq/refhq-regmix-5p5b-v1/",
+                    "train=s3://edullm-datasets/regmix/regmix-10b/",
+                    "refhq=s3://edullm-datasets/refhq/refhq-regmix-5p5b-v1/",
+                    f"task_loss_dir={task_loss_dir}",
                     "",
                 ]
             )
         )
         log.info(
-            "Plan: olmo2_370M GPU7-stack world=%d total=%d warmup=%d blade=%d "
-            "K=%d γ=%.2f mbs=%d ref_mbs=%d seqs/rank=%d lr=%.3e",
+            "Plan: BLADE olmo2_370M world=%d total=%d blade_start=%d syncs=%s "
+            "K=%d γ=%.2f ladder_n=%d lr=%.3e",
             world_size,
             total_steps,
-            warmup_steps,
-            blade_steps,
+            blade_start,
+            list(BLADE_SYNC_STEPS),
             args.K,
             args.gamma,
-            mbs,
-            ref_mbs,
-            seqs_per_rank,
+            len(ladder),
             lr,
         )
 
@@ -932,7 +1188,6 @@ def _run(args: argparse.Namespace) -> None:
         compile_model=bool(args.compile),
         rank_microbatch_tokens=rank_micro_tokens,
     )
-    # Attach bookkeeping so optim_step / SkipStepAdamW LR schedule / metrics work.
     books = _Bookkeeping(
         global_step=0,
         max_steps=total_steps,
@@ -941,6 +1196,10 @@ def _run(args: argparse.Namespace) -> None:
     )
     train_module._attach_trainer(books)  # type: ignore[arg-type]
 
+    fused_ref = try_enable_fused_ce()
+    reference: Optional[nn.Module] = None
+    ref_opt: Optional[torch.optim.Optimizer] = None
+
     start_step = 0
     if args.fresh:
         if rank == 0:
@@ -948,32 +1207,40 @@ def _run(args: argparse.Namespace) -> None:
     else:
         load_dir = Path(args.load_path) if args.load_path else find_latest_checkpoint(save_folder)
         if load_dir is not None:
-            start_step = load_checkpoint(load_dir, train_module)
+            start_step, reference, ref_opt = load_checkpoint(
+                load_dir, train_module, fused_ref=fused_ref
+            )
 
-    reference: Optional[nn.Module] = None
-    ref_opt: Optional[torch.optim.Optimizer] = None
-    fused_ref = try_enable_fused_ce()
-
-    blade_start = warmup_steps
-    # Scheduled syncs: BLADE_SYNC_STEPS. Fresh runs still sync once at blade_start
-    # (first entry to BLADE) if that is before the first scheduled step.
-    # Mid-BLADE resume: sync at start_step when it is scheduled, otherwise sync
-    # immediately so token selection has a live reference (not checkpointed).
-    if start_step < blade_start:
-        next_sync_step = blade_start
-    elif start_step in BLADE_SYNC_STEPS or start_step == blade_start:
-        next_sync_step = start_step
-    else:
-        # Between scheduled syncs (or past them): one-shot resume sync at start_step.
-        next_sync_step = start_step
+    # Methodology-safe resume: next sync is the next *future* scheduled sync only.
+    # Never inject an unscheduled re-sync between sync points.
+    next_sync = next_blade_sync_step(start_step)
     if rank == 0:
         log.info(
-            "BLADE sync schedule=%s next_sync_step=%s (blade_start=%d start_step=%d)",
+            "BLADE sync schedule=%s next_sync=%s (blade_start=%d start_step=%d has_ref=%s)",
             list(BLADE_SYNC_STEPS),
-            next_sync_step if next_sync_step < 10**9 else None,
+            next_sync if next_sync < 10**9 else None,
             blade_start,
             start_step,
+            reference is not None,
         )
+
+    # Step-0 init snapshot (proxy only; reference null).
+    if start_step == 0 and 0 in ladder_set:
+        if is_distributed():
+            dist.barrier()
+        save_checkpoint(
+            save_folder / "step0",
+            0,
+            train_module,
+            reference,
+            args,
+            meta,
+            task_loss_dir=task_loss_dir,
+            task_loss_enabled=task_loss_enabled,
+        )
+        if is_distributed():
+            dist.barrier()
+
     t0 = time.time()
     window_t0 = t0
     window_step0 = start_step
@@ -982,41 +1249,40 @@ def _run(args: argparse.Namespace) -> None:
     if is_distributed():
         dist.barrier()
 
+    # ``step`` = completed optimizer steps; about_to = step+1 is the update we run.
     for step in range(start_step, total_steps):
+        about_to = step + 1
         books.global_step = step
         books.global_train_tokens_seen = step * tokens_per_step
-        in_blade = step >= blade_start
+        in_blade = about_to >= blade_start
 
-        # Lazy-init reference at first BLADE sync (keeps warmup memory like GPU7 CE).
-        if in_blade and reference is None:
-            if rank == 0:
-                log.info(
-                    "Allocating reference model at blade_start=%d (ref_mbs=%d)",
-                    blade_start,
-                    ref_mbs,
+        if about_to in BLADE_SYNC_STEPS:
+            if reference is None:
+                if rank == 0:
+                    log.info(
+                        "Allocating reference model at sync step %d (ref_mbs=%d)",
+                        about_to,
+                        ref_mbs,
+                    )
+                train_module.zero_grads()
+                cuda_gc()
+                reference = build_reference_model(fused_ce=fused_ref)
+                ref_opt = torch.optim.AdamW(
+                    reference.parameters(),
+                    lr=lr,
+                    betas=(0.9, 0.95),
+                    weight_decay=0.1,
+                    foreach=False,
                 )
-            train_module.zero_grads()
-            cuda_gc()
-            reference = build_reference_model(fused_ce=fused_ref)
-            ref_opt = torch.optim.AdamW(
-                reference.parameters(),
-                lr=lr,
-                betas=(0.9, 0.95),
-                weight_decay=0.1,
-                foreach=False,
-            )
-            cuda_gc()
-
-        if in_blade and step == next_sync_step:
+                cuda_gc()
             assert reference is not None and ref_opt is not None
             if rank == 0:
-                log.info("=== BLADE sync at step %d: reference ← proxy, K=%d ===", step, args.K)
+                log.info("=== BLADE sync at step %d: reference ← proxy, K=%d ===", about_to, args.K)
             train_module.zero_grads()
             cuda_gc()
             sync_reference_from_proxy(reference, train_module)
-            # Match proxy LR at this step for the K reference updates.
             for g in ref_opt.param_groups:
-                g["lr"] = lr  # SkipStep schedule lives on proxy; ref uses peak LR
+                g["lr"] = lr
             update_reference_k_steps(
                 reference,
                 ref_opt,
@@ -1029,12 +1295,11 @@ def _run(args: argparse.Namespace) -> None:
                 seqs_per_rank=seqs_per_rank,
                 micro_seqs=ref_mbs,
             )
-            # After blade_start (if unscheduled) or any sync, advance to next fixed step.
-            next_sync_step = next_blade_sync_step(step, inclusive=False)
+            next_sync = next_blade_sync_step(about_to)
             if rank == 0:
                 log.info(
                     "Next BLADE sync scheduled at step %s",
-                    next_sync_step if next_sync_step < 10**9 else None,
+                    next_sync if next_sync < 10**9 else None,
                 )
             if is_distributed():
                 dist.barrier()
@@ -1043,7 +1308,11 @@ def _run(args: argparse.Namespace) -> None:
         batch: Dict[str, torch.Tensor] = {"input_ids": input_ids}
         select_frac = 1.0
         if in_blade:
-            assert reference is not None
+            if reference is None:
+                raise RuntimeError(
+                    f"BLADE selection at step {about_to} requires a reference; "
+                    "checkpoint may be corrupt or resume skipped a sync without saving ref"
+                )
             was_training = train_module.model.training
             train_module.model.eval()
             labels, select_frac = build_blade_labels(
@@ -1057,13 +1326,12 @@ def _run(args: argparse.Namespace) -> None:
         train_module.train_batch(batch)
         train_module.optim_step()
 
-        global_step = step + 1
+        global_step = about_to
         if global_step % args.log_interval == 0 or global_step == 1:
             now = time.time()
             elapsed = now - t0
             done = max(1, global_step - start_step)
             tok_s_avg = done * tokens_per_step / max(elapsed, 1e-6)
-            # Recent window (since last log) — excludes compile / sync stalls.
             w_steps = max(1, global_step - window_step0)
             w_elapsed = max(now - window_t0, 1e-6)
             tok_s = w_steps * tokens_per_step / w_elapsed
@@ -1105,22 +1373,26 @@ def _run(args: argparse.Namespace) -> None:
                             "tok_per_s": tok_s,
                             "tok_per_s_avg": tok_s_avg,
                             "pct": round(100.0 * global_step / total_steps, 4),
+                            "has_reference": reference is not None,
                         }
                     )
                     + "\n"
                 )
 
-        if global_step % args.save_interval == 0 or global_step == total_steps:
+        if global_step in ladder_set:
             if is_distributed():
                 dist.barrier()
-            if rank == 0:
-                save_checkpoint(
-                    save_folder / f"step{global_step}",
-                    global_step,
-                    train_module,
-                    args,
-                    meta,
-                )
+            # At sync steps this save is post-K (sync ran at start of this iteration).
+            save_checkpoint(
+                save_folder / f"step{global_step}",
+                global_step,
+                train_module,
+                reference,
+                args,
+                meta,
+                task_loss_dir=task_loss_dir,
+                task_loss_enabled=task_loss_enabled,
+            )
             if is_distributed():
                 dist.barrier()
 
