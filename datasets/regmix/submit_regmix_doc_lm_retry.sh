@@ -15,7 +15,7 @@ SUNET="${SUNET:-nzhao2}"
 : "${GPU_TIME_LIMIT:=00:45:00}"
 : "${GPU_MEM:=64G}"
 : "${GPU_CPUS_PER_TASK:=4}"
-: "${BATCH_TOKENS:=4096}"
+: "${BATCH_TOKENS:=2048}"
 : "${POLL_SECS:=30}"
 : "${RUN_FINALIZE:=0}"
 

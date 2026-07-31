@@ -1,9 +1,15 @@
 #!/usr/bin/env python3
-"""Export the RefHQ 5.5B OLMo2-370M DistCP checkpoint to a flat model.pt.
+"""Export a RefHQ OLMo2-370M DistCP checkpoint to a flat model.pt.
 
 Thin CLI over ``token_selection.olmo_ext.refhq_materialize.export_distcp_to_pt``.
-Default: step1315. Prefer letting ``--launch`` auto-materialize from YAML
-``reference.s3_uri``; use this script for a one-shot offline export.
+
+Default source is the durable reference-arm layout written by
+``train_olmo3_370m_refhq.py`` / ``launch_train.sh``::
+
+  s3://edullm-checkpoints/token-sel/reference/checkpoints/refhq-regmix-5p5b-v1/step1313/
+
+Prefer letting ``--launch`` auto-materialize from YAML ``reference.s3_uri``; use
+this script for a one-shot offline export.
 
 Does not start training. Safe to run on CPU.
 """
@@ -19,7 +25,7 @@ if str(_TS_ROOT) not in sys.path:
     sys.path.insert(0, str(_TS_ROOT))
 
 from token_selection.olmo_ext.refhq_materialize import (  # noqa: E402
-    DEFAULT_STEP1315,
+    DEFAULT_REFERENCE_ARM_FINAL,
     export_distcp_to_pt,
 )
 
@@ -28,8 +34,11 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument(
         "--s3-uri",
-        default=DEFAULT_STEP1315,
-        help="Checkpoint directory containing model_and_optim/ (default: step1315)",
+        default=DEFAULT_REFERENCE_ARM_FINAL,
+        help=(
+            "Checkpoint directory containing model_and_optim/ "
+            f"(default: {DEFAULT_REFERENCE_ARM_FINAL})"
+        ),
     )
     ap.add_argument(
         "--work-dir",

@@ -167,12 +167,12 @@ def test_middle_k_respects_valid():
 
 
 def test_middle_ppl_mask_and_warmup():
-    curr = torch.tensor([1.0, 2.0, 3.0, 4.0, 5.0])
-    mask = build_mask(method="middle_ppl", k=0.6, current_loss=curr)
+    ref = torch.tensor([1.0, 2.0, 3.0, 4.0, 5.0])
+    mask = build_mask(method="middle_ppl", k=0.6, reference_loss=ref)
     # 5 tokens, k=0.6 -> keep 3 middle: drop easiest + hardest
     assert mask.tolist() == [False, True, True, True, False]
     warm = build_mask(
-        method="middle_ppl", k=0.6, current_loss=curr, warmup=True
+        method="middle_ppl", k=0.6, reference_loss=ref, warmup=True
     )
     assert warm.all()
 
@@ -199,6 +199,28 @@ def test_learnability_warmup_falls_back_to_full():
         warmup=True,
     )
     assert m.all()
+
+
+def test_random_mask_keep_ratio_and_seed():
+    shape = torch.zeros(2, 8)
+    valid = torch.ones_like(shape, dtype=torch.bool)
+    gen_a = torch.Generator().manual_seed(42)
+    gen_b = torch.Generator().manual_seed(42)
+    mask_a = build_mask(method="random", k=0.6, shape_ref=shape, valid=valid, generator=gen_a)
+    mask_b = build_mask(method="random", k=0.6, shape_ref=shape, valid=valid, generator=gen_b)
+    assert torch.equal(mask_a, mask_b)
+    assert int(mask_a[0].sum()) == 5  # round(8 * 0.6)
+    assert int(mask_a[1].sum()) == 5
+
+
+def test_random_mask_per_sequence():
+    shape = torch.zeros(2, 4)
+    valid = torch.tensor([[True, True, True, False], [True, True, True, True]])
+    gen = torch.Generator().manual_seed(0)
+    mask = build_mask(method="random", k=0.5, shape_ref=shape, valid=valid, generator=gen)
+    assert not mask[0, 3]
+    assert int(mask[0].sum()) == 2
+    assert int(mask[1].sum()) == 2
 
 
 def test_learnability_requires_both_losses():

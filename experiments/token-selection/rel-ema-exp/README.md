@@ -9,11 +9,14 @@ Online token selection: keep top **60%** by `REL = L_hist − L_curr`.
 | `t0` | **0** (selection from step 0) |
 | `k` / γ | 0.6 |
 | Arch | `olmo2_370M` (RefHQ-matched) |
-| Data | RegMix 10B → ~2384 steps |
-| Checkpoints | `{0, 125, …, 2250, 2384}` (skip 2375) |
+| Data | RegMix one-epoch (`pretrain/regmix-10b` on `s3://edullm-data/`) → **2360** steps |
+| Checkpoints | `{0, 125, …, 2125, 2360}` (skip 2250) |
 | Eval | Full 20-label `task_loss_bpb` on every permanent save |
 | `run_id` | `rel-ema-exp-10b-scratch-v1` (**not** `rel-ema-10b-scratch-v1`) |
 | S3 export | `s3://edullm-checkpoints/token-sel/rel-ema-exp/` |
+
+**Ephemeral scratch:** set `RUN_DIR` empty; stage edullm-data each job; durable
+export via the shared spine. `--resume` fetches from S3 when local is empty.
 
 Near-clone of [`../rel-ema-refhq/`](../rel-ema-refhq/): only EMA seed + α schedule
 should differ. Shared package: [`../token_selection/`](../token_selection/).
@@ -26,7 +29,7 @@ from token_selection.olmo_ext.ema import alpha_exp, alpha_at_step, DEFAULT_ALPHA
 
 alpha_exp(0, tau=300)           # → 0.0
 alpha_exp(300, tau=300)         # → 1 - e^{-1} ≈ 0.632
-alpha_at_step(t, t0=0, total_steps=2384,
+alpha_at_step(t, t0=0, total_steps=2360,
               alpha_start=0.0, alpha_end=1.0,
               schedule="exp", tau=300)
 ```
@@ -55,14 +58,14 @@ mask). Same defaults as RefHQ / control / other spine arms.
 ```bash
 export EDULLM_ROOT=/path/to/edullm
 export OLMO_CORE_DIR=/path/to/OLMo-core   # must match YAML olmo_core.revision
-export RUN_DIR=/path/to/scratch/rel-ema-exp-run
+export RUN_DIR=/path/to/empty/scratch     # required; job-local tokens/ckpts
 # Optional hardware: NUM_GPUS=4  or  CUDA_VISIBLE_DEVICES=0,1,2,3
 # Optional memory:   RANK_MICROBATCH_SIZE=16384
 # Optional workers:  NUM_WORKERS=8   (default: keep YAML value)
 
 bash "$EDULLM_ROOT/experiments/token-selection/rel-ema-exp/launch_train.sh" prepare
 bash "$EDULLM_ROOT/experiments/token-selection/rel-ema-exp/launch_train.sh" train
-# Resume later:
+# Resume later (durable S3 hydrate if local empty):
 bash "$EDULLM_ROOT/experiments/token-selection/rel-ema-exp/launch_train.sh" train --resume
 ```
 

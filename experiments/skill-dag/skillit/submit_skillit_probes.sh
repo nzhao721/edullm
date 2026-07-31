@@ -1,45 +1,73 @@
 #!/usr/bin/env bash
 # Submit 7 Skill-It DataDecide-60M one-hot probes as one Slurm array (1 GPU per task).
 #
-# Prereq: CPU prep finished (prepare_probes.sh) with slices under RUN_DIR/slices/.
+# Prereq: edullm-data pool + recipe sidecars (submit_skillit_prepare_probes.sh).
+# Never assumes the old ladder scratch tree or s3://edullm-datasets/.
 #
-# Usage (FarmShare login node):
-#   RUN_DIR=/scratch/users/$USER/agent-runs/skillit-probes-YYYYMMDD-HHMMSS \
-#     bash experiments/skill-dag/skillit/submit_skillit_probes.sh
+# Required:
+#   TRAIN_VENV   GPU Python env with torch + olmo-core (alias: VENV / LADDER_VENV)
+#   POOL_DIR     working pool with edullm_data_source.json
 #
 # Optional:
-#   MAX_PARALLEL=4   cap concurrent running tasks (default: unset = no cap;
-#                    each task starts independently when any GPU is free)
-#   ARRAY_TASKS=0-6  override task range
+#   RUN_DIR      ephemeral run root (default: /scratch/.../skillit-probes-<ts>)
+#   RESULTS_S3   durable upload prefix (default: s3://edullm-checkpoints/skillit/probes)
+#   WANDB_PROJECT default skillit (final probe eval metrics)
+#   WANDB_MODE    online if ${RUN_DIR}/wandb-session.env exists, else disabled
+#
+# Usage:
+#   TRAIN_VENV=/path/to/venv POOL_DIR=$RUN_DIR/pool \
+#     bash experiments/skill-dag/skillit/submit_skillit_probes.sh
+#
+# Optional W&B (SmolLM-style):
+#   bash scripts/farmshare/push_wandb_session_to_farmshare.sh "$RUN_DIR"
 set -Eeuo pipefail
 
-SUNET="${SUNET:-nzhao2}"
-RUN_DIR="${RUN_DIR:-/scratch/users/${SUNET}/agent-runs/skillit-probes-20260729-112123}"
-EDULLM_ROOT="${EDULLM_ROOT:-/scratch/users/${SUNET}/agent-runs/edullm-farmshare-staging}"
-LADDER_RUN="${LADDER_RUN:-/scratch/users/${SUNET}/agent-runs/olmo-ladder-370m-20260722-185217}"
-SKILLIT_ROOT="${SKILLIT_ROOT:-${EDULLM_ROOT}/experiments/skill-dag/skillit}"
-MIXLAW_ROOT="${MIXLAW_ROOT:-${EDULLM_ROOT}/experiments/skill-dag/mixlaw}"
-VENV="${VENV:-${LADDER_RUN}/venv}"
+SUNET="${SUNET:-${USER:?set SUNET or USER}}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+MIXLAW_ROOT="${MIXLAW_ROOT:-$(cd "${SCRIPT_DIR}/../mixlaw" && pwd)}"
+
+RUN_NAME="${RUN_NAME:-skillit-probes-$(date +%Y%m%d-%H%M%S)}"
+RUN_DIR="${RUN_DIR:-/scratch/users/${SUNET}/agent-runs/${RUN_NAME}}"
+POOL_DIR="${POOL_DIR:-}"
+SKILLIT_ROOT="${SKILLIT_ROOT:-${SCRIPT_DIR}}"
+TRAIN_VENV="${TRAIN_VENV:-${VENV:-${LADDER_VENV:-}}}"
 MAX_PARALLEL="${MAX_PARALLEL:-}"
 ARRAY_TASKS="${ARRAY_TASKS:-0-6}"
 RESULTS_S3="${RESULTS_S3:-s3://edullm-checkpoints/skillit/probes}"
+RECIPE_WORK="${RECIPE_WORK:-${RUN_DIR}/recipe}"
 
-if [[ ! -d "${RUN_DIR}/slices" ]]; then
-  echo "missing slices under ${RUN_DIR}/slices (run submit_skillit_prepare_probes.sh first)" >&2
+: "${POOL_DIR:?Set POOL_DIR to an edullm-data staged working pool root}"
+if [[ -z "${TRAIN_VENV}" ]]; then
+  echo "Set TRAIN_VENV to a GPU Python env with torch + olmo-core (no hardcoded ladder path)." >&2
+  exit 2
+fi
+if [[ ! -x "${TRAIN_VENV}/bin/python" ]]; then
+  echo "missing GPU venv at ${TRAIN_VENV}" >&2
+  exit 2
+fi
+if [[ ! -f "${POOL_DIR}/edullm_data_source.json" ]]; then
+  echo "missing ${POOL_DIR}/edullm_data_source.json — stage from edullm-data first" >&2
+  exit 2
+fi
+if [[ ! -d "${RECIPE_WORK}" ]]; then
+  echo "missing recipe sidecars under ${RECIPE_WORK} (run submit_skillit_prepare_probes.sh first)" >&2
   exit 2
 fi
 if [[ ! -f "${SKILLIT_ROOT}/skillit_probe.sbatch" ]]; then
-  echo "missing ${SKILLIT_ROOT}/skillit_probe.sbatch (sync repo to ${EDULLM_ROOT} first)" >&2
-  exit 2
-fi
-if [[ ! -x "${VENV}/bin/python" ]]; then
-  echo "missing GPU venv at ${VENV}" >&2
+  echo "missing ${SKILLIT_ROOT}/skillit_probe.sbatch (sync repo first)" >&2
   exit 2
 fi
 
 mkdir -p "${RUN_DIR}/logs" "${RUN_DIR}/runs"
 
-# Stable probe order (matches probes.json mixtures[].run_name).
+WANDB_PROJECT="${WANDB_PROJECT:-skillit}"
+WANDB_ENTITY="${WANDB_ENTITY:-}"
+if [[ -f "${RUN_DIR}/wandb-session.env" ]]; then
+  WANDB_MODE="${WANDB_MODE:-online}"
+else
+  WANDB_MODE="${WANDB_MODE:-disabled}"
+fi
+
 cat > "${RUN_DIR}/probe_ids.txt" <<'EOF'
 probe_dclm
 probe_arxiv
@@ -57,19 +85,24 @@ if [[ "${ARRAY_TASKS}" == "0-6" && "${N_PROBES}" -ne 7 ]]; then
 fi
 
 for probe in $(cat "${RUN_DIR}/probe_ids.txt"); do
-  if [[ ! -f "${RUN_DIR}/slices/${probe}/paths_train.txt" ]]; then
-    echo "missing ${RUN_DIR}/slices/${probe}/paths_train.txt" >&2
+  if [[ ! -f "${RECIPE_WORK}/${probe}/mix_weights.json" ]]; then
+    echo "missing ${RECIPE_WORK}/${probe}/mix_weights.json" >&2
     exit 2
   fi
 done
 
 cat >> "${RUN_DIR}/env.sh" <<EOF
 
-# GPU probe array (appended $(date -Is))
-LADDER_RUN=${LADDER_RUN}
+# GPU probe array (appended $(date -Is 2>/dev/null || date))
+TRAIN_VENV=${TRAIN_VENV}
+POOL_DIR=${POOL_DIR}
+RECIPE_WORK=${RECIPE_WORK}
 RESULTS_S3=${RESULTS_S3}
 PROBE_ARRAY_TASKS=${ARRAY_TASKS}
 PROBE_MAX_PARALLEL=${MAX_PARALLEL}
+WANDB_PROJECT=${WANDB_PROJECT}
+WANDB_ENTITY=${WANDB_ENTITY}
+WANDB_MODE=${WANDB_MODE}
 EOF
 
 ARRAY_SPEC="${ARRAY_TASKS}"
@@ -77,15 +110,16 @@ if [[ -n "${MAX_PARALLEL}" && "${MAX_PARALLEL}" != "0" ]]; then
   ARRAY_SPEC="${ARRAY_TASKS}%${MAX_PARALLEL}"
 fi
 
-PROBE_JOB=$(sbatch --parsable --exclude=wheat-01 \
+PROBE_JOB=$(sbatch --parsable \
   --array="${ARRAY_SPEC}" \
   --job-name=skillit-probe \
   --chdir="${RUN_DIR}" \
-  --export=ALL,RUN_DIR="${RUN_DIR}",SKILLIT_ROOT="${SKILLIT_ROOT}",MIXLAW_ROOT="${MIXLAW_ROOT}",LADDER_RUN="${LADDER_RUN}",VENV="${VENV}",RESULTS_S3="${RESULTS_S3}" \
+  --export=ALL,RUN_DIR="${RUN_DIR}",SKILLIT_ROOT="${SKILLIT_ROOT}",MIXLAW_ROOT="${MIXLAW_ROOT}",TRAIN_VENV="${TRAIN_VENV}",VENV="${TRAIN_VENV}",POOL_DIR="${POOL_DIR}",RECIPE_WORK="${RECIPE_WORK}",RESULTS_S3="${RESULTS_S3}",WANDB_PROJECT="${WANDB_PROJECT}",WANDB_ENTITY="${WANDB_ENTITY}",WANDB_MODE="${WANDB_MODE}" \
   "${SKILLIT_ROOT}/skillit_probe.sbatch")
 
 echo "probe_array_job_id=${PROBE_JOB}"
 echo "${PROBE_JOB}" > "${RUN_DIR}/probe_array_job_id.txt"
-echo "RUN_DIR=${RUN_DIR}"
-echo "array=${ARRAY_SPEC} (1 GPU per task; tasks schedule independently)"
-echo "submitted skillit-probe array=${PROBE_JOB}"
+echo "RUN_DIR=${RUN_DIR} POOL_DIR=${POOL_DIR}"
+echo "TRAIN_VENV=${TRAIN_VENV}"
+echo "WANDB_PROJECT=${WANDB_PROJECT} WANDB_MODE=${WANDB_MODE}"
+echo "array=${ARRAY_SPEC}"

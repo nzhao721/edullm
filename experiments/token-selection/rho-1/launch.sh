@@ -10,10 +10,16 @@
 #   NPROC                 — torchrun nproc_per_node (default: # of visible GPUs, else 1)
 #   CUDA_VISIBLE_DEVICES  — physical GPU pin (required outside Slurm unless YAML sets it)
 #   CONFIG                — override YAML path
-#   RESUME=1              — resume from latest matching save-folder fingerprint
+#   RESUME=1              — fingerprint-gated resume; fetches from
+#                           s3://edullm-checkpoints/token-sel/rho-1/ when local empty
 #   TOKEN_SELECTION_SKIP_IDLE_CHECK=1 — skip idle GPU probe (Slurm sets this path too)
 #   TOKEN_SELECTION_TASK_LOSS_EVAL_SCRIPT — enqueue script for post-save task_loss
-#   TOKEN_SELECTION_REF_CACHE — shared DistCP→.pt cache (default: token-selection/.cache/refhq)
+#   TOKEN_SELECTION_REF_CACHE — DistCP→.pt cache (job scratch or shared; not durable)
+#   S3_EXPORT=0           — local-only smoke (not durable on ephemeral scratch)
+#
+# W&B (SmolLM2 protocol; additive to S3): project token-selection. Push
+# wandb-session.env via scripts/farmshare/push_wandb_session_to_farmshare.sh
+# "$RUN_DIR" (or set WANDB_SESSION_ENV). Local smoke: WANDB_MODE=disabled.
 #
 # Examples (from experiments/token-selection/):
 #   CUDA_VISIBLE_DEVICES=0 NPROC=1 OLMO_ROOT=/path/OLMo-core bash rho-1/launch.sh
@@ -90,6 +96,10 @@ print(f"runtime config -> {dst} (reference.load_path={lp!r}; auto-materialize if
 PY
 
 export TOKEN_SELECTION_TASK_LOSS_EVAL_SCRIPT="${TOKEN_SELECTION_TASK_LOSS_EVAL_SCRIPT:-${ARM_ROOT}/farmshare/enqueue_task_loss.sh}"
+
+_RHO_RUN_NAME="${RUN_NAME:-rho-1-regmix10b-v1}"
+# shellcheck disable=SC1091
+source "${TS_ROOT}/token_selection/scripts/wandb_env.sh" "rho-1" "${_RHO_RUN_NAME}"
 
 LAUNCH_ARGS=(--config "${RUNTIME_CFG}" --method "${METHOD}" --olmo-root "${OLMO_ROOT}" --launch)
 if [[ "${RESUME:-0}" == "1" ]]; then

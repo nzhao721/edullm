@@ -6,8 +6,8 @@
 #   ema.seed_mode=refhq + constant α=0.9985 (vs zero + α(t)=1−exp(−t/300)).
 #
 # Score: top-60% REL = L_hist − L_curr  (t0=0, selection from step 0)
-# α = 0.9985 constant ≈ 20% half-life on a 2384-step run
-#   (α^H = 1/2 ⇒ H = ln(0.5)/ln(0.9985) ≈ 462 ≈ 0.2 · 2384)
+# α = 0.9985 constant ≈ 20% half-life on a ~2360-step (9.9B) run
+#   (α^H = 1/2 ⇒ H = ln(0.5)/ln(0.9985) ≈ 462 ≈ 0.2 · 2360)
 #
 # Reference seed (EMA history only — not a frozen RHO ref):
 #   s3://edullm-checkpoints/olmo-370m/edullm-370M-refhq-5p5b/checkpoints/step1315/
@@ -42,15 +42,18 @@ reference:
   s3_uri: s3://edullm-checkpoints/olmo-370m/edullm-370M-refhq-5p5b/checkpoints/step1315/
   step: 1315
   planned_total_steps: 1314
-  dataset: s3://edullm-datasets/refhq/refhq-regmix-5p5b-v1/
+  # Provenance only: RefHQ was trained on published pretrain/refhq-regmix-5p5b.
+  dataset: pretrain/refhq-regmix-5p5b
 
 data:
-  tokens_s3: s3://edullm-datasets/regmix/regmix-10b/tokenized
-  tokenizer: allenai/dolma2-tokenizer
+  # Published+validated corpus (edullm_data.read.resolve_latest / dataset_paths).
+  dataset_id: pretrain/regmix-10b
+  tokenizer: allenai/dolma2-tokenizer  # same vocab as tokenizer/dolma2-bpe v1
   sequence_length: 2048
 
 s3:
-  dataset_bucket: edullm-datasets
+  # Train inputs resolve via data.dataset_id → s3://edullm-data/ (not this field).
+  dataset_bucket: edullm-data
   checkpoint_bucket: edullm-checkpoints
   # Checkpoints + results → s3://edullm-checkpoints/token-sel/rel-ema-refhq/
   prefix: token-sel/rel-ema-refhq
@@ -68,7 +71,8 @@ olmo_core:
   revision: 99e0009ed67679c90da970ec5ba439c9459e3757
 
 train:
-  max_tokens: 10000000000
+  # One epoch under published train (~9.989B catalog rows); 9.9B → 2360 steps at GBS.
+  max_tokens: 9900000000
   global_batch_size: 4194304
   lr: 4.0e-4
   lr_alpha_f: 0.1
@@ -90,7 +94,7 @@ train:
   # Informational only; torchrun --nproc_per_node is the authority at launch.
   num_gpus: null
   num_workers: 8
-  # Permanent ladder via shared checkpointer helper: {0,125,…,2250,2384} (skip 2375).
+  # Permanent ladder via shared checkpointer helper: {0,125,…,2125,2360} (skip 2250).
   checkpoint_every_steps: 125
   checkpoint_keep_last: null
   pre_train_checkpoint: true

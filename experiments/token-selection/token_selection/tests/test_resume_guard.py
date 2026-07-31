@@ -203,6 +203,101 @@ def test_resume_refused_without_prior_fingerprint(tmp_path):
         _prepare_run_dir(_plan(tmp_path / "full"), resume=True)
 
 
+def test_ensure_resume_artifacts_skips_when_fingerprint_local(tmp_path, monkeypatch):
+    from token_selection.scripts.train_olmo_template import _ensure_resume_artifacts
+
+    save = tmp_path / "rho_excess"
+    plan = _plan(save)
+    _launch_fresh(plan)
+    called = {"n": 0}
+
+    def _boom(*_a, **_k):
+        called["n"] += 1
+        raise AssertionError("should not fetch when local fingerprint exists")
+
+    monkeypatch.setattr(
+        "token_selection.olmo_ext.s3_export.fetch_arm_method_checkpoints",
+        _boom,
+    )
+    cfg = {"arm": "rho-1", "s3": {"prefix": "token-sel/rho-1", "checkpoint_bucket": "edullm-checkpoints"}}
+    plan["metrics_dir"] = str(tmp_path / "metrics" / "rho_excess")
+    _ensure_resume_artifacts(plan, cfg, "rho_excess")
+    assert called["n"] == 0
+
+
+def test_ensure_resume_artifacts_fetches_from_s3_when_empty(tmp_path, monkeypatch):
+    from token_selection.scripts.train_olmo_template import _ensure_resume_artifacts
+
+    save = tmp_path / "rho_excess"
+    plan = _plan(save)
+    plan["metrics_dir"] = str(tmp_path / "metrics" / "rho_excess")
+    cfg = {
+        "arm": "rho-1",
+        "s3": {
+            "prefix": "token-sel/rho-1",
+            "checkpoint_bucket": "edullm-checkpoints",
+        },
+    }
+    fetches = {"ckpt": 0, "metrics": 0}
+
+    def _fetch_ckpt(arm, local, *, method=None, enabled=None, raise_on_error=True):
+        fetches["ckpt"] += 1
+        assert arm == "rho-1"
+        assert method == "rho_excess"
+        Path(local).mkdir(parents=True, exist_ok=True)
+        (Path(local) / "run_fingerprint.json").write_text(
+            json.dumps(_run_fingerprint(plan)), encoding="utf-8"
+        )
+        (Path(local) / "step125").mkdir()
+        return True
+
+    def _fetch_metrics(*_a, **_k):
+        fetches["metrics"] += 1
+        return True
+
+    monkeypatch.setattr(
+        "token_selection.olmo_ext.s3_export.fetch_arm_method_checkpoints",
+        _fetch_ckpt,
+    )
+    monkeypatch.setattr(
+        "token_selection.olmo_ext.s3_export.fetch_arm_method_metrics",
+        _fetch_metrics,
+    )
+    _ensure_resume_artifacts(plan, cfg, "rho_excess")
+    assert fetches["ckpt"] == 1
+    assert fetches["metrics"] == 1
+    assert (save / "run_fingerprint.json").is_file()
+
+
+def test_ensure_resume_artifacts_fails_closed_without_remote_fingerprint(
+    tmp_path, monkeypatch
+):
+    from token_selection.scripts.train_olmo_template import _ensure_resume_artifacts
+
+    save = tmp_path / "rho_excess"
+    plan = _plan(save)
+    plan["metrics_dir"] = str(tmp_path / "metrics" / "rho_excess")
+    cfg = {
+        "arm": "rho-1",
+        "s3": {"prefix": "token-sel/rho-1", "checkpoint_bucket": "edullm-checkpoints"},
+    }
+
+    def _fetch_empty(arm, local, *, method=None, enabled=None, raise_on_error=True):
+        Path(local).mkdir(parents=True, exist_ok=True)
+        return True
+
+    monkeypatch.setattr(
+        "token_selection.olmo_ext.s3_export.fetch_arm_method_checkpoints",
+        _fetch_empty,
+    )
+    monkeypatch.setattr(
+        "token_selection.olmo_ext.s3_export.fetch_arm_method_metrics",
+        lambda *_a, **_k: True,
+    )
+    with pytest.raises(SystemExit, match="Ephemeral scratch"):
+        _ensure_resume_artifacts(plan, cfg, "rho_excess")
+
+
 def _experiment_cfg() -> dict:
     return {
         "run_id": "rho-excess-10b-scratch-v1",
@@ -211,15 +306,17 @@ def _experiment_cfg() -> dict:
         "t0_frac": 0.02,
         "alpha_start": 0.99,
         "alpha_end": 0.98,
-        "data": {
-            "tokens_s3": "s3://bucket/tokens",
-            "tokenizer": "allenai/OLMo-2-0425-1B",
-            "sequence_length": 8,
-        },
+        "arm": "rho-1",
         "s3": {
-            "dataset_bucket": "edullm-datasets",
+            "dataset_bucket": "edullm-data",
             "checkpoint_bucket": "edullm-checkpoints",
             "prefix": "token-sel/rho-1",
+        },
+        "data": {
+            "dataset_id": "pretrain/regmix-10b",
+            "tokens_s3": "s3://edullm-data/pretrain/regmix-10b/v1/tokens",
+            "tokenizer": "allenai/OLMo-2-0425-1B",
+            "sequence_length": 8,
         },
         "model": {
             "name": "OLMo-2-370M-scratch",
@@ -260,7 +357,7 @@ def _materialize_run_inputs(out: Path, cfg: dict) -> None:
     )
 
 
-def test_dataset_cache_lives_outside_the_save_folder(tmp_path):
+def test_dataset_cache_lives_outside_the_save_folder(tmp_path, monkeypatch):
     """The build writes a dataset cache; inside save_folder it would block relaunch.
 
     The fresh-scratch guard rejects a non-empty save folder and --resume rejects a
@@ -271,6 +368,10 @@ def test_dataset_cache_lives_outside_the_save_folder(tmp_path):
     out = tmp_path / "run"
     out.mkdir()
     _materialize_run_inputs(out, cfg)
+    monkeypatch.setattr(
+        "token_selection.scripts.train_olmo_template.resolve_tokens_s3",
+        lambda _cfg, **_k: "s3://edullm-data/pretrain/regmix-10b/v1/tokens",
+    )
 
     plan = build_plan(cfg, method="rho_excess", out=out)
     save_folder = Path(plan["save_folder"])

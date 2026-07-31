@@ -125,35 +125,58 @@ class TaskLossEvalCallback(Callback if _HAS_OLMO else object):  # type: ignore[m
             str(self.device_eval_batch_size),
         ]
 
-    def _maybe_launch(self, step: int) -> None:
-        if not self.enabled or self._rank != 0:
-            return
-        if os.environ.get("TASK_LOSS_EVAL", "1").strip().lower() in {
+    def _task_loss_eval_wanted(self) -> bool:
+        if not self.enabled:
+            return False
+        return os.environ.get("TASK_LOSS_EVAL", "1").strip().lower() not in {
             "0",
             "false",
             "no",
             "off",
-        }:
+        }
+
+    def _maybe_launch(self, step: int) -> None:
+        """On each permanent ladder step: durable S3 export (± optional task_loss).
+
+        Checkpoint upload must not depend on task-loss eval being enabled —
+        ephemeral scratch is wiped, so ``TASK_LOSS_EVAL=0`` still needs S3.
+        """
+        if self._rank != 0:
             return
         step = int(step)
         if step in self._launched:
             return
         if not is_permanent_checkpoint_step(step, self.total_steps, self.interval):
             return
+
+        eval_wanted = self._task_loss_eval_wanted()
+        s3_wanted = bool(self.s3_export and self.arm)
+        if not eval_wanted and not s3_wanted:
+            return
+
         self._launched.add(step)
         step_dir = self._step_dir(step)
         out_path = self._out_path(step)
         self.results_dir.mkdir(parents=True, exist_ok=True)
-        if self.s3_export and self.arm:
-            # Best-effort: upload the step dir once DistCP/state.pt lands (waiter
-            # also re-exports after ready). Immediate call covers state.pt trainers.
+        if s3_wanted:
+            # Best-effort: upload once DistCP/state.pt lands (waiter re-exports).
+            # Immediate call covers state.pt trainers.
             export_arm_checkpoint(self.arm, step_dir, method=self.save_folder.name)
-        cmd = self._build_cmd(step, step_dir, out_path)
-        # Wait for async DistCP finalize, then run eval (detached from train PG).
+            fp = self.save_folder / "run_fingerprint.json"
+            if fp.is_file():
+                from token_selection.olmo_ext.s3_export import export_arm_run_fingerprint
+
+                export_arm_run_fingerprint(
+                    self.arm, fp, method=self.save_folder.name
+                )
+
+        cmd = self._build_cmd(step, step_dir, out_path) if eval_wanted else []
+        # Wait for async DistCP finalize, then export (± eval) off the train PG.
         arm = self.arm
         method = self.save_folder.name
-        s3_export = self.s3_export and bool(arm)
+        s3_export = s3_wanted
         results_dir = self.results_dir
+        run_eval = eval_wanted
         waiter = f"""
 import json, os, subprocess, sys, time
 from pathlib import Path
@@ -164,6 +187,7 @@ cmd = {cmd!r}
 arm = {arm!r}
 method = {method!r}
 s3_export = {s3_export!r}
+run_eval = {run_eval!r}
 deadline = time.time() + 3600
 ready = lambda: (
     (step_dir / "model_and_optim" / ".metadata").is_file()
@@ -177,10 +201,13 @@ if not ready():
     sys.exit(2)
 if s3_export and arm:
     try:
-        from token_selection.olmo_ext.s3_export import export_arm_checkpoint, export_arm_task_loss_dir
+        from token_selection.olmo_ext.s3_export import export_arm_checkpoint
         export_arm_checkpoint(arm, step_dir, method=method)
     except Exception as exc:
         print(json.dumps({{"status": "s3_ckpt_export_warn", "error": str(exc)}}), flush=True)
+if not run_eval:
+    print(json.dumps({{"status": "s3_export_only", "step_dir": str(step_dir)}}), flush=True)
+    sys.exit(0)
 if out_path.is_file():
     print(json.dumps({{"status": "skip_exists", "out": str(out_path)}}), flush=True)
     if s3_export and arm:
@@ -209,9 +236,14 @@ if s3_export and arm:
         print(json.dumps({{"status": "s3_task_loss_export_warn", "error": str(exc)}}), flush=True)
 raise SystemExit(rc)
 """
-        log_path = self.results_dir / f"step{step}_task_loss_launch.log"
+        log_name = (
+            f"step{step}_task_loss_launch.log"
+            if eval_wanted
+            else f"step{step}_s3_export.log"
+        )
+        log_path = self.results_dir / log_name
         with open(log_path, "a", encoding="utf-8") as log_f:
-            subprocess.Popen(  # noqa: S603 — intentional async eval handoff
+            subprocess.Popen(  # noqa: S603 — intentional async handoff
                 [sys.executable, "-c", waiter],
                 stdout=log_f,
                 stderr=subprocess.STDOUT,
@@ -221,13 +253,16 @@ raise SystemExit(rc)
         print(
             json.dumps(
                 {
-                    "status": "task_loss_spawned",
+                    "status": (
+                        "task_loss_spawned" if eval_wanted else "durable_s3_export_spawned"
+                    ),
                     "step": step,
                     "checkpoint": str(step_dir),
-                    "out": str(out_path),
+                    "out": str(out_path) if eval_wanted else None,
                     "log": str(log_path),
                     "arm": self.arm,
-                    "s3_export": self.s3_export and bool(self.arm),
+                    "s3_export": s3_wanted,
+                    "task_loss_eval": eval_wanted,
                 }
             ),
             flush=True,

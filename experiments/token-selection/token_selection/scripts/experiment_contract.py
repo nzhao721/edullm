@@ -19,33 +19,37 @@ from token_selection.olmo_ext.token_io import TOKEN_DTYPE, count_tokens, dtype_f
 TOKENS_PLACEHOLDER = "REPLACE_ME"
 
 TOKEN_MANIFEST_SCHEMA = """\
-tokens/manifest.json is DERIVED from the corpus in S3 by
-`python -m token_selection.scripts.build_token_manifest`. It is not hand-written and
-it does not live in the bucket, because the corpus ships per-domain sidecars instead
-of a single manifest. It must be a JSON object shaped like:
+tokens/manifest.json is written locally when staging a published edullm-data corpus
+(`token_selection.scripts.edullm_data_tokens.ensure_train_tokens`) from
+`dataset_paths` / `resolve_latest`. It must be a JSON object shaped like:
 
   {
-    "n_tokens": 10004807041,                   # total tokens across every shard
+    "n_tokens": 9989799834,                    # total tokens across every train shard
     "dtype": "uint32",                         # optional; defaults to uint32
     "tokenizer": "allenai/dolma2-tokenizer",   # optional; cross-checked vs data.tokenizer
-    "eos_token_id": 100257,                    # optional; informational
+    "dataset_id": "pretrain/regmix-10b",
+    "dataset_version": "v1",
     "shards": [
-      {"path": "algebraic-stack/algebraic-stack.npy", "n_tokens": 615239017},
-      {"path": "arxiv/arxiv.npy",                     "n_tokens": 2500162905}
+      {"path": "algebraic-stack/train-00000.u32le.bin", "n_tokens": 268435456},
+      {"path": "arxiv/train-00000.u32le.bin",           "n_tokens": 268435456}
     ]
   }
 
-Shard paths are relative to tokens/ and MAY contain sub-directories: the corpus
-stores one shard per domain at tokenized/<domain>/<domain>.npy, so there is no
-flat tokens_NNNN.npy naming to rely on.
-
-Shard files are RAW HEADERLESS arrays (numpy ``ndarray.tofile`` / ``np.memmap``),
-not ``np.save`` output, despite the .npy suffix. OLMo-core's NumpyFSLDataset reads
-them with np.frombuffer over a byte range and derives the sequence count from the
-file's byte size, so a 128-byte .npy header would both corrupt the tokens and
-miscount sequences. The .npy suffix is OLMo-core's naming convention for these raw
-files, and the corpus follows it.\
+Shard paths are relative to tokens/ and MAY contain sub-directories. Published
+edullm-data pretrain corpora use raw headerless ``.u32le.bin`` shards (profile
+pretrain-tokens/v1). Legacy local trees may still use headerless ``.npy`` files
+with the same byte layout. OLMo-core's NumpyFSLDataset reads either with
+np.frombuffer over a byte range and derives the sequence count from the file's
+byte size, so a real NumPy ``.npy`` header would both corrupt the tokens and
+miscount sequences.\
 """
+
+_SHARD_SUFFIXES = (".u32le.bin", ".npy")
+
+
+def _is_token_shard(path: Path) -> bool:
+    name = path.name
+    return any(name.endswith(suffix) for suffix in _SHARD_SUFFIXES)
 
 
 def _relative_shard_path(name: str, *, manifest_path: Path) -> str:
@@ -89,8 +93,9 @@ def validate_scratch_config(
     local ``reference.load_path`` **or** ``reference.s3_uri`` (materialized at launch).
     When ``method='rel_ema'`` with ``ema.seed_mode='refhq'``, same for RefHQ seed.
     When ``method='learnability'``, require early/late local paths **or** S3 provenance
-    (``s3_uri`` / ``s3_uris`` + ``steps``). Smoke configs may omit paths and supply
-    in-memory frozen twins instead.
+    (``s3_uri`` / ``s3_uris`` + ``steps``). When ``method='middle_ppl'``, require
+    ``reference.load_path`` **or** late-avg ``reference.s3_uris`` + ``reference.steps``.
+    Smoke configs may omit paths and supply in-memory frozen twins instead.
     """
     from token_selection.olmo_ext.refhq_materialize import reference_source_ok
 
@@ -122,7 +127,7 @@ def validate_scratch_config(
                 f"ema.seed_mode / ema_seed_mode={seed_mode!r} unsupported; "
                 "expected 'zero' or 'refhq'"
             )
-    if resolved in ("rho_excess", "rel_ema", "learnability"):
+    if resolved in ("rho_excess", "rel_ema", "learnability", "middle_ppl"):
         if not reference_source_ok(cfg, method=resolved):
             if resolved == "rho_excess":
                 raise ValueError(
@@ -133,6 +138,11 @@ def validate_scratch_config(
                 raise ValueError(
                     "rel_ema with ema.seed_mode='refhq' requires reference.load_path "
                     "or reference.s3_uri (auto-materialized at --launch)"
+                )
+            if resolved == "middle_ppl":
+                raise ValueError(
+                    "middle_ppl requires reference.load_path or reference.s3_uris/steps "
+                    "(late-avg RefHQ; auto-materialized at --launch)"
                 )
             raise ValueError(
                 "learnability requires reference.early/late load_path or S3 provenance "
@@ -152,13 +162,13 @@ def validate_token_manifest(
     size, so a directory glob would silently absorb a stray shard and a mis-formatted
     shard would be read as tokens without complaint. This verifies, in order, that the
     manifest declares ``n_tokens`` and a non-empty ``shards`` list, that the listed files
-    and the ``.npy`` files on disk are the same set, that every shard's byte size is a
+    and the token shard files on disk are the same set, that every shard's byte size is a
     whole number of tokens, and that the observed token totals match what the manifest
     claims. The byte-size check is what catches a shard written with ``np.save``: its
     128-byte header shifts the token count by ``header_bytes // itemsize``.
 
     ``expected_tokenizer`` is compared against the tokenizer the manifest inherited from
-    the corpus sidecars. That pairing is load-bearing: the tokenizer decides
+    the published corpus. That pairing is load-bearing: the tokenizer decides
     ``padded_vocab_size()`` and hence the embedding matrix, so training a vocab built for
     one tokenizer on ids emitted by another is an out-of-range index, not a bad score.
     """
@@ -190,15 +200,18 @@ def validate_token_manifest(
     missing = [name for name in listed if not (tokens_dir / name).exists()]
     if missing:
         raise ValueError(f"Manifest lists shards absent from {tokens_dir}: {missing}")
-    # rglob, not a flat tokens_*.npy glob: the corpus nests one shard per domain under
-    # tokens/<domain>/<domain>.npy, and a stray shard in any sub-directory is still a
-    # stray shard the dataset must not silently absorb.
-    on_disk = {p.relative_to(tokens_dir).as_posix() for p in tokens_dir.rglob("*.npy")}
+    # Nested domain shards (``.u32le.bin`` or legacy headerless ``.npy``); a stray shard
+    # in any sub-directory is still a stray shard the dataset must not silently absorb.
+    on_disk = {
+        p.relative_to(tokens_dir).as_posix()
+        for p in tokens_dir.rglob("*")
+        if p.is_file() and _is_token_shard(p)
+    }
     extras = sorted(on_disk - set(listed))
     if extras:
         raise ValueError(
             f"Unlisted token shard(s) present in {tokens_dir}: {extras}. The training set "
-            "must equal the manifest; remove stray shards or re-run build_token_manifest."
+            "must equal the manifest; remove stray shards or re-run ensure_train_tokens."
         )
 
     if expected_tokenizer is not None:

@@ -22,10 +22,24 @@ from typing import Any, Dict, Mapping, MutableMapping, Optional, Sequence, Union
 
 log = logging.getLogger("token_selection.refhq_materialize")
 
-DEFAULT_REFHQ_BASE = (
+# Durable layout written by ``reference/train_olmo3_370m_refhq.py`` (NAME default).
+DEFAULT_REFERENCE_ARM_RUN = "refhq-regmix-5p5b-v1"
+DEFAULT_REFERENCE_ARM_BASE = (
+    f"s3://edullm-checkpoints/token-sel/reference/checkpoints/{DEFAULT_REFERENCE_ARM_RUN}"
+)
+# Final ladder step for published RefHQ rows 5_509_020_202 // GBS 4_194_304.
+DEFAULT_REFERENCE_ARM_FINAL_STEP = 1313
+DEFAULT_REFERENCE_ARM_FINAL = (
+    f"{DEFAULT_REFERENCE_ARM_BASE}/step{DEFAULT_REFERENCE_ARM_FINAL_STEP}/"
+)
+
+# Pre-token-sel layout still used by rho / REL / learnability YAML fallbacks until
+# those configs are retargeted to token-sel/reference/.
+LEGACY_REFHQ_BASE = (
     "s3://edullm-checkpoints/olmo-370m/edullm-370M-refhq-5p5b/checkpoints"
 )
-DEFAULT_STEP1315 = f"{DEFAULT_REFHQ_BASE}/step1315/"
+DEFAULT_REFHQ_BASE = LEGACY_REFHQ_BASE
+DEFAULT_STEP1315 = f"{LEGACY_REFHQ_BASE}/step1315/"
 _BAD = frozenset({"", "null", "None", "REPLACE_ME"})
 
 
@@ -387,6 +401,28 @@ def ensure_reference_paths(
             late["load_path"] = str(path)
             out["reference.late.load_path"] = str(path)
 
+    if resolved == "middle_ppl":
+        if _local_path_ok(ref.get("load_path")):
+            out["reference.load_path"] = str(Path(str(ref["load_path"])).resolve())
+        else:
+            steps = ref.get("steps") or [1000, 1125, 1315]
+            steps_i = [int(s) for s in steps]
+            uris = ref.get("s3_uris")
+            if not uris:
+                uris = [f"{DEFAULT_REFHQ_BASE}/step{s}/" for s in steps_i]
+            if len(list(uris)) != len(steps_i):
+                raise ValueError(
+                    "reference.s3_uris length must match reference.steps for middle_ppl"
+                )
+            path = ensure_late_average_pt(
+                [str(u) for u in uris],
+                steps=steps_i,
+                cache_dir=cache,
+                force=force,
+            )
+            ref["load_path"] = str(path)
+            out["reference.load_path"] = str(path)
+
     return out
 
 
@@ -425,4 +461,10 @@ def reference_source_ok(cfg: Mapping[str, Any], *, method: Optional[str] = None)
             or bool(late.get("steps"))
         )
         return early_ok and late_ok
+    if resolved == "middle_ppl":
+        if _declared_local_path(ref.get("load_path")):
+            return True
+        steps = ref.get("steps") or [1000, 1125, 1315]
+        uris = ref.get("s3_uris")
+        return bool(steps) and (bool(uris) or len(steps) > 0)
     return True

@@ -3,16 +3,16 @@
 
 Single source of truth for:
   * the exact DataDecide 60M geometry / optimizer / batch schedule,
-  * the 7 RegMix domains and the S3 layout of the tokenized 10B corpus,
-  * how a mixture weight vector becomes an exact per-domain *sequence* count,
+  * the 7 RegMix domains and edullm-data corpus id / durable S3 layout,
+  * how a mixture weight vector becomes a peak per-domain *sequence* count
+    (largest-remainder) when sizing a shared working pool,
   * the OLMo-ladder task-loss (bits-per-byte) evaluation set.
 
-Mixture proportions are realized purely through **token counts on disk**: OLMo's
-``MemMapDataset`` concatenates every path into one index of non-overlapping
-``seq_len`` chunks and the sampler shuffles that index, so one epoch over a set of
-per-domain slices reproduces the mixture exactly with no repeats and no
-importance weighting. Everything downstream therefore depends on allocating
-sequences per domain precisely.
+Training realizes mixture weights **only** via ``DomainMixtureStream``
+(domain-stratified sampling over a shared peak-sized pool staged from
+``edullm-data``). Peak pool sizes still use ``allocate_sequences`` so every
+recipe mix fits. Deprecated ``build_mixture_data.py`` slice materialization is
+**not supported** for new runs (kept only for historical / preflight helpers).
 """
 from __future__ import annotations
 
@@ -92,12 +92,10 @@ PAD_TOKEN_ID = 100_277
 MEMMAP_DTYPE = "uint32"
 BYTES_PER_TOKEN = 4
 
-# --- OLMoHQ 30B pool (edullm-datasets/olmo100b) ---------------------------------
-# Raw document shards live under olmo-mix-1124-30b/data/<domain>/*.json.gz.
-# There is no pre-tokenized copy on this bucket; prepare_data.sh builds a
-# *working pool* of uint32 memmaps sized to the peak per-domain demand of the
-# 24 mixtures (not the full ~95B-token pool), then build_mixture_data.py draws
-# random sequence-aligned blocks from those memmaps.
+# --- OLMoHQ / olmo-mix domain pool ---------------------------------------------
+# DataDecide-60M training stages a peak working pool from the published,
+# validated edullm-data corpus (see EDULLM_DATA_DATASET_ID). Domain labels are
+# ``entry.labels.source``. Never train from ``s3://edullm-datasets/``.
 DOMAINS: tuple[str, ...] = (
     "dclm",
     "arxiv",
@@ -108,9 +106,20 @@ DOMAINS: tuple[str, ...] = (
     "wiki",
 )
 
+EDULLM_DATA_DATASET_ID = "pretrain/olmo-127b"
+EDULLM_DATA_SOURCE_LABEL = "source"
+POOL_PROVENANCE_NAME = "edullm_data_source.json"
+
+# Durable artifacts for the 24×60M pilot (scratch is ephemeral).
+CHECKPOINT_BUCKET = "edullm-checkpoints"
+MIXLAW_60M_S3_ROOT = "mixlaw/60m-pilot"
+DEFAULT_RESULTS_S3 = f"s3://{CHECKPOINT_BUCKET}/{MIXLAW_60M_S3_ROOT}"
+
+# Legacy raw-shard inventory URI for pre-edullm-data helpers only
+# (``select_and_fetch_shards.py``). DataDecide-60M must not read this.
 OLMOHQ_S3 = "s3://edullm-datasets/olmo100b/olmo-mix-1124-30b"
 OLMOHQ_DATA_PREFIX = "data"
-# Local layout after prepare: tokenized/<domain>/<domain>.npy
+# Local layout after stage: tokenized/<domain>/<domain>.npy
 TOKENIZED_PREFIX = "tokenized"
 
 # Tokens available per domain in the olmohq upsample (user inventory / plan summary).
@@ -323,8 +332,8 @@ def load_mixtures(path: Path | None = None) -> list[Mixture]:
 def token_budget(tokens_per_param: float) -> tuple[int, int, int]:
     """Return (total_sequences, total_steps, total_tokens) for a token/param ratio.
 
-    Sequences are rounded *down* to a whole number of optimizer steps so every
-    run is exactly one epoch over its slices with no partial final batch.
+    Sequences are rounded *down* to a whole number of optimizer steps so the
+    token budget maps to an exact step count (no partial final batch).
     """
     if tokens_per_param <= 0:
         raise SystemExit("tokens_per_param must be > 0")

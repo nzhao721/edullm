@@ -7,16 +7,23 @@
 #       SUBMIT_CMD='echo would-submit' bash submit_matrix.sh
 #       SUBMIT_CMD='sbatch my_template.sbatch' bash submit_matrix.sh   # caller owns the template
 #
+# Ephemeral runtime: set a fresh job-scoped RUN_DIR (or SAVE_ROOT/PROGRESS_ROOT
+# under it). Scratch starts empty and is wiped after the job. Data stages from
+# s3://edullm-data/; durable checkpoints land on:
+#   s3://edullm-checkpoints/curriculum/<arm_id>/checkpoints
+#   s3://edullm-checkpoints/curriculum/<arm_id>/progress
+# and W&B project "curriculum" (SmolLM protocol; push wandb-session.env to RUN_DIR).
+#
 # Shared env expected by launch_arm.sh (plus per-arm overrides below):
 #   SAVE_ROOT           parent of per-arm dirs; SAVE_FOLDER=$SAVE_ROOT/<arm_id>/checkpoints
 #   PROGRESS_ROOT       parent of per-arm dirs; PROGRESS_DIR=$PROGRESS_ROOT/<arm_id>/progress
-#   TRAIN_PATHS_FILE    control flat memmap list
-#   CURRICULUM_INDEX    curriculum index root
-#   NPROC, DEVICE_BATCH_SIZE, SEED, LR_ALPHA_F, EXTRA_ARGS  (optional)
-#
-# Local sync mirrors S3 layout:
-#   s3://edullm-checkpoints/curriculum/<arm_id>/checkpoints
-#   s3://edullm-checkpoints/curriculum/<arm_id>/progress
+#                       (metrics default to $PROGRESS_ROOT/<arm_id>/metrics)
+#   RUN_DIR             job scratch root with aws-session.env + wandb-session.env
+#   WANDB_PROJECT       default curriculum; WANDB_MODE default online
+#   TRAIN_DATASET_ID    default pretrain/regmix-10b (edullm-data)
+#   DATA_CACHE_DIR / EDULLM_DATA_CACHE  job-scoped staging root (fetch-if-missing)
+#   TRAIN_PATHS_FILE / CURRICULUM_INDEX  optional THIS-job staged overrides
+#   NPROC, DEVICE_BATCH_SIZE, SEED, LR_ALPHA_F, EXTRA_ARGS, FRESH, LOAD_PATH  (optional)
 #
 # Arm IDs (17):
 #   control
@@ -25,12 +32,10 @@
 #   warmup-cr     warmup-flesch     warmup-mtld     warmup-learn
 #   interleave-cr interleave-flesch interleave-mtld interleave-learn
 #
-# Optional post-hoc EMA (after training, per arm; task-loss default on):
+# Optional post-hoc EMA (after pulling checkpoints from S3 into a work dir):
 #   python experiments/curriculum/ema_merge_checkpoints.py \
 #     --checkpoints-root "$SAVE_ROOT/<arm_id>/checkpoints" \
 #     --arm-id <arm_id>
-#   # skip eval: add --no-task-loss
-#   # all 17: for arm in control linear10-cr ...; do ... --arm-id "$arm"; done
 
 set -euo pipefail
 
@@ -77,22 +82,31 @@ if [[ -z "${SUBMIT_CMD:-}" ]]; then
   cat <<'EOF'
 
 No SUBMIT_CMD set — matrix printed only.
-To drive launches, set SAVE_ROOT / PROGRESS_ROOT / data paths and e.g.:
+To drive launches on an ephemeral job scratch (data from edullm-data):
 
-  export SAVE_ROOT=/scratch/curriculum
-  export PROGRESS_ROOT=/scratch/curriculum-progress
-  export TRAIN_PATHS_FILE=/data/regmix/paths_train.txt
-  export CURRICULUM_INDEX=/data/regmix/curriculum
+  export RUN_DIR="${TMPDIR:-/tmp}/curriculum-job-$$"
+  mkdir -p "$RUN_DIR"
+  export SAVE_ROOT="$RUN_DIR/arms"
+  export PROGRESS_ROOT="$RUN_DIR/progress"
+  export DATA_CACHE_DIR="$RUN_DIR/edullm-data-cache"
+  export TRAIN_DATASET_ID=pretrain/regmix-10b
   export NPROC=1
+  # FarmShare: push aws-session.env + wandb-session.env into RUN_DIR first
+  #   bash scripts/farmshare/push_aws_session_to_farmshare.sh "$RUN_DIR"
+  #   bash scripts/farmshare/push_wandb_session_to_farmshare.sh "$RUN_DIR"
+  export WANDB_PROJECT=curriculum
+  export WANDB_MODE=online
   export SUBMIT_CMD='bash'   # or an AWS/slurm wrapper that runs the given command
   bash experiments/curriculum/launch/submit_matrix.sh
+
+Durable artifacts: s3://edullm-checkpoints/curriculum/<arm_id>/ + W&B project curriculum.
 
 EOF
   exit 0
 fi
 
-: "${SAVE_ROOT:?SAVE_ROOT is required when SUBMIT_CMD is set}"
-: "${PROGRESS_ROOT:?PROGRESS_ROOT is required when SUBMIT_CMD is set}"
+: "${SAVE_ROOT:?SAVE_ROOT is required when SUBMIT_CMD is set (job-scoped)}"
+: "${PROGRESS_ROOT:?PROGRESS_ROOT is required when SUBMIT_CMD is set (job-scoped)}"
 
 for entry in "${ARMS[@]}"; do
   IFS='|' read -r ARM_ID PACING METRIC <<<"${entry}"
@@ -101,10 +115,8 @@ for entry in "${ARMS[@]}"; do
   export PROGRESS_DIR="${PROGRESS_ROOT}/${ARM_ID}/progress"
   if [[ "${PACING}" == "control" ]]; then
     unset DIFFICULTY_METRIC || true
-    : "${TRAIN_PATHS_FILE:?TRAIN_PATHS_FILE required}"
   else
     export DIFFICULTY_METRIC="${METRIC}"
-    : "${CURRICULUM_INDEX:?CURRICULUM_INDEX required}"
   fi
   echo "[submit_matrix] ${SUBMIT_CMD} ${LAUNCH}  # ${ARM_ID}"
   # SUBMIT_CMD receives the launch script path; wrappers may sbatch/torchrun around it.

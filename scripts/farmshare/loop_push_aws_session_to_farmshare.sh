@@ -1,13 +1,12 @@
 #!/usr/bin/env bash
 # Periodically mint laptop AWS credentials and push to FarmShare run dirs.
-# Prefer this over FarmShare-side sb-aws-creds login (which does not work).
 set -Eeuo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-INTERVAL="${INTERVAL:-1200}"
+INTERVAL="${INTERVAL:-600}"
 LOG="${LOG:-/tmp/farmshare-aws-session-push.log}"
 
 if [[ $# -lt 1 ]]; then
-  echo "usage: INTERVAL=1200 $0 RUN_DIR [RUN_DIR...]" >&2
+  echo "usage: INTERVAL=600 $0 RUN_DIR [RUN_DIR...]" >&2
   exit 2
 fi
 

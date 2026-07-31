@@ -50,10 +50,10 @@ echo "local_mint_ok key=...${KEY_SUFFIX}"
 
 for RUN in "$@"; do
   ssh -S "$SOCK" -o BatchMode=yes "$HOST" "mkdir -p '$RUN' && chmod 700 '$RUN'"
-  # Atomic replace on remote
-  scp -o "ControlPath=$SOCK" -o BatchMode=yes "$LOCAL_ENV" "$HOST:$RUN/aws-session.env.tmp"
+  # Stream via SSH (more reliable than scp + ControlPath on this host)
   ssh -S "$SOCK" -o BatchMode=yes "$HOST" \
-    "chmod 600 '$RUN/aws-session.env.tmp' && mv -f '$RUN/aws-session.env.tmp' '$RUN/aws-session.env' && chmod 600 '$RUN/aws-session.env'"
+    "cat > '$RUN/aws-session.env.tmp' && chmod 600 '$RUN/aws-session.env.tmp' && mv -f '$RUN/aws-session.env.tmp' '$RUN/aws-session.env' && chmod 600 '$RUN/aws-session.env'" \
+    < "$LOCAL_ENV"
   ssh -S "$SOCK" -o BatchMode=yes "$HOST" bash <<EOF
 set -Eeuo pipefail
 set +u

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Plain CE control pretraining on RegMix 10B (token-selection baseline).
+"""Random 60% keep-rate control pretraining on RegMix 10B (token-selection baseline).
 
 Architecture matches RefHQ CE exactly (``reference/train_olmo3_370m_refhq.py``):
 
@@ -10,11 +10,22 @@ Architecture matches RefHQ CE exactly (``reference/train_olmo3_370m_refhq.py``):
   * HSDP bf16 train module; world size from torchrun (no hardcoded GPU count)
 
 Permanent checkpoint ladder (shared helper): step 0, every 125, final;
-omit last on-grid if within 125 of final (2384 → skip 2375).
+omit last on-grid if within 125 of final (2360 → skip 2250).
 Post-save hook launches full 20-label OLMo-ladder task_loss_bpb eval.
 
-Data: s3://edullm-datasets/regmix/regmix-10b/ (local memmap paths via CLI).
-Does **not** call AWS.
+Ephemeral runtime: scratch may start empty and be wiped after the job. Data is
+resolved from published+validated ``pretrain/regmix-10b`` on ``s3://edullm-data/``
+via ``edullm_data.read.resolve_latest`` + ``dataset_paths``; rank 0 stages
+``.u32le.bin`` shards into ``--stage-dir`` (size-checked). Token budget defaults
+to one epoch under published train (``9900000000`` → 2360 steps) so training does
+not wrap past the corpus to force 10B. Does **not** read
+``s3://edullm-datasets/`` or assume FarmShare/laptop corpora already present.
+
+Durable artifacts: each permanent save syncs to
+``s3://edullm-checkpoints/token-sel/control/``; a final upload-before-end syncs
+checkpoints + progress + task_loss (fail-closed when S3 export is enabled).
+Resume only via explicit ``--load-path`` (stage the ckpt from S3 first on a
+clean machine). Local auto-resume is off unless ``ALLOW_LOCAL_RESUME=1``.
 """
 from __future__ import annotations
 
@@ -24,30 +35,31 @@ import logging
 import os
 import sys
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Iterator, List, Optional, Set
-
-os.environ["WANDB_DISABLED"] = "1"
-os.environ["WANDB_MODE"] = "disabled"
-for _var in (
-    "WANDB_API_KEY",
-    "WANDB_ENTITY",
-    "WANDB_PROJECT",
-    "WANDB_NAME",
-    "WANDB_GROUP",
-    "WANDB_RUN_ID",
-    "WANDB_RESUME",
-    "WANDB_DIR",
-    "WANDB_CACHE_DIR",
-    "WANDB_ENABLE",
-):
-    os.environ.pop(_var, None)
+from typing import Any, Dict, Iterator, List, Optional, Set, Tuple
+from urllib.parse import urlparse
 
 # Shared package lives under experiments/token-selection/
 _TS_ROOT = Path(__file__).resolve().parents[1]
 if str(_TS_ROOT) not in sys.path:
     sys.path.insert(0, str(_TS_ROOT))
+
+# SmolLM2-style W&B: do not hard-disable; soft-skip without API key.
+from token_selection.olmo_ext.wandb_logging import (  # noqa: E402
+    add_wandb_argparse_options,
+    apply_wandb_env_defaults,
+    ensure_wandb_not_hard_disabled,
+    finish_wandb,
+    init_wandb_from_args,
+    namespace_path_config,
+    wandb_log_checkpoint,
+    wandb_log_train,
+    wandb_upload_existing,
+    WandbEvalPoller,
+)
+
+ensure_wandb_not_hard_disabled()
 
 import numpy as np
 import torch
@@ -80,6 +92,7 @@ from token_selection.olmo_ext.checkpoint_ladder import (
 )
 from token_selection.olmo_ext.s3_layout import arm_prefix
 from token_selection.olmo_ext.task_loss_hook import trigger_task_loss_eval
+from token_selection.olmo_ext.train_module import TokenSelectConfig, TokenSelectTrainModule
 
 try:
     from torch.distributed.checkpoint.state_dict import (
@@ -105,12 +118,16 @@ GLOBAL_BATCH_TOKENS = 4_194_304
 MICROBATCH_TOKENS = 65_536
 PEAK_LR = 4.0e-4
 DEFAULT_SEED = 6198
+MASK_KEEP_RATE = 0.6
 # Clean new run_id — do not append to old edullm-370M-ce-regmix10b prefix.
-DEFAULT_RUN_ID = "control-regmix10b-v1"
-DEFAULT_LENGTH_TOKENS = 10_000_000_000  # → 2384 steps at GBS 4_194_304
+DEFAULT_RUN_ID = "control-regmix10b-v2"
+DEFAULT_LENGTH_TOKENS = 9_900_000_000  # → 2360 steps at GBS 4_194_304 (one-epoch matrix)
+DEFAULT_DATASET_ID = "pretrain/regmix-10b"
 CONFIG_NAME = "OLMo-2-370M-scratch"
 ARM = "control"
 S3_PREFIX = arm_prefix(ARM)  # token-sel/control
+DATA_BUCKET = "edullm-data"
+LEGACY_DATA_BUCKET = "edullm-datasets"
 
 
 @dataclass
@@ -124,24 +141,57 @@ class _Bookkeeping:
     global_train_tokens_seen: int = 0
     dp_process_group: Any = None
     device: torch.device = torch.device("cuda")
+    latest_metrics: Dict[str, float] = field(default_factory=dict)
 
     def record_metric(self, *args: Any, **kwargs: Any) -> None:
-        return None
+        name = kwargs.get("name")
+        value = kwargs.get("value")
+        if name is None and args:
+            name = args[0]
+        if value is None and len(args) >= 2:
+            value = args[1]
+        namespace = kwargs.get("namespace", "train")
+        if name is None or value is None:
+            return
+        try:
+            key = f"{namespace}/{name}" if namespace else str(name)
+            self.latest_metrics[key] = float(value.item() if hasattr(value, "item") else value)
+        except Exception:
+            return
 
     def record_ce_loss(self, *args: Any, **kwargs: Any) -> None:
-        return None
+        value = kwargs.get("value")
+        if value is None and args:
+            value = args[0]
+        if value is None:
+            return
+        try:
+            self.latest_metrics["train/ce_loss"] = float(
+                value.item() if hasattr(value, "item") else value
+            )
+        except Exception:
+            return
 
 
 class MemmapTokenDataset(Dataset):
-    """Contiguous SEQ_LEN chunks over one or more uint32 token memmaps."""
+    """Contiguous SEQ_LEN chunks over one or more fixed-width token memmaps."""
 
-    def __init__(self, paths: List[str], chunk_size: int = SEQ_LEN) -> None:
+    def __init__(
+        self,
+        paths: List[str],
+        chunk_size: int = SEQ_LEN,
+        *,
+        dtype: Any = np.uint32,
+        header_bytes: int = 0,
+    ) -> None:
         self.chunk_size = int(chunk_size)
         self._mmaps: List[np.memmap] = []
         self._cum_chunks: List[int] = []
         total = 0
+        np_dtype = np.dtype(dtype)
+        offset = int(header_bytes)
         for p in paths:
-            mm = np.memmap(p, mode="r", dtype=np.uint32)
+            mm = np.memmap(p, mode="r", dtype=np_dtype, offset=offset)
             n = (len(mm) - 1) // self.chunk_size
             if n <= 0:
                 continue
@@ -178,6 +228,211 @@ def read_paths(path: Path) -> List[str]:
     if not paths:
         raise SystemExit(f"No paths in {path}")
     return paths
+
+
+def _parse_s3_uri(uri: str) -> Tuple[str, str]:
+    parsed = urlparse(uri)
+    if parsed.scheme != "s3" or not parsed.netloc or not parsed.path:
+        raise SystemExit(f"Expected s3:// URI from dataset_paths, got {uri!r}")
+    return parsed.netloc, parsed.path.lstrip("/")
+
+
+def _reject_legacy_uri(uri: str) -> None:
+    norm = uri.replace("\\", "/")
+    if f"s3://{LEGACY_DATA_BUCKET}/" in norm or norm.startswith(f"{LEGACY_DATA_BUCKET}/"):
+        raise SystemExit(
+            f"Refusing legacy dataset URI under s3://{LEGACY_DATA_BUCKET}/: {uri}. "
+            f"Use published s3://{DATA_BUCKET}/ via --dataset-id."
+        )
+
+
+def resolve_published_train(
+    *,
+    dataset_id: str,
+    version: Optional[str],
+) -> Any:
+    """Resolve train shard URIs + dtype from validated edullm-data."""
+    try:
+        from edullm_data.read import NotValidated, ReadError, dataset_paths, resolve_latest
+        from edullm_data.s3 import Boto3S3
+    except ImportError as e:
+        raise SystemExit(
+            "edullm-data package required to resolve training shards. "
+            'Install with: uv add "edullm-data @ git+https://github.com/edu-llm/edullm-data@v0.2.0" '
+            f"(import failed: {e})"
+        ) from e
+
+    s3 = Boto3S3.default()
+    ver = version or resolve_latest(dataset_id, s3=s3, data_bucket=DATA_BUCKET)
+    if not ver:
+        raise SystemExit(
+            f"Dataset {dataset_id!r} is not published in s3://{DATA_BUCKET}/_catalog/. "
+            f"Do not use s3://{LEGACY_DATA_BUCKET}/ or pre-staged FarmShare/laptop paths."
+        )
+    try:
+        resolved = dataset_paths(
+            dataset_id,
+            ver,
+            split="train",
+            s3=s3,
+            data_bucket=DATA_BUCKET,
+            require_validated=True,
+        )
+    except NotValidated as exc:
+        raise SystemExit(
+            f"{dataset_id}/{ver} has no _VALIDATED.json — refusing unvalidated data: {exc}"
+        ) from exc
+    except ReadError as exc:
+        raise SystemExit(f"Cannot resolve {dataset_id}/{ver} split=train: {exc}") from exc
+    if not resolved.paths:
+        raise SystemExit(f"No train shards for {dataset_id}/{ver}")
+    for uri in resolved.paths:
+        _reject_legacy_uri(uri)
+    return resolved
+
+
+def stage_s3_uris(
+    uris: List[str],
+    stage_dir: Path,
+    *,
+    dataset_id: str,
+    version: str,
+) -> List[str]:
+    """Download s3://edullm-data shards under stage_dir (skip when local size matches HEAD)."""
+    import boto3
+    from botocore.config import Config
+
+    client = boto3.client(
+        "s3",
+        region_name=os.environ.get("AWS_DEFAULT_REGION", "us-east-1"),
+        config=Config(retries={"max_attempts": 10, "mode": "adaptive"}),
+    )
+    prefix = f"{dataset_id}/{version}/"
+    stage_dir.mkdir(parents=True, exist_ok=True)
+    local_paths: List[str] = []
+    downloaded = 0
+    skipped = 0
+    for uri in uris:
+        _reject_legacy_uri(uri)
+        bucket, key = _parse_s3_uri(uri)
+        if bucket != DATA_BUCKET:
+            raise SystemExit(f"Only s3://{DATA_BUCKET}/ staging is allowed, got: {uri}")
+        if key.startswith(prefix):
+            rel = key[len(prefix) :]
+        else:
+            rel = Path(key).name
+        dest = stage_dir / rel
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        head = client.head_object(Bucket=bucket, Key=key)
+        remote_size = int(head["ContentLength"])
+        if dest.is_file() and dest.stat().st_size == remote_size:
+            skipped += 1
+        else:
+            tmp = dest.with_suffix(dest.suffix + ".partial")
+            if tmp.exists():
+                tmp.unlink()
+            client.download_file(bucket, key, str(tmp))
+            got = tmp.stat().st_size
+            if got != remote_size:
+                tmp.unlink(missing_ok=True)
+                raise SystemExit(
+                    f"Incomplete download for {uri}: got {got}, expected {remote_size}"
+                )
+            tmp.replace(dest)
+            downloaded += 1
+        local_paths.append(str(dest.resolve()))
+    log.info(
+        "Staged %d shards under %s (downloaded=%d skipped=%d)",
+        len(local_paths),
+        stage_dir,
+        downloaded,
+        skipped,
+    )
+    return local_paths
+
+
+def prepare_train_memmaps(args: argparse.Namespace) -> Tuple[List[str], Dict[str, Any]]:
+    """Return local memmap paths + data provenance for run meta.
+
+    Prefer ``--train-paths-file`` when set (prior stage from this arm). Otherwise
+    resolve ``--dataset-id`` from edullm-data and stage into ``--stage-dir``.
+    """
+    data_meta: Dict[str, Any] = {
+        "dataset_id": None,
+        "dataset_version": None,
+        "dataset_uri": None,
+        "dtype": "uint32",
+        "numpy_dtype": "<u4",
+        "header_bytes": 0,
+        "rows": None,
+        "n_shards": None,
+        "stage_dir": None,
+        "train_paths_file": None,
+        "source": None,
+        "bucket": DATA_BUCKET,
+    }
+    if args.train_paths_file:
+        paths = read_paths(Path(args.train_paths_file))
+        for p in paths:
+            norm = p.replace("\\", "/")
+            if LEGACY_DATA_BUCKET in norm:
+                raise SystemExit(
+                    f"Refusing legacy {LEGACY_DATA_BUCKET} path in --train-paths-file: {p}"
+                )
+            if not Path(p).is_file():
+                raise SystemExit(
+                    f"Missing shard listed in --train-paths-file: {p}. "
+                    "Omit --train-paths-file and pass --stage-dir to fetch from edullm-data."
+                )
+        data_meta["train_paths_file"] = str(Path(args.train_paths_file).resolve())
+        data_meta["n_shards"] = len(paths)
+        data_meta["dataset_id"] = args.dataset_id
+        data_meta["dataset_uri"] = (
+            f"s3://{DATA_BUCKET}/{args.dataset_id}/ (paths-file override)"
+        )
+        data_meta["source"] = "train_paths_file"
+        return paths, data_meta
+
+    if not args.stage_dir:
+        raise SystemExit(
+            "Provide --stage-dir (ephemeral scratch) to fetch edullm-data shards, "
+            "or --train-paths-file from a prior stage of prepare_control_data.py / this trainer."
+        )
+
+    resolved = resolve_published_train(
+        dataset_id=args.dataset_id,
+        version=args.dataset_version,
+    )
+    stage_dir = Path(args.stage_dir)
+    paths_file = stage_dir / "paths_train.txt"
+    if get_rank() == 0:
+        local_paths = stage_s3_uris(
+            list(resolved.paths),
+            stage_dir,
+            dataset_id=resolved.dataset_id,
+            version=resolved.version,
+        )
+        paths_file.write_text("\n".join(local_paths) + "\n", encoding="utf-8")
+    if is_distributed():
+        dist.barrier()
+    paths = read_paths(paths_file)
+    data_meta.update(
+        {
+            "source": "edullm-data",
+            "bucket": DATA_BUCKET,
+            "dataset_id": resolved.dataset_id,
+            "dataset_version": resolved.version,
+            "dataset_uri": f"s3://{DATA_BUCKET}/{resolved.dataset_id}/{resolved.version}/",
+            "dtype": resolved.dtype or "uint32",
+            "numpy_dtype": resolved.numpy_dtype or "<u4",
+            "header_bytes": int(resolved.header_bytes or 0),
+            "rows": resolved.rows,
+            "n_shards": len(paths),
+            "stage_dir": str(stage_dir.resolve()),
+            "train_paths_file": str(paths_file.resolve()),
+        }
+    )
+    return paths, data_meta
 
 
 class InfiniteBatchStream:
@@ -380,7 +635,10 @@ def build_train_module(
     alpha_f: float,
     compile_model: bool,
     rank_microbatch_tokens: int,
-) -> TransformerTrainModule:
+    total_steps: int,
+    seed: int,
+    mask_keep_rate: float,
+) -> TokenSelectTrainModule:
     fused = try_enable_fused_ce()
     model_cfg = build_olmo2_config(fused_ce=fused)
     try:
@@ -390,6 +648,13 @@ def build_train_module(
         if hasattr(scheduler, "alpha_f"):
             scheduler.alpha_f = alpha_f
 
+    ts_config = TokenSelectConfig(
+        method="random",
+        k=float(mask_keep_rate),
+        t0_steps=0,
+        total_steps=int(total_steps),
+        seed=int(seed),
+    )
     tm_cfg = TransformerTrainModuleConfig(
         rank_microbatch_size=rank_microbatch_tokens,
         max_sequence_length=SEQ_LEN,
@@ -412,9 +677,22 @@ def build_train_module(
         scheduler=scheduler,
     )
     model = model_cfg.build(init_device="cuda")
-    train_module = tm_cfg.build(model)
+    train_module = TokenSelectTrainModule(
+        model=model,
+        optim=tm_cfg.optim,
+        rank_microbatch_size=tm_cfg.rank_microbatch_size,
+        max_sequence_length=tm_cfg.max_sequence_length,
+        compile_model=tm_cfg.compile_model,
+        dp_config=tm_cfg.dp_config,
+        z_loss_multiplier=tm_cfg.z_loss_multiplier,
+        max_grad_norm=tm_cfg.max_grad_norm,
+        scheduler=tm_cfg.scheduler,
+        ts_config=ts_config,
+    )
     log.info(
-        "Built TransformerTrainModule (HSDP bf16, SkipStepAdamW, compile=%s, fused_ce=%s)",
+        "Built TokenSelectTrainModule (random keep=%.2f, HSDP bf16, SkipStepAdamW, "
+        "compile=%s, fused_ce=%s)",
+        mask_keep_rate,
         compile_model,
         fused,
     )
@@ -479,48 +757,75 @@ def save_checkpoint(
     args: argparse.Namespace,
     meta: dict,
 ) -> None:
-    """All ranks must call (HSDP gather); rank 0 writes full unsharded state.pt."""
+    """All ranks must call (HSDP gather); rank 0 writes + durable-exports.
+
+    When S3 export is enabled, export failure aborts every rank (no hang on barrier).
+    ``S3_EXPORT=0`` / ``SKIP_S3_UPLOAD=1`` is local-smoke only (artifacts are not durable).
+    """
     train_module_sd = gather_train_module_state_dict(train_module)
-    if get_rank() != 0:
-        return
-    path.mkdir(parents=True, exist_ok=True)
-    state = {
-        "step": step,
-        "train_module": train_module_sd,
-        "args": vars(args),
-        "meta": meta,
-        "architecture": "olmo_core.TransformerConfig.olmo2_370M",
-        "config_name": CONFIG_NAME,
-        "train_stack": "TransformerTrainModule/HSDP/SkipStepAdamW (RefHQ-matched)",
-        "method": "plain_ce",
-        "arm": ARM,
-        "run_id": args.name,
-        "checkpoint_format": "full_state_dict_v1",
-    }
-    tmp = path / "state.pt.tmp"
-    torch.save(state, tmp)
-    tmp.replace(path / "state.pt")
-    (path / "step.txt").write_text(str(step) + "\n")
-    n_model = len(train_module_sd.get("model") or {})
-    log.info(
-        "Saved permanent full checkpoint → %s (step=%s, model_tensors=%d, has_optim=%s)",
-        path,
-        step,
-        n_model,
-        train_module_sd.get("optim") is not None,
-    )
-    try:
+    export_ok = True
+    if get_rank() == 0:
+        path.mkdir(parents=True, exist_ok=True)
+        state = {
+            "step": step,
+            "train_module": train_module_sd,
+            "args": vars(args),
+            "meta": meta,
+            "architecture": "olmo_core.TransformerConfig.olmo2_370M",
+            "config_name": CONFIG_NAME,
+            "train_stack": "TokenSelectTrainModule/random/HSDP/SkipStepAdamW (RefHQ-matched)",
+            "method": "random",
+            "mask_keep_rate": float(getattr(args, "mask_keep_rate", MASK_KEEP_RATE)),
+            "arm": ARM,
+            "run_id": args.name,
+            "checkpoint_format": "full_state_dict_v1",
+        }
+        tmp = path / "state.pt.tmp"
+        torch.save(state, tmp)
+        tmp.replace(path / "state.pt")
+        (path / "step.txt").write_text(str(step) + "\n")
+        n_model = len(train_module_sd.get("model") or {})
+        log.info(
+            "Saved permanent full checkpoint → %s (step=%s, model_tensors=%d, has_optim=%s)",
+            path,
+            step,
+            n_model,
+            train_module_sd.get("optim") is not None,
+        )
         from token_selection.olmo_ext.s3_export import (
             export_arm_checkpoint,
             export_arm_task_loss_dir,
+            s3_export_enabled,
         )
 
-        export_arm_checkpoint(ARM, path)
-        tl_dir = getattr(args, "task_loss_results_dir", None)
-        if tl_dir:
-            export_arm_task_loss_dir(ARM, tl_dir)
-    except Exception as exc:  # noqa: BLE001 — never kill training
-        log.warning("S3 export after checkpoint failed: %s", exc)
+        if not s3_export_enabled():
+            log.warning(
+                "S3 export disabled (S3_EXPORT=0 / SKIP_S3_UPLOAD=1); checkpoint is local-only "
+                "and will be lost when ephemeral scratch is wiped"
+            )
+        else:
+            export_ok = bool(export_arm_checkpoint(ARM, path))
+            tl_dir = getattr(args, "task_loss_results_dir", None)
+            if export_ok and tl_dir:
+                export_ok = bool(export_arm_task_loss_dir(ARM, tl_dir))
+        wb_run = getattr(args, "_wandb_run", None)
+        if wb_run is not None:
+            tokens_seen = int(step) * int(GLOBAL_BATCH_TOKENS)
+            wandb_log_checkpoint(wb_run, path, step=int(step), tokens_seen=tokens_seen)
+
+    if is_distributed():
+        flag = torch.tensor(
+            [1 if export_ok else 0],
+            device=torch.device("cuda" if torch.cuda.is_available() else "cpu"),
+        )
+        dist.broadcast(flag, src=0)
+        export_ok = bool(flag.item())
+    if not export_ok:
+        raise SystemExit(
+            f"Durable S3 export failed for checkpoint {path}. "
+            "Fix AWS credentials / aws CLI on the train host, then retry. "
+            "Set S3_EXPORT=0 only for intentional non-durable local smoke runs."
+        )
 
 
 def load_checkpoint(path: Path, train_module: TransformerTrainModule) -> int:
@@ -585,6 +890,7 @@ def _checkpoint_step(path: Path) -> int:
 
 
 def find_latest_checkpoint(save_folder: Path) -> Optional[Path]:
+    """Newest permanent ``step*`` under save_folder (same-job local only)."""
     if not save_folder.is_dir():
         return None
     cands = [
@@ -595,6 +901,70 @@ def find_latest_checkpoint(save_folder: Path) -> Optional[Path]:
     if not cands:
         return None
     return max(cands, key=_checkpoint_step)
+
+
+def resolve_resume_dir(args: argparse.Namespace, save_folder: Path) -> Optional[Path]:
+    """Resume only from explicit ``--load-path``, or local latest if ALLOW_LOCAL_RESUME=1.
+
+    Ephemeral scratch is wiped after the job; durable ckpts live on S3. Callers that
+    need resume must stage a checkpoint from
+    ``s3://edullm-checkpoints/token-sel/control/`` into ``--load-path`` first.
+    """
+    if args.load_path:
+        load_dir = Path(args.load_path)
+        if not (load_dir / "state.pt").is_file():
+            raise SystemExit(
+                f"--load-path {load_dir} has no state.pt. "
+                "Stage the checkpoint from s3://edullm-checkpoints/token-sel/control/ "
+                "onto this ephemeral machine before resume."
+            )
+        return load_dir
+    allow_local = os.environ.get("ALLOW_LOCAL_RESUME", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
+    if allow_local:
+        return find_latest_checkpoint(save_folder)
+    return None
+
+
+def upload_before_end(
+    *,
+    save_folder: Path,
+    progress_dir: Path,
+    task_loss_dir: Optional[str],
+) -> None:
+    """Fail-closed durable sync of checkpoints + progress + task_loss to S3."""
+    from token_selection.olmo_ext.s3_export import (
+        export_arm_task_loss_dir,
+        s3_export_enabled,
+        sync_to_s3,
+    )
+    from token_selection.olmo_ext.s3_layout import arm_uri
+
+    if not s3_export_enabled():
+        log.warning(
+            "S3 export disabled (S3_EXPORT=0 / SKIP_S3_UPLOAD=1); "
+            "local scratch will be wiped — durable artifacts will be lost"
+        )
+        return
+    ok_ckpt = sync_to_s3(save_folder, arm_uri(ARM, "checkpoints"))
+    ok_prog = sync_to_s3(progress_dir, arm_uri(ARM, "progress"))
+    ok_tl = True
+    if task_loss_dir:
+        ok_tl = export_arm_task_loss_dir(ARM, task_loss_dir)
+    if not (ok_ckpt and ok_prog and ok_tl):
+        raise SystemExit(
+            "Durable S3 upload-before-end failed "
+            f"(checkpoints={ok_ckpt} progress={ok_prog} task_loss={ok_tl}). "
+            "Local/scratch state is not durable."
+        )
+    log.info(
+        "Upload-before-end OK → s3://edullm-checkpoints/%s/",
+        S3_PREFIX,
+    )
 
 
 def _maybe_task_loss(args: argparse.Namespace, ckpt_dir: Path, step: int) -> None:
@@ -613,9 +983,30 @@ def _maybe_task_loss(args: argparse.Namespace, ckpt_dir: Path, step: int) -> Non
 def parse_args() -> argparse.Namespace:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--name", default=DEFAULT_RUN_ID, help=f"Run id (default: {DEFAULT_RUN_ID})")
-    ap.add_argument("--train-paths-file", required=True)
-    ap.add_argument("--save-folder", required=True)
-    ap.add_argument("--progress-dir", required=True)
+    ap.add_argument(
+        "--train-paths-file",
+        default=None,
+        help="Optional local memmap path list from a prior edullm-data stage "
+        "(refuses edullm-datasets paths; missing shards fail closed)",
+    )
+    ap.add_argument(
+        "--dataset-id",
+        default=DEFAULT_DATASET_ID,
+        help=f"edullm-data dataset id (default: {DEFAULT_DATASET_ID})",
+    )
+    ap.add_argument(
+        "--dataset-version",
+        default=None,
+        help="Pin edullm-data version (default: resolve_latest)",
+    )
+    ap.add_argument(
+        "--stage-dir",
+        default=None,
+        help="Ephemeral scratch for edullm-data .u32le.bin staging "
+        "(required unless --train-paths-file)",
+    )
+    ap.add_argument("--save-folder", required=True, help="Local/scratch checkpoint root (synced to S3)")
+    ap.add_argument("--progress-dir", required=True, help="Local/scratch progress root (synced to S3)")
     ap.add_argument("--length-tokens", type=int, default=DEFAULT_LENGTH_TOKENS)
     ap.add_argument(
         "--device-batch-size",
@@ -631,7 +1022,19 @@ def parse_args() -> argparse.Namespace:
     )
     ap.add_argument("--num-workers", type=int, default=4)
     ap.add_argument("--seed", type=int, default=DEFAULT_SEED)
-    ap.add_argument("--load-path", type=str, default=None)
+    ap.add_argument(
+        "--mask-keep-rate",
+        type=float,
+        default=MASK_KEEP_RATE,
+        help=f"Fraction of valid tokens kept per sequence (default: {MASK_KEEP_RATE})",
+    )
+    ap.add_argument(
+        "--load-path",
+        type=str,
+        default=None,
+        help="Explicit checkpoint dir to resume (stage from S3 on clean machines). "
+        "Local auto-resume is off unless ALLOW_LOCAL_RESUME=1",
+    )
     ap.add_argument("--fresh", action="store_true")
     ap.add_argument("--compile", dest="compile", action="store_true", default=True)
     ap.add_argument("--no-compile", dest="compile", action="store_false")
@@ -657,6 +1060,7 @@ def parse_args() -> argparse.Namespace:
         help="Launch full 20-label task_loss eval on each permanent checkpoint (default: on; "
         "also gated by TASK_LOSS_EVAL env)",
     )
+    add_wandb_argparse_options(ap, default_run_name=DEFAULT_RUN_ID)
     return ap.parse_args()
 
 
@@ -707,16 +1111,49 @@ def _run(args: argparse.Namespace) -> None:
         save_folder.mkdir(parents=True, exist_ok=True)
         Path(args.task_loss_results_dir).mkdir(parents=True, exist_ok=True)
 
+    apply_wandb_env_defaults(project="token-selection", run_name=args.name, group=ARM)
+    ensure_wandb_not_hard_disabled()
+    wb_run = None
+    eval_poller: Optional[WandbEvalPoller] = None
+    if rank == 0:
+        wb_run = init_wandb_from_args(
+            args,
+            run_name=args.name,
+            config=namespace_path_config(args),
+            group=ARM,
+            tags=(ARM, "random_60"),
+            dir=progress_dir / "wandb",
+            id_path=progress_dir / "wandb_run_id.txt",
+            is_main=True,
+            alert_title=f"token-selection {ARM} started",
+        )
+        args._wandb_run = wb_run
+        eval_poller = WandbEvalPoller(args.task_loss_results_dir, wb_run)
+        if wb_run is not None and bool(getattr(args, "wandb_upload_existing", False)):
+            wandb_upload_existing(
+                wb_run,
+                checkpoint_dir=save_folder,
+                task_loss_dir=args.task_loss_results_dir,
+                progress_dir=progress_dir,
+                tokens_per_step=GLOBAL_BATCH_TOKENS,
+            )
+    else:
+        args._wandb_run = None
+
     meta = {
         "architecture": "olmo_core.TransformerConfig.olmo2_370M",
         "config_name": CONFIG_NAME,
         "arm": ARM,
-        "method": "plain_ce",
+        "method": "random",
+        "mask_keep_rate": float(args.mask_keep_rate),
         "run_id": args.name,
         "s3_prefix": S3_PREFIX,
         "matched_reference": "experiments/token-selection/reference/train_olmo3_370m_refhq.py",
-        "train_stack": "TransformerTrainModule HSDP bf16 SkipStepAdamW compile",
-        "loss": "LM-head CE (fused_linear when liger available); no token masking",
+        "train_stack": "TokenSelectTrainModule HSDP bf16 SkipStepAdamW compile",
+        "loss": (
+            f"masked CE on uniform random {args.mask_keep_rate:.0%} of valid tokens "
+            "(per-sequence, seeded by step)"
+        ),
         "tokenizer": TOKENIZER_ID,
         "vocab_size": EMBEDDING_SIZE,
         "length_tokens": int(args.length_tokens),
@@ -737,12 +1174,19 @@ def _run(args: argparse.Namespace) -> None:
         "save_interval": int(args.save_interval),
         "permanent_checkpoint_steps": ladder,
         "max_checkpoints": None,
-        "ephemeral": False,
-        "train_dataset": "s3://edullm-datasets/regmix/regmix-10b/",
+        "ephemeral": False,  # permanent ladder (no prune); scratch itself is ephemeral
+        "scratch_ephemeral": True,
+        "durable_s3_prefix": f"s3://edullm-checkpoints/{S3_PREFIX}/",
+        "train_dataset": f"s3://{DATA_BUCKET}/{args.dataset_id}/",
         "seed": args.seed,
         "task_loss_on_save": bool(args.task_loss_on_save),
         "task_loss_results_dir": args.task_loss_results_dir,
     }
+
+    train_paths, data_meta = prepare_train_memmaps(args)
+    meta["train_dataset"] = data_meta.get("dataset_uri") or meta["train_dataset"]
+    meta["data"] = data_meta
+
     if rank == 0:
         (progress_dir / "run_meta.json").write_text(json.dumps(meta, indent=2) + "\n")
         (progress_dir / "total_steps.txt").write_text(str(total_steps) + "\n")
@@ -754,7 +1198,8 @@ def _run(args: argparse.Namespace) -> None:
                 [
                     f"run_id={args.name}",
                     "architecture=olmo_core.TransformerConfig.olmo2_370M",
-                    "method=plain_ce (full CE, no token masking)",
+                    "method=random (uniform random 60% keep per sequence)",
+                    f"mask_keep_rate={args.mask_keep_rate}",
                     f"s3_prefix={S3_PREFIX}",
                     f"tokenizer={TOKENIZER_ID} vocab={EMBEDDING_SIZE}",
                     f"world_size={world_size}",
@@ -765,27 +1210,37 @@ def _run(args: argparse.Namespace) -> None:
                     f"lr={lr}  cos_warmup={args.lr_warmup_steps}  alpha_f={args.lr_alpha_f}",
                     f"compile={args.compile}",
                     f"permanent_ladder={ladder}",
-                    "train=s3://edullm-datasets/regmix/regmix-10b/",
+                    f"train={meta['train_dataset']}",
+                    f"dtype={data_meta.get('numpy_dtype')} header_bytes={data_meta.get('header_bytes')}",
+                    f"n_shards={data_meta.get('n_shards')}",
+                    f"durable_s3=s3://edullm-checkpoints/{S3_PREFIX}/",
+                    "scratch_ephemeral=True (stage OK; local ckpts not durable)",
                     "",
                 ]
             )
         )
         log.info(
-            "Plan: plain CE olmo2_370M run_id=%s world=%d total=%d ladder_n=%d "
-            "(omit near-final grid if needed) mbs=%d seqs/rank=%d lr=%.3e",
+            "Plan: random-keep control olmo2_370M run_id=%s keep=%.2f world=%d total=%d ladder_n=%d "
+            "(omit near-final grid if needed) mbs=%d seqs/rank=%d lr=%.3e data=%s",
             args.name,
+            float(args.mask_keep_rate),
             world_size,
             total_steps,
             len(ladder),
             mbs,
             seqs_per_rank,
             lr,
+            meta["train_dataset"],
         )
-        if total_steps == 2384 and 2375 in ladder_set:
-            raise SystemExit("BUG: ladder for 2384 must omit 2375")
+        if total_steps == 2360 and 2250 in ladder_set:
+            raise SystemExit("BUG: ladder for 2360 must omit 2250")
 
-    train_paths = read_paths(Path(args.train_paths_file))
-    train_ds = MemmapTokenDataset(train_paths, SEQ_LEN)
+    train_ds = MemmapTokenDataset(
+        train_paths,
+        SEQ_LEN,
+        dtype=data_meta.get("numpy_dtype") or "<u4",
+        header_bytes=int(data_meta.get("header_bytes") or 0),
+    )
     workers = args.num_workers if world_size == 1 else max(1, args.num_workers // world_size)
     train_stream = InfiniteBatchStream(
         train_ds, mbs, workers, args.seed, rank=rank, world_size=world_size
@@ -797,6 +1252,9 @@ def _run(args: argparse.Namespace) -> None:
         alpha_f=float(args.lr_alpha_f),
         compile_model=bool(args.compile),
         rank_microbatch_tokens=rank_micro_tokens,
+        total_steps=total_steps,
+        seed=int(args.seed),
+        mask_keep_rate=float(args.mask_keep_rate),
     )
     books = _Bookkeeping(
         global_step=0,
@@ -809,11 +1267,17 @@ def _run(args: argparse.Namespace) -> None:
     start_step = 0
     if args.fresh:
         if rank == 0:
-            log.info("--fresh: starting from scratch")
+            log.info("--fresh: starting from scratch (ignoring any local checkpoints)")
     else:
-        load_dir = Path(args.load_path) if args.load_path else find_latest_checkpoint(save_folder)
+        load_dir = resolve_resume_dir(args, save_folder)
         if load_dir is not None:
             start_step = load_checkpoint(load_dir, train_module)
+            train_module._ensure_state().step = start_step
+        elif rank == 0:
+            log.info(
+                "No --load-path; starting from scratch "
+                "(set ALLOW_LOCAL_RESUME=1 only for same-job local recovery)"
+            )
 
     t0 = time.time()
     window_t0 = t0
@@ -843,6 +1307,7 @@ def _run(args: argparse.Namespace) -> None:
         train_module.zero_grads()
         train_module.train_batch(batch)
         train_module.optim_step()
+        train_module.on_optim_step_end()
 
         global_step = step + 1
         if global_step % args.log_interval == 0 or global_step == 1:
@@ -890,6 +1355,20 @@ def _run(args: argparse.Namespace) -> None:
                     )
                     + "\n"
                 )
+                train_loss = books.latest_metrics.get("train/ce_loss") or books.latest_metrics.get(
+                    "train/loss"
+                )
+                wandb_log_train(
+                    wb_run,
+                    step=global_step,
+                    train_loss=train_loss,
+                    tokens_seen=global_step * tokens_per_step,
+                    tok_per_s=tok_s,
+                    tok_per_s_avg=tok_s_avg,
+                    extra={k: v for k, v in books.latest_metrics.items() if k.startswith("train/")},
+                )
+                if eval_poller is not None:
+                    eval_poller.poll()
 
         if global_step in ladder_set:
             if is_distributed():
@@ -897,11 +1376,27 @@ def _run(args: argparse.Namespace) -> None:
             ckpt_dir = save_folder / f"step{global_step}"
             save_checkpoint(ckpt_dir, global_step, train_module, args, meta)
             _maybe_task_loss(args, ckpt_dir, global_step)
+            if rank == 0 and eval_poller is not None:
+                eval_poller.poll()
             if is_distributed():
                 dist.barrier()
 
     if rank == 0:
-        log.info("Training complete at step=%d world_size=%d run_id=%s", total_steps, world_size, args.name)
+        if eval_poller is not None:
+            eval_poller.poll()
+        upload_before_end(
+            save_folder=save_folder,
+            progress_dir=progress_dir,
+            task_loss_dir=args.task_loss_results_dir,
+        )
+        finish_wandb(wb_run)
+        log.info(
+            "Training complete at step=%d world_size=%d run_id=%s durable=s3://edullm-checkpoints/%s/",
+            total_steps,
+            world_size,
+            args.name,
+            S3_PREFIX,
+        )
 
 
 if __name__ == "__main__":

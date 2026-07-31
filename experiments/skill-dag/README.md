@@ -4,8 +4,8 @@ Domain-mixture and Skill-It experiments for prerequisite-ordered data selection.
 
 | Subdirectory | Description |
 |--------------|-------------|
-| [`mixlaw/`](mixlaw/) | Data mixing laws pilot (24× DataDecide-60M mixtures over olmohq domains). Chinchilla step laws use **in-run `task_loss.jsonl` only** (steps 120–1440); step-1451 final eval is excluded from fits. |
-| [`skillit/`](skillit/) | Skill-It probes (7× one-hot DataDecide-60M) + dual-arm OLMo2-370M training. Offline **A_ij** from Chinchilla-extrapolated probes vs RegMix (`mixlaw_fit_chinchilla.json`). |
+| [`mixlaw/`](mixlaw/) | 24× DataDecide-60M pilot + 370M validation over olmohq. All training streams at recipe weights (`domain_stream.py`). Chinchilla fits use in-run `task_loss.jsonl` only (steps 120–1440). |
+| [`skillit/`](skillit/) | Skill-It probes (7× one-hot DataDecide-60M) + dual-arm OLMo2-370M training. All arms stream from olmohq; 370M uses live Skill-It reweighting. |
 
 ## Artifact quick links
 

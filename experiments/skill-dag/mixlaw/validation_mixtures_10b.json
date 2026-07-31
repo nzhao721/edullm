@@ -1,6 +1,6 @@
 {
-  "schema": 1,
-  "description": "370M validation mixtures for skill-dag mixing-law / LightGBM scale-up (10B tokens each). mix01 is a read-only reference to regmix-10b.",
+  "schema": 2,
+  "description": "370M validation mixtures for skill-dag mixing-law / LightGBM scale-up (10B tokens each). Train by domain-stratified streaming from published edullm-data pretrain/olmo-127b at the listed weights \u2014 no per-mix pre-baked corpora.",
   "budget_tokens": 10000000000,
   "domain_order": [
     "dclm",
@@ -12,6 +12,12 @@
     "wiki"
   ],
   "seed": 6198,
+  "data_source": {
+    "dataset_id": "pretrain/olmo-127b",
+    "bucket": "edullm-data",
+    "label_key": "source",
+    "mode": "domain_stratified_stream"
+  },
   "mixtures": [
     {
       "id": 0,
@@ -27,8 +33,7 @@
         0.003136198413392081,
         0.0030333722359038163,
         0.0009408595240176244
-      ],
-      "reuse_s3": null
+      ]
     },
     {
       "id": 1,
@@ -44,8 +49,7 @@
         0.0635,
         0.0615,
         0.0156
-      ],
-      "reuse_s3": "s3://edullm-datasets/regmix/regmix-10b/"
+      ]
     },
     {
       "id": 7,
@@ -61,8 +65,7 @@
         0.0406,
         0.0394,
         0.01
-      ],
-      "reuse_s3": null
+      ]
     },
     {
       "id": 18,
@@ -78,8 +81,7 @@
         0.1,
         0.0437,
         0.1125
-      ],
-      "reuse_s3": null
+      ]
     },
     {
       "id": 25,
@@ -95,8 +97,7 @@
         0.035316898594340805,
         6.567930568428362e-17,
         0.3
-      ],
-      "reuse_s3": null
+      ]
     },
     {
       "id": 26,
@@ -112,8 +113,7 @@
         0.1813875548299026,
         0.011898187849676986,
         0.3
-      ],
-      "reuse_s3": null
+      ]
     },
     {
       "id": 27,
@@ -129,8 +129,7 @@
         0.041786239404329344,
         0.013571059505826967,
         0.01113463256808213
-      ],
-      "reuse_s3": null
+      ]
     },
     {
       "id": 28,
@@ -146,9 +145,7 @@
         0.019706663260932462,
         0.03721258967688889,
         0.12652605102438982
-      ],
-      "reuse_s3": null
+      ]
     }
-  ],
-  "regmix_policy": "read_only_never_modify"
+  ]
 }

@@ -1,109 +1,58 @@
 #!/usr/bin/env bash
-# One-time data preparation for the 24 mixing-law probes.
+# Recipe sidecars for the 24 mixing-law probes (DataDecide-60M).
 #
-# Source: s3://edullm-datasets/olmo100b/olmo-mix-1124-30b (raw json.gz shards).
-# Does NOT sync the full ~130 GiB tree. Instead:
-#   1. pulls the tiny plan/manifest.jsonl inventory
-#   2. randomly selects only enough shards to cover peak demand at TOKENS_PER_PARAM
-#   3. downloads those shards (~a few GiB at the default budget)
-#   4. tokenizes a working pool from them
-#   5. plans and materializes the 24 per-mixture memmap slices
+# Requires a working pool already staged from published edullm-data via
+#   stage_working_pool_from_edullm_data.py / submit_mixlaw_pilot_pool.sh
+# Sole supported path: DomainMixtureStream at mixtures.json weights
+# (no per-mix materialized slices; do not use build_mixture_data.py).
 #
-# Default TOKENS_PER_PARAM=5 is sized for ≈12 B200 GPU-hours across all 24
-# mixtures (see budget_calculator.py).
+# Required:
+#   WORK   ephemeral job root (contains pool/; recipes written under recipe/)
 #
-# Run once on shared storage every compute node can read. No GPUs required.
+# Optional:
+#   POOL_DIR   default $WORK/pool (must carry edullm_data_source.json)
+#   VENV       python env with mixlaw deps (default: active python / $WORK/venv)
+#   DATASET_ID default pretrain/olmo-127b
 set -euo pipefail
 
-WORK="${WORK:-/opt/edullm/mixlaw}"
-CODE_DIR="${CODE_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
-VENV="${VENV:-$WORK/venv}"
-OLMOHQ_S3="${OLMOHQ_S3:-s3://edullm-datasets/olmo100b/olmo-mix-1124-30b}"
-RAW_DIR="${RAW_DIR:-$WORK/olmohq/data}"
-TOKENIZED_DIR="${TOKENIZED_DIR:-$WORK/tokenized}"
-SLICE_DIR="${SLICE_DIR:-$WORK/slices}"
-PLAN_DIR="${PLAN_DIR:-$WORK/olmohq/plan}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CODE_DIR="${CODE_DIR:-${SCRIPT_DIR}}"
+
+: "${WORK:?Set WORK to an ephemeral job root (pool/ + recipe/)}"
+
+POOL_DIR="${POOL_DIR:-$WORK/pool}"
+RECIPE_WORK="${RECIPE_WORK:-$WORK/recipe}"
 TOKENS_PER_PARAM="${TOKENS_PER_PARAM:-5}"
-BLOCK_SEQS="${BLOCK_SEQS:-256}"
-BUILD_WORKERS="${BUILD_WORKERS:-8}"
-TOKENIZE_WORKERS="${TOKENIZE_WORKERS:-16}"
-FETCH_WORKERS="${FETCH_WORKERS:-8}"
-SHARD_OVERSHOOT="${SHARD_OVERSHOOT:-1.5}"
-SKIP_FETCH="${SKIP_FETCH:-0}"
-SKIP_TOKENIZE="${SKIP_TOKENIZE:-0}"
+DATASET_ID="${DATASET_ID:-pretrain/olmo-127b}"
 
 log() { echo "[$(date -Is)] $*"; }
 
-# shellcheck disable=SC1091
-source "$VENV/bin/activate"
+if [[ -n "${VENV:-}" ]]; then
+  # shellcheck disable=SC1091
+  source "$VENV/bin/activate"
+elif [[ -x "$WORK/venv/bin/python" ]]; then
+  # shellcheck disable=SC1091
+  source "$WORK/venv/bin/activate"
+fi
 # shellcheck disable=SC1091
 [[ -f "$WORK/env.sh" ]] && source "$WORK/env.sh"
 
-mkdir -p "$RAW_DIR" "$TOKENIZED_DIR" "$SLICE_DIR" "$PLAN_DIR"
-
-if [[ "$SKIP_FETCH" != "1" ]]; then
-  log "fetching shard inventory (manifest.jsonl)"
-  aws s3 cp "$OLMOHQ_S3/plan/manifest.jsonl" "$PLAN_DIR/manifest.jsonl" --only-show-errors
-
-  log "selecting + downloading only the shards needed for tokens/param=$TOKENS_PER_PARAM"
-  python "$CODE_DIR/select_and_fetch_shards.py" \
-    --manifest "$PLAN_DIR/manifest.jsonl" \
-    --raw-dir "$RAW_DIR" \
-    --out-plan "$PLAN_DIR/shard_selection.json" \
-    --tokens-per-param "$TOKENS_PER_PARAM" \
-    --overshoot "$SHARD_OVERSHOOT" \
-    --fetch-workers "$FETCH_WORKERS"
+if [[ ! -f "$POOL_DIR/edullm_data_source.json" ]]; then
+  echo "missing $POOL_DIR/edullm_data_source.json — refuse orphan pool; stage from edullm-data first" >&2
+  echo "  (submit_mixlaw_pilot_pool.sh or stage_working_pool_from_edullm_data.py)" >&2
+  exit 2
+fi
+if [[ ! -d "$POOL_DIR/tokenized/dclm" && ! -f "$POOL_DIR/dclm/dclm.npy" ]]; then
+  echo "missing domain memmaps under $POOL_DIR" >&2
+  exit 2
 fi
 
-log "raw domain footprints (selected shards only):"
-du -h --max-depth=1 "$RAW_DIR" 2>/dev/null | sort -h || true
-
-if [[ "$SKIP_TOKENIZE" != "1" ]]; then
-  log "tokenizing working pool at tokens/param=$TOKENS_PER_PARAM"
-  python "$CODE_DIR/tokenize_working_pool.py" \
-    --data-dir "$RAW_DIR" \
-    --out-dir "$TOKENIZED_DIR" \
-    --tokens-per-param "$TOKENS_PER_PARAM" \
-    --workers "$TOKENIZE_WORKERS"
-fi
-
-log "planning random per-mixture subsamples"
-python "$CODE_DIR/build_mixture_data.py" plan \
-  --tokenized-dir "$TOKENIZED_DIR" \
-  --out-dir "$SLICE_DIR" \
+mkdir -p "$RECIPE_WORK"
+log "writing recipe sidecars (tokens/param=$TOKENS_PER_PARAM dataset_id=$DATASET_ID)"
+python "$CODE_DIR/prepare_mixlaw_pilot_data.py" \
+  --work "$RECIPE_WORK" \
   --tokens-per-param "$TOKENS_PER_PARAM" \
-  --block-seqs "$BLOCK_SEQS"
+  --dataset-id "$DATASET_ID"
 
-log "materializing slices with $BUILD_WORKERS parallel workers"
-python "$CODE_DIR/build_mixture_data.py" build \
-  --plan-dir "$SLICE_DIR" \
-  --out-dir "$SLICE_DIR" \
-  --tokenized-dir "$TOKENIZED_DIR" \
-  --workers "$BUILD_WORKERS"
-
-log "verifying every mixture"
-python - "$SLICE_DIR" <<'PY'
-import json
-import sys
-from pathlib import Path
-
-slice_dir = Path(sys.argv[1])
-plan = json.loads((slice_dir / "slice_plan.json").read_text())
-worst = 0.0
-for mix in plan["mixtures"]:
-    meta_path = slice_dir / mix["run_name"] / "mix_meta.json"
-    if not meta_path.is_file():
-        raise SystemExit(f"missing {meta_path}")
-    meta = json.loads(meta_path.read_text())
-    on_disk = sum(Path(p).stat().st_size // 4 for p in meta["paths"])
-    if on_disk != meta["tokens"]:
-        raise SystemExit(f"{mix['run_name']}: {on_disk} tokens on disk != {meta['tokens']} planned")
-    err = max(
-        abs(meta["realized_weights"][d] - meta["target_weights"][d]) for d in meta["target_weights"]
-    )
-    worst = max(worst, err)
-print(f"all {len(plan['mixtures'])} mixtures verified; worst weight error {worst:.2e}")
-print(f"tokens per mixture: {plan['total_tokens_per_mix']:,} ({plan['total_steps_per_mix']:,} steps)")
-PY
-
-log "data ready in $SLICE_DIR"
+log "recipe sidecars ready under $RECIPE_WORK"
+log "train with POOL_DIR=$POOL_DIR MIX_WEIGHTS_JSON=$RECIPE_WORK/mix01/mix_weights.json"

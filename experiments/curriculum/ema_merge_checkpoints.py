@@ -229,7 +229,8 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         "--checkpoints-root",
         type=Path,
         required=True,
-        help="Directory containing step{N}/state.pt (local sync of S3 curriculum/<arm>/checkpoints)",
+        help="Directory containing step{N}/state.pt "
+        "(stage from s3://edullm-checkpoints/curriculum/<arm>/checkpoints into a work dir first)",
     )
     ap.add_argument("--arm-id", type=str, required=True)
     ap.add_argument(

@@ -1,116 +1,234 @@
 #!/usr/bin/env python3
-"""Prepare RefHQ tokenized memmaps for OLMo-ladder 370M training.
+"""Stage RefHQ train memmaps for the reference arm from ``s3://edullm-data``.
 
-Discovers ``tokenized/<domain>/<domain>.npy`` under ``--tokenized-root`` (or under
-``<work>/tokenized``), writes ``paths.txt``, then runs a mix-proportional ~30M-token
-validation holdout via ``make_val_holdout.py``.
+Resolves ``pretrain/refhq-regmix-5p5b`` via ``edullm_data.read.resolve_latest`` /
+``dataset_paths`` and downloads train-split ``.u32le.bin`` shards into ``--work``
+(idempotent: skips objects whose local size already matches S3).
+
+Writes::
+
+  <work>/tokenized/paths_train.txt
+  <work>/length_tokens.txt
+  <work>/refhq_data_summary.json
+
+Requires ``edullm-data`` installed and AWS credentials that can read
+``s3://edullm-data`` (``aws`` CLI preferred for multipart downloads). Does **not**
+assume FarmShare scratch or laptop-local corpora already exist, and never reads
+``s3://edullm-datasets/``.
 """
 from __future__ import annotations
 
 import argparse
 import json
+import shutil
 import subprocess
-import sys
 from pathlib import Path
+from typing import Any, List, Optional, Tuple
+from urllib.parse import urlparse
 
-KNOWN_DOMAINS = (
-    "dclm",
-    "starcoder",
-    "pes2o",
-    "arxiv",
-    "open-web-math",
-    "algebraic-stack",
-    "wiki",
-)
+DEFAULT_DATASET_ID = "pretrain/refhq-regmix-5p5b"
+DEFAULT_SPLIT = "train"
+LEGACY_BUCKET = "edullm-datasets"
 
 
-def discover_domain_npys(tokenized_root: Path) -> list[Path]:
-    found: list[Path] = []
-    for domain in KNOWN_DOMAINS:
-        candidate = tokenized_root / domain / f"{domain}.npy"
-        if candidate.is_file():
-            found.append(candidate)
-            continue
-        # Fallback: any .npy directly under the domain folder.
-        domain_dir = tokenized_root / domain
-        if domain_dir.is_dir():
-            found.extend(sorted(domain_dir.glob("*.npy")))
-    # Also pick up unexpected domain folders that still look like RefHQ layout.
-    for child in sorted(tokenized_root.iterdir()):
-        if not child.is_dir() or child.name in {"holdout", "train", "val"}:
-            continue
-        if child.name in KNOWN_DOMAINS:
-            continue
-        found.extend(sorted(child.glob("*.npy")))
-    # Deduplicate while preserving order.
-    seen: set[Path] = set()
-    out: list[Path] = []
-    for p in found:
-        rp = p.resolve()
-        if rp in seen:
-            continue
-        seen.add(rp)
-        out.append(p)
-    return out
+def _ensure_edullm_data() -> None:
+    try:
+        import edullm_data  # noqa: F401
+    except ImportError as exc:
+        raise SystemExit(
+            "edullm-data package is required. Install with:\n"
+            '  uv add "edullm-data @ git+https://github.com/edu-llm/edullm-data@v0.2.0"\n'
+            "or: pip install 'edullm-data @ git+https://github.com/edu-llm/edullm-data@v0.2.0'"
+        ) from exc
+
+
+def _resolve_split(dataset_id: str, *, version: Optional[str], split: str):
+    from edullm_data.read import dataset_paths, resolve_latest
+    from edullm_data.s3 import Boto3S3
+
+    s3 = Boto3S3.default()
+    ver = version or resolve_latest(dataset_id, s3=s3)
+    if not ver:
+        raise SystemExit(f"No published version in edullm-data catalog for {dataset_id!r}")
+    resolved = dataset_paths(dataset_id, ver, split=split, s3=s3, require_validated=True)
+    if not resolved.paths:
+        raise SystemExit(f"No objects for {dataset_id}/{ver} split={split!r}")
+    return resolved
+
+
+def _s3_uri_parts(uri: str) -> Tuple[str, str]:
+    p = urlparse(uri)
+    if p.scheme != "s3" or not p.netloc or not p.path:
+        raise SystemExit(f"Expected s3:// URI, got {uri!r}")
+    if p.netloc == LEGACY_BUCKET:
+        raise SystemExit(
+            f"Refusing legacy bucket {LEGACY_BUCKET!r} in {uri!r}; use s3://edullm-data/"
+        )
+    return p.netloc, p.path.lstrip("/")
+
+
+def _head_size(bucket: str, key: str) -> int:
+    from edullm_data.s3 import Boto3S3
+
+    return int(Boto3S3.default().head(bucket, key)["size"])
+
+
+def _download_one(uri: str, dest: Path) -> None:
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    bucket, key = _s3_uri_parts(uri)
+    remote_size = _head_size(bucket, key)
+    if dest.is_file() and dest.stat().st_size == remote_size:
+        return
+    tmp = dest.with_suffix(dest.suffix + ".partial")
+    if shutil.which("aws"):
+        subprocess.run(
+            ["aws", "s3", "cp", uri, str(tmp), "--only-show-errors"],
+            check=True,
+        )
+    else:
+        import boto3
+
+        boto3.client("s3").download_file(bucket, key, str(tmp))
+    got = tmp.stat().st_size
+    if got != remote_size:
+        tmp.unlink(missing_ok=True)
+        raise SystemExit(
+            f"Download size mismatch for {uri}: got {got}, expected {remote_size}"
+        )
+    tmp.replace(dest)
+
+
+def stage_resolved(resolved: Any, stage_root: Path) -> dict:
+    """Download ``resolved.paths`` under ``stage_root``; return local path info."""
+    stage_root.mkdir(parents=True, exist_ok=True)
+    local_paths: List[Path] = []
+    prefix = f"{resolved.dataset_id}/{resolved.version}/"
+    for uri in resolved.paths:
+        _bucket, key = _s3_uri_parts(uri)
+        if not key.startswith(prefix):
+            raise SystemExit(f"Object key {key!r} not under {prefix!r}")
+        rel = key[len(prefix) :]
+        dest = stage_root / rel
+        print(f"[refhq] stage {uri} -> {dest}", flush=True)
+        _download_one(uri, dest)
+        local_paths.append(dest)
+    if not local_paths:
+        raise SystemExit("No local shards staged for refhq")
+    return {
+        "n_files": len(local_paths),
+        "total_tokens_on_disk": sum(p.stat().st_size // 4 for p in local_paths),
+        "local_paths": [str(p.resolve()) for p in local_paths],
+        "s3_paths": list(resolved.paths),
+        "dataset_id": resolved.dataset_id,
+        "version": resolved.version,
+        "split": resolved.split,
+        "dtype": resolved.dtype or "uint32",
+        "rows": resolved.rows,
+        "uri": f"s3://edullm-data/{resolved.dataset_id}/{resolved.version}/",
+    }
+
+
+def write_paths(local_paths: List[str], out_file: Path) -> None:
+    out_file.parent.mkdir(parents=True, exist_ok=True)
+    out_file.write_text("\n".join(local_paths) + "\n", encoding="utf-8")
 
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--work", type=Path, required=True, help="Run directory (contains tokenized/)")
     ap.add_argument(
-        "--tokenized-root",
+        "--work",
         type=Path,
-        default=None,
-        help="Override path to tokenized/<domain>/*.npy (default: <work>/tokenized)",
+        required=True,
+        help="Ephemeral staging root (must be empty or a prior stage of this script)",
     )
-    ap.add_argument("--target-val-tokens", type=int, default=30_000_000)
-    ap.add_argument("--seed", type=int, default=6198)
-    ap.add_argument("--skip-holdout", action="store_true", help="Train on all tokens; no val split")
+    ap.add_argument(
+        "--dataset-id",
+        default=DEFAULT_DATASET_ID,
+        help=f"edullm-data dataset id (default: {DEFAULT_DATASET_ID})",
+    )
+    ap.add_argument(
+        "--dataset-version",
+        default=None,
+        help="Pin version (default: resolve_latest)",
+    )
+    ap.add_argument(
+        "--split",
+        default=DEFAULT_SPLIT,
+        help="Partition to stage (default: train)",
+    )
+    ap.add_argument(
+        "--length-tokens",
+        type=int,
+        default=None,
+        help="Token budget written to length_tokens.txt (default: published rows)",
+    )
+    ap.add_argument(
+        "--skip-download",
+        action="store_true",
+        help="Only rematerialize path lists if shards already staged under --work",
+    )
     args = ap.parse_args()
 
+    if LEGACY_BUCKET in str(args.work).replace("\\", "/"):
+        raise SystemExit(
+            f"Refusing --work under legacy {LEGACY_BUCKET!r}; use a clean scratch dir"
+        )
+
+    _ensure_edullm_data()
     work = args.work
-    tok = args.tokenized_root or (work / "tokenized")
-    tok.mkdir(parents=True, exist_ok=True)
     work.mkdir(parents=True, exist_ok=True)
 
-    paths = discover_domain_npys(tok)
-    if not paths:
-        raise SystemExit(f"No domain .npy memmaps under {tok}")
+    resolved = _resolve_split(
+        args.dataset_id, version=args.dataset_version, split=args.split
+    )
+    stage_root = work / "tokenized" / "shards"
 
-    paths_file = tok / "paths.txt"
-    paths_file.write_text("\n".join(str(p.resolve()) for p in paths) + "\n")
+    if args.skip_download:
+        prefix = f"{resolved.dataset_id}/{resolved.version}/"
+        locals_: List[str] = []
+        for uri in resolved.paths:
+            _, key = _s3_uri_parts(uri)
+            dest = stage_root / key[len(prefix) :]
+            if not dest.is_file():
+                raise SystemExit(
+                    f"--skip-download but missing {dest}; re-run without --skip-download"
+                )
+            locals_.append(str(dest.resolve()))
+        info = {
+            "n_files": len(locals_),
+            "total_tokens_on_disk": sum(Path(p).stat().st_size // 4 for p in locals_),
+            "local_paths": locals_,
+            "s3_paths": list(resolved.paths),
+            "dataset_id": resolved.dataset_id,
+            "version": resolved.version,
+            "split": resolved.split,
+            "dtype": resolved.dtype or "uint32",
+            "rows": resolved.rows,
+            "uri": f"s3://edullm-data/{resolved.dataset_id}/{resolved.version}/",
+        }
+    else:
+        info = stage_resolved(resolved, stage_root)
 
-    totals = {p.parent.name: p.stat().st_size // 4 for p in paths}
+    paths_file = work / "tokenized" / "paths_train.txt"
+    write_paths(info["local_paths"], paths_file)
+    info["paths_file"] = str(paths_file.resolve())
+
+    length = (
+        int(args.length_tokens)
+        if args.length_tokens is not None
+        else int(info["rows"] or info["total_tokens_on_disk"])
+    )
+    (work / "length_tokens.txt").write_text(str(length) + "\n", encoding="utf-8")
+
     summary = {
-        "tokenized_root": str(tok.resolve()),
-        "n_files": len(paths),
-        "domains": totals,
-        "total_tokens": sum(totals.values()),
-        "paths_file": str(paths_file.resolve()),
+        "refhq": info,
+        "length_tokens": length,
+        "note": "Ephemeral stage only; durable checkpoints live under edullm-checkpoints",
     }
-    (tok / "prepare_summary.json").write_text(json.dumps(summary, indent=2) + "\n")
+    (work / "refhq_data_summary.json").write_text(
+        json.dumps(summary, indent=2) + "\n", encoding="utf-8"
+    )
     print(json.dumps(summary, indent=2), flush=True)
-
-    if args.skip_holdout:
-        train_file = tok / "paths_train.txt"
-        train_file.write_text(paths_file.read_text())
-        (tok / "paths_val.txt").write_text("")
-        (work / "length_tokens.txt").write_text(str(summary["total_tokens"]) + "\n")
-        print("skip-holdout: paths_train.txt = paths.txt; no val", flush=True)
-        return 0
-
-    holdout_script = Path(__file__).resolve().parent / "make_val_holdout.py"
-    cmd = [
-        sys.executable,
-        str(holdout_script),
-        str(work),
-        "--target-tokens",
-        str(args.target_val_tokens),
-        "--seed",
-        str(args.seed),
-    ]
-    print(" ".join(cmd), flush=True)
-    subprocess.run(cmd, check=True)
     return 0
 
 

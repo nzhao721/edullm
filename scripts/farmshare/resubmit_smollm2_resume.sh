@@ -1,13 +1,24 @@
 #!/usr/bin/env bash
+# Resume SmolLM2 DDP from a durable S3 checkpoint (ephemeral scratch safe).
+#
+# Required:
+#   RESUME_FROM_S3=s3://edullm-checkpoints/smollm2/<prior-run>/checkpoints/stepNNNNNNN/
+# Optional:
+#   RUN_NAME, CHECKPOINT_S3_URI, DATASET_ID, NUM_NODES, ...
+#
+# Do not point RESUME_FROM at a wiped scratch path.
 set -Eeuo pipefail
-STAGING=/scratch/users/nzhao2/agent-runs/edullm-farmshare-staging/scripts/farmshare
-RUN_DIR=/scratch/users/nzhao2/agent-runs/smollm2-135m-500m-40ep-20260730-061208
-export RUN_DIR
-export OUT_DIR="${RUN_DIR}/output"
-export RESUME_FROM="${OUT_DIR}/checkpoints/step0003815"
-export NODELIST="oat-04,oat-06"
-export SLURM_MEM="48G"
-export CPUS_PER_TASK="8"
-export TRAIN_PY="${STAGING}/train_smollm2_135m_ddp.py"
-sed -i 's/\r$//' "${STAGING}/"*.py "${STAGING}/"*.sh
-bash "${STAGING}/submit_smollm2_135m_500m_40ep.sh"
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SUNET="${SUNET:-${USER:-nzhao2}}"
+
+if [[ -z "${RESUME_FROM_S3:-}" ]]; then
+  echo "RESUME_FROM_S3 is required (durable checkpoint URI). Local scratch resume is unsupported." >&2
+  exit 2
+fi
+
+export SUNET
+export RESUME_FROM_S3
+unset RESUME_FROM
+export TRAIN_PY="${TRAIN_PY:-${SCRIPT_DIR}/train_smollm2_135m_ddp.py}"
+bash "${SCRIPT_DIR}/submit_smollm2_135m_500m_40ep.sh"

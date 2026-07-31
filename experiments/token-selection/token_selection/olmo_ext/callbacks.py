@@ -160,28 +160,34 @@ class RawComputeCallback(Callback if _HAS_OLMO else object):  # type: ignore[mis
         self._drop_rows_after_checkpoint(step)
         n_kept = selection["n_kept"]
         n_valid = selection["n_valid"]
-        self._logger.log_step(
-            StepMetrics(
-                step=step,
-                tokens_seen=int(self._logger.payload["compute"]["forward_tokens_train"]),
-                k=float(progress["k"]),
-                alpha=float(progress["alpha"]),
-                warmup=bool(progress["warmup"]),
-                selected_frac=(n_kept / n_valid) if n_valid else 1.0,
-                mean_rel_kept=_safe_mean(selection["rel_score_sum_kept"], n_kept),
-                mean_rel_dropped=_safe_mean(selection["rel_score_sum_dropped"], selection["n_dropped"]),
-                train_loss=_safe_mean(selection["ce_loss_sum"], selection["n_batches"]),
-                selected_tokens=global_counters["selected_tokens"],
-                forward_tokens_train=global_counters["forward_tokens_train"],
-                forward_tokens_history=global_counters["forward_tokens_history"],
-                forward_tokens_current=global_counters["forward_tokens_current"],
-                fwd_passes_train=global_counters["fwd_passes_train"],
-                fwd_passes_history=global_counters["fwd_passes_history"],
-                fwd_passes_current=global_counters["fwd_passes_current"],
-                method=str(progress["method"]),
-            )
+        row = StepMetrics(
+            step=step,
+            tokens_seen=int(self._logger.payload["compute"]["forward_tokens_train"]),
+            k=float(progress["k"]),
+            alpha=float(progress["alpha"]),
+            warmup=bool(progress["warmup"]),
+            selected_frac=(n_kept / n_valid) if n_valid else 1.0,
+            mean_rel_kept=_safe_mean(selection["rel_score_sum_kept"], n_kept),
+            mean_rel_dropped=_safe_mean(selection["rel_score_sum_dropped"], selection["n_dropped"]),
+            train_loss=_safe_mean(selection["ce_loss_sum"], selection["n_batches"]),
+            selected_tokens=global_counters["selected_tokens"],
+            forward_tokens_train=global_counters["forward_tokens_train"],
+            forward_tokens_history=global_counters["forward_tokens_history"],
+            forward_tokens_current=global_counters["forward_tokens_current"],
+            fwd_passes_train=global_counters["fwd_passes_train"],
+            fwd_passes_history=global_counters["fwd_passes_history"],
+            fwd_passes_current=global_counters["fwd_passes_current"],
+            method=str(progress["method"]),
         )
+        self._logger.log_step(row)
         self._logger.flush()
+        # Mirror scientific ledger scalars to W&B when a run is active (YAML spine).
+        try:
+            from .wandb_logging import _wandb_run_from_trainer, mirror_raw_step_to_wandb
+
+            mirror_raw_step_to_wandb(_wandb_run_from_trainer(self.trainer), row.to_dict())
+        except Exception:
+            pass
 
     def post_train_batch(self) -> None:  # pragma: no cover - requires olmo_core
         self._consume_train_compute()

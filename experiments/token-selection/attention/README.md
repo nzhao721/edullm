@@ -23,11 +23,11 @@ weights (no full-matrix materialization during FlashAttention).
 | Knob | Value |
 |------|--------|
 | Arch | `olmo2_370M` (RefHQ-matched) |
-| Data | RegMix 10B `s3://edullm-datasets/regmix/regmix-10b/tokenized` |
-| Steps | ~2384 (`10B // 4_194_304`) |
+| Data | `pretrain/regmix-10b` via `data.dataset_id` → `s3://edullm-data/` (staged per job) |
+| Steps | **2360** (`9900000000 // 4_194_304`) |
 | Keep rate `k` | 0.6 |
 | Masking warmup | `t0_steps=0` (selection from step 0) |
-| Permanent ckpts | `{0, 125, …, 2250, 2384}` (omit 2375) |
+| Permanent ckpts | `{0, 125, …, 2125, 2360}` (omit 2250) |
 | Eval | full 20-label `task_loss_bpb` on each permanent save |
 | `run_id` | `attention-topk-10b-scratch-v1` |
 | S3 export | `s3://edullm-checkpoints/token-sel/attention/` |
@@ -64,7 +64,10 @@ No hardcoded GPU count or host paths. Under Slurm, leave
 
 Dry-run (print plan only): omit `--launch`.
 
-Resume: `RESUME=1 bash attention/launch.sh` (fingerprint-gated).
+Resume: `RESUME=1 bash attention/launch.sh` (fingerprint-gated). On ephemeral
+scratch, `--resume` fetches `run_fingerprint.json` + step dirs from
+`s3://edullm-checkpoints/token-sel/attention/` when the local save folder is
+empty — keep `S3_EXPORT=1` during training.
 
 Task-loss results: `task_loss_results/attention/step{N}_task_loss.json`
 (disable with `TASK_LOSS_EVAL=0`).

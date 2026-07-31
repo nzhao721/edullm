@@ -25,7 +25,7 @@ from typing import Any, Iterator
 
 import numpy as np
 
-# Canonical OLMo-2 tokenizer (same as OLMo-ladder / experiments/baseline/farmshare/train_olmo_ladder_370m.py).
+# Canonical OLMo-2 tokenizer (allenai OLMo-ladder / dolma2).
 TOKENIZER_ID = "allenai/dolma2-tokenizer"
 EOS_TOKEN_ID = 100257  # dolma2 <|endoftext|>
 _TOKENIZER = None

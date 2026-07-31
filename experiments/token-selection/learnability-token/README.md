@@ -14,10 +14,10 @@ with dual frozen RefHQ refs; the doc arm filters offline then trains plain CE.
 | Selection warmup | `t0_steps=0` / `t0_frac=0` (active from step 0) |
 | Early ref | RefHQ step250 |
 | Late ref | mean of RefHQ step1000 / 1125 / 1315 |
-| Corpus | RegMix 10B (`s3://edullm-datasets/regmix/regmix-10b/`) |
+| Corpus | `pretrain/regmix-10b` (`data.dataset_id` → `s3://edullm-data/`; stage per job) |
 | Arch | `olmo2_370M` (RefHQ-matched) |
-| Steps | 2384 (`10e9 // 4_194_304`) |
-| Permanent ckpts | `{0, 125, …, 2250, 2384}` — **omit 2375** |
+| Steps | **2360** (`9900000000 // 4_194_304`) |
+| Permanent ckpts | `{0, 125, …, 2125, 2360}` — **omit 2250** |
 | Eval | full 20-label `task_loss_bpb` on every permanent save |
 | run_id | `learnability-token-10b-scratch-v1` |
 | S3 export | `s3://edullm-checkpoints/token-sel/learnability-token/` |
@@ -69,22 +69,18 @@ export PYTHONPATH=experiments/token-selection
 export OLMO_ROOT=/path/to/OLMo-core
 CFG=experiments/token-selection/learnability-token/configs/run_learnability_10b.yaml
 
-# 1) Sync tokens into <output_dir>/tokens and freeze order (same as RHO/middle_ppl).
-python -m token_selection.scripts.build_token_manifest --config "$CFG"
-python -m token_selection.scripts.freeze_order --config "$CFG"
+# 1) Optional preflight: stage tokens+order from edullm-data (also done by --launch).
+python -m token_selection.scripts.validate_experiment --config "$CFG" --stage
 
-# 2) Validate (requires early/late load_path set to real local .pt files).
-python -m token_selection.scripts.validate_experiment --config "$CFG" --olmo-root "$OLMO_ROOT"
-
-# 3) Train — single GPU
+# 2) Train — single GPU (--launch stages corpus + materializes S3 refs)
 export CUDA_VISIBLE_DEVICES=0
 NPROC=1 bash experiments/token-selection/learnability-token/launch.sh
 
-# 3b) Train — multi-GPU (world size from NPROC / CUDA_VISIBLE_DEVICES)
+# 2b) Train — multi-GPU (world size from NPROC / CUDA_VISIBLE_DEVICES)
 export CUDA_VISIBLE_DEVICES=0,1
 NPROC=2 bash experiments/token-selection/learnability-token/launch.sh
 
-# Resume
+# Resume (fetches durable ckpts from edullm-checkpoints when local save is empty)
 RESUME=1 NPROC=2 bash experiments/token-selection/learnability-token/launch.sh
 ```
 
@@ -98,6 +94,7 @@ CUDA_VISIBLE_DEVICES=0,1 python -m torch.distributed.run --standalone --nproc_pe
 ```
 
 Task-loss outputs: `task_loss_results/learnability-token/step{N}_task_loss.json`
-(or disable with `TASK_LOSS_EVAL=0`).
+(or disable with `TASK_LOSS_EVAL=0`). Durable checkpoints live under
+`s3://edullm-checkpoints/token-sel/learnability-token/` — do not rely on scratch.
 
 Do **not** submit AWS training from this arm without an explicit authorized workload.

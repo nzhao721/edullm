@@ -11,8 +11,8 @@ compatible with the control / BLADE CE trainers::
     <out-dir>/paths_train.txt
     <out-dir>/corpus_manifest.json
 
-Training upsamples by cycling the memmaps to a 10B token budget (~2384 steps);
-this script only builds the kept subset once.
+Training upsamples by cycling the memmaps to the shared one-epoch budget
+(9.9B tokens / 2360 steps). This script only builds the kept subset once.
 """
 
 from __future__ import annotations
@@ -245,8 +245,8 @@ def main() -> int:
         "domains": domain_meta,
         "paths_train": str(paths_file.resolve()),
         "upsample_note": (
-            "Train with --length-tokens 10000000000; InfiniteBatchStream cycles "
-            "the kept memmaps to fill the 10B / ~2384-step budget."
+            "Train with --length-tokens 9900000000; InfiniteBatchStream cycles "
+            "the kept memmaps to fill the 9.9B / 2360-step one-epoch budget."
         ),
     }
     (out_dir / "corpus_manifest.json").write_text(

@@ -7,6 +7,30 @@ from typing import Any, Dict, Tuple
 
 import yaml
 
+from token_selection.scripts.train_data_resolve import (
+    DATA_BUCKET,
+    DEFAULT_TRAIN_DATASET_ID,
+    resolve_tokens_s3,
+    resolve_train_dataset,
+    resolve_train_dataset_id,
+    resolve_train_dataset_version,
+    resolve_train_split,
+)
+
+__all__ = [
+    "DATA_BUCKET",
+    "DEFAULT_TRAIN_DATASET_ID",
+    "derive_steps",
+    "load_config",
+    "resolve_output_dir",
+    "resolve_tokens_s3",
+    "resolve_train_dataset",
+    "resolve_train_dataset_id",
+    "resolve_train_dataset_version",
+    "resolve_train_split",
+    "s3_uri",
+]
+
 
 def load_config(path: str | Path) -> Dict[str, Any]:
     path = Path(path)
@@ -53,34 +77,24 @@ def derive_steps(cfg: Dict[str, Any]) -> Tuple[int, int]:
     return total_steps, t0_steps
 
 
-def resolve_tokens_s3(cfg: Dict[str, Any]) -> str:
-    """Return the pre-tokenized shard directory URI from ``data.tokens_s3``."""
-    uri = str((cfg.get("data") or {}).get("tokens_s3") or "").strip().rstrip("/")
-    if not uri.startswith("s3://"):
-        raise ValueError(
-            "data.tokens_s3 must be an s3:// URI to the pre-tokenized corpus directory "
-            "(per-domain <domain>/<domain>.npy shards, their .json sidecars, and paths.txt)"
-        )
-    if "REPLACE_ME" in uri:
-        raise ValueError(
-            f"data.tokens_s3 is still the placeholder {uri!r}; point it at the real "
-            "pre-tokenized shard directory before running anything."
-        )
-    return uri
-
-
 def s3_uri(
     cfg: Dict[str, Any],
     *parts: str,
-    bucket_key: str = "dataset_bucket",
+    bucket_key: str = "checkpoint_bucket",
     prefix_key: str = "prefix",
 ) -> str:
     """Build an S3 URI for per-run outputs (metrics / checkpoints).
 
-    Tokenized training inputs are *not* composed here — use ``resolve_tokens_s3``.
+    Defaults to ``checkpoint_bucket`` so callers never accidentally target the
+    locked ``edullm-data`` bucket. Tokenized training inputs are *not* composed
+    here — use ``resolve_tokens_s3`` / ``resolve_train_dataset``.
     """
     s3 = cfg["s3"]
-    bucket = s3.get(bucket_key) or s3["dataset_bucket"]
+    bucket = s3.get(bucket_key) or s3.get("checkpoint_bucket") or s3.get("dataset_bucket")
+    if not bucket:
+        raise ValueError(
+            f"s3.{bucket_key} (or s3.checkpoint_bucket) is required to build output URIs"
+        )
     prefix = str(s3.get(prefix_key) or s3["prefix"]).rstrip("/")
     rest = "/".join(p.strip("/") for p in parts if p)
     if rest:

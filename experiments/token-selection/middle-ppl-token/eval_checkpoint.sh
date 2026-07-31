@@ -10,7 +10,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TS_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 EDULLM_ROOT="${EDULLM_ROOT:-$(cd "$TS_ROOT/../.." && pwd)}"
 EVAL_PY="${TASK_LOSS_EVAL_SCRIPT:-$EDULLM_ROOT/scripts/farmshare/task_loss/eval_task_loss_olmo_core.py}"
-RUN_NAME="${RUN_NAME:-middle-ppl-token-10b-v1}"
+RUN_NAME="${RUN_NAME:-middle-ppl-token-10b-v2}"
 OUT_DIR="${OUT_DIR:-$TS_ROOT/task_loss_results/middle-ppl-token}"
 BATCH="${DEVICE_EVAL_BATCH_SIZE:-4}"
 

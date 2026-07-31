@@ -1,9 +1,13 @@
-# Middle-PPL token arm: keep middle 60% by current-model CE (log-PPL) per sequence.
-# Shared scorer: token_selection.olmo_ext.scorers.middle_ppl (package).
-# RegMix 10B / olmo2_370M / permanent ladder {0,125,…,2250,2384} (skip 2375).
+# Middle-PPL token arm: keep middle 60% by frozen RefHQ late-avg token CE (L_ref).
+# Matches middle-ppl-doc offline filter (avg_perplexity under late RefHQ avg).
+# Marion et al. (2309.04564): perplexity pruning uses a separate reference model.
+# RegMix one-epoch (~9.989B catalog / 9.9B budget → 2360 steps) / olmo2_370M /
+# permanent ladder {0,125,…,2125,2360} (skip 2250).
 # Selection active from step 0 (t0_steps=0); LR warmup remains 24 steps.
+#
+# load_path may stay null: --launch auto-materializes late-avg from s3_uris.
 
-run_id: middle-ppl-token-10b-v1
+run_id: middle-ppl-token-10b-v2
 seed: 42
 output_dir: middle-ppl-token/data/middle_ppl_token_10b
 arm: middle-ppl-token
@@ -18,13 +22,25 @@ t0_frac: 0.0
 alpha_start: 0.99
 alpha_end: 0.98
 
+# Frozen late-avg RefHQ reference (same late avg as learnability-token / middle-ppl-doc).
+reference:
+  load_path: null
+  steps: [1000, 1125, 1315]
+  s3_uris:
+    - s3://edullm-checkpoints/olmo-370m/edullm-370M-refhq-5p5b/checkpoints/step1000/
+    - s3://edullm-checkpoints/olmo-370m/edullm-370M-refhq-5p5b/checkpoints/step1125/
+    - s3://edullm-checkpoints/olmo-370m/edullm-370M-refhq-5p5b/checkpoints/step1315/
+  dataset: pretrain/refhq-regmix-5p5b
+
 data:
-  tokens_s3: s3://edullm-datasets/regmix/regmix-10b/tokenized
-  tokenizer: allenai/dolma2-tokenizer
+  # Published+validated corpus (edullm_data.read.resolve_latest / dataset_paths).
+  dataset_id: pretrain/regmix-10b
+  tokenizer: allenai/dolma2-tokenizer  # same vocab as tokenizer/dolma2-bpe v1
   sequence_length: 2048
 
 s3:
-  dataset_bucket: edullm-datasets
+  # Train inputs resolve via data.dataset_id → s3://edullm-data/ (not this field).
+  dataset_bucket: edullm-data
   checkpoint_bucket: edullm-checkpoints
   # Checkpoints + results → s3://edullm-checkpoints/token-sel/middle-ppl-token/
   prefix: token-sel/middle-ppl-token
@@ -42,7 +58,8 @@ olmo_core:
   revision: 99e0009ed67679c90da970ec5ba439c9459e3757
 
 train:
-  max_tokens: 10000000000
+  # One epoch under published train (~9.989B catalog rows); 9.9B → 2360 steps at GBS.
+  max_tokens: 9900000000
   global_batch_size: 4194304
   lr: 4.0e-4
   lr_alpha_f: 0.1
@@ -66,7 +83,7 @@ train:
   num_gpus: null
   num_workers: 8
   # Permanent ladder via shared checkpointer_kwargs_for_ladder (interval 125).
-  # Saves {0,125,…,2250,2384}; omits 2375. No ephemeral rotation.
+  # Saves {0,125,…,2125,2360}; omits 2250. No ephemeral rotation.
   checkpoint_every_steps: 125
   checkpoint_keep_last: null
   pre_train_checkpoint: true

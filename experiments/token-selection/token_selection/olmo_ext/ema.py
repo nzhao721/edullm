@@ -94,7 +94,7 @@ def alpha_at_step(
 def alpha_for_half_life(half_life_steps: float) -> float:
     """Return α such that ``α ** half_life_steps == 0.5``.
 
-    Example: ~20% of a 2384-step run is H≈476.8 → α≈0.9985.
+    Example: ~20% of a 2360-step (9.9B) run is H≈472 → α≈0.9985.
     """
     if half_life_steps <= 0:
         raise ValueError(f"half_life_steps must be > 0, got {half_life_steps}")

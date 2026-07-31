@@ -2,12 +2,11 @@
 """Upload/download experiment artifacts to/from S3.
 
 Layout:
-  INPUT (read-only, pre-tokenized elsewhere):
-    tokens/ <- data.tokens_s3   (download only; never upload)
-              per-domain <domain>/<domain>.npy + .json sidecars + paths.txt
-  LOCAL (produced on the train box, not synced from the token bucket):
-    tokens/manifest.json <- build_token_manifest, derived from the sidecars
-    order/               <- freeze_order after the manifest exists
+  INPUT (read-only, published edullm-data):
+    tokens/ <- data.dataset_id via edullm_data.read + ensure_train_tokens
+              (``.u32le.bin`` train shards; local train manifest.json written here)
+  LOCAL (produced on the train box):
+    order/               <- ensure_order_contract / freeze_order after tokens exist
   OUTPUTS (this run) — published under edullm-checkpoints/token-sel/<arm>/:
     checkpoints/         -> s3://edullm-checkpoints/token-sel/<arm>/checkpoints/
     task_loss_results/   -> s3://edullm-checkpoints/token-sel/<arm>/task_loss_results/
@@ -38,6 +37,10 @@ from token_selection.scripts import (
     resolve_tokens_s3,
     s3_uri,
 )
+from token_selection.scripts.edullm_data_tokens import (
+    ensure_order_contract,
+    ensure_train_tokens,
+)
 
 
 def _aws(profile: str, args: list[str]) -> None:
@@ -58,6 +61,7 @@ def sync_dir(
     upload: bool,
     mirror: bool = False,
     keep: tuple[str, ...] = (),
+    excludes: tuple[str, ...] = (),
 ) -> None:
     local = Path(local)
     local.mkdir(parents=True, exist_ok=True)
@@ -76,6 +80,8 @@ def sync_dir(
         cmd.append("--delete")
     # Keep locally-derived files (e.g. manifest.json) from being deleted by --delete.
     for pattern in keep:
+        cmd.extend(["--exclude", pattern])
+    for pattern in excludes:
         cmd.extend(["--exclude", pattern])
     cmd.extend(["--only-show-errors"])
     _aws(profile, cmd)
@@ -106,12 +112,27 @@ def main() -> None:
 
     arm_root = s3_uri(cfg, bucket_key="checkpoint_bucket").rstrip("/")
 
+    if args.what in ("tokens", "all") and not upload:
+        # Preferred path: resolve + stage via edullm_data.read (excludes val, writes
+        # local train manifest). Works on a clean machine.
+        try:
+            remote = resolve_tokens_s3(cfg)
+        except Exception as exc:
+            raise SystemExit(f"train corpus resolution failed: {exc}") from exc
+        print(f"=== download tokens from {remote} via ensure_train_tokens")
+        try:
+            ensure_train_tokens(cfg, out / "tokens", profile=profile, force=True)
+            ensure_order_contract(cfg, out)
+        except Exception as exc:
+            raise SystemExit(f"token staging failed: {exc}") from exc
+        print(
+            "\nTokens staged from edullm-data and order contract written.\n"
+            "Train with: python -m token_selection.scripts.train_olmo_template "
+            f"--config {args.config} --method <method> --olmo-root <OLMo-core> --launch"
+        )
+
     # (name, local, remote, read_only_input, keep_through_mirror)
     targets: list[tuple[str, Path, str, bool, tuple[str, ...]]] = []
-    if args.what in ("tokens", "all"):
-        targets.append(
-            ("tokens", out / "tokens", resolve_tokens_s3(cfg) + "/", True, ("manifest.json",))
-        )
     if args.what in ("metrics", "all"):
         targets.append(
             ("metrics", out / "metrics", f"{arm_root}/metrics/", False, ())
@@ -121,8 +142,6 @@ def main() -> None:
             ("checkpoints", out / "checkpoints", f"{arm_root}/checkpoints/", False, ())
         )
     if args.what in ("task_loss", "all"):
-        # Prefer arm-local results dir under package sibling task_loss_results/<arm>
-        # when present; else output_dir/task_loss_results.
         tl_local = out / "task_loss_results"
         targets.append(
             ("task_loss_results", tl_local, f"{arm_root}/task_loss_results/", False, ())
@@ -137,15 +156,21 @@ def main() -> None:
         if not upload and not read_only and args.what == "all":
             print(f"=== skip download {name} (run output; use --what {name} to pull)")
             continue
+        if upload and name == "tokens":
+            raise SystemExit(
+                "Refusing to upload tokens. Pre-tokenized inputs are read-only under "
+                "s3://edullm-data/; only metrics, checkpoints, and task_loss_results "
+                "are published."
+            )
         mirror = read_only and not upload and not args.no_mirror
         print(f"=== {args.direction} {name}: {local} <-> {remote}{' [mirror]' if mirror else ''}")
         sync_dir(local, remote, profile=profile, upload=upload, mirror=mirror, keep=keep)
 
-    if args.what in ("tokens", "all") and not upload:
-        print(
-            "\nNext: derive the token manifest from the corpus sidecars, then freeze order:\n"
-            "  python -m token_selection.scripts.build_token_manifest\n"
-            "  python token_selection/scripts/freeze_order.py"
+    if args.what in ("tokens", "all") and upload:
+        raise SystemExit(
+            "Refusing to upload tokens. Pre-tokenized inputs are read-only under "
+            "s3://edullm-data/; only metrics, checkpoints, and task_loss_results "
+            "are published."
         )
     print("Done.")
 

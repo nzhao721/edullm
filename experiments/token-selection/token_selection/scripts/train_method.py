@@ -19,7 +19,13 @@ if str(ROOT) not in sys.path:
 
 from token_selection.olmo_ext.scorers import MethodName
 from token_selection.olmo_ext.train_module import has_olmo_core, make_ts_config
-from token_selection.scripts import derive_steps, load_config, resolve_output_dir
+from token_selection.scripts import (
+    derive_steps,
+    load_config,
+    resolve_output_dir,
+    resolve_train_dataset,
+    s3_uri,
+)
 from token_selection.scripts.experiment_contract import validate_scratch_config
 
 _ALL: list[MethodName] = [
@@ -66,8 +72,16 @@ def main() -> None:
     if method not in allowed:
         raise SystemExit(f"method {method!r} not in config methods {allowed}")
 
+    # Fail closed: train corpus must resolve from published+validated edullm-data.
+    # Does not consult FarmShare scratch, laptop-local caches, or edullm-datasets.
+    try:
+        train_data = resolve_train_dataset(cfg)
+    except Exception as exc:
+        raise SystemExit(f"train corpus resolution failed: {exc}") from exc
+
     total_steps, t0_steps = derive_steps(cfg)
     ts_cfg = make_ts_config(cfg, method=method, total_steps=total_steps, t0_steps=t0_steps)
+    ckpt_uri = s3_uri(cfg, "checkpoints", method, bucket_key="checkpoint_bucket")
     print(
         json.dumps(
             {
@@ -77,8 +91,24 @@ def main() -> None:
                 "total_steps": total_steps,
                 "t0_steps": t0_steps,
                 "ts_cfg": ts_cfg.__dict__,
-                "hint": "Use token_selection.scripts.train_olmo_template --method "
-                f"{method} --launch (requires the pinned olmo_core checkout).",
+                "train_data": {
+                    "dataset_id": train_data["dataset_id"],
+                    "version": train_data["version"],
+                    "tokens_uri": train_data["tokens_uri"],
+                    "dtype": train_data["dtype"],
+                    "numpy_dtype": train_data["numpy_dtype"],
+                    "rows": train_data["rows"],
+                    "n_shards": len(train_data["paths"]),
+                },
+                "durable_checkpoints": ckpt_uri,
+                "hint": (
+                    "Use token_selection.scripts.train_olmo_template --method "
+                    f"{method} --olmo-root <OLMo-core> --launch "
+                    "(stages tokens+order from edullm-data; exports ckpts to "
+                    f"{ckpt_uri}/). Ephemeral scratch is not durable — keep "
+                    "S3_EXPORT=1. Resume with --resume (fetches from that S3 prefix "
+                    "when the local save folder is empty)."
+                ),
                 "run_id": cfg.get("run_id"),
                 "output_dir": str(out),
             },

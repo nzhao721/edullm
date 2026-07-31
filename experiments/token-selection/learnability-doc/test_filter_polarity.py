@@ -46,16 +46,16 @@ class TestLearnabilityFilterPolarity(unittest.TestCase):
         self.assertEqual(stats["kept_tokens"], 60)
         self.assertNotIn("C", ids)
 
-    def test_2384_ladder_omits_2375(self) -> None:
+    def test_2360_ladder_omits_2250(self) -> None:
         ts_root = Path(__file__).resolve().parents[1]
         sys.path.insert(0, str(ts_root))
         from token_selection.olmo_ext.checkpoint_ladder import permanent_checkpoint_steps
 
-        steps = permanent_checkpoint_steps(2384, 125)
+        steps = permanent_checkpoint_steps(2360, 125)
         self.assertIn(0, steps)
-        self.assertIn(2250, steps)
-        self.assertIn(2384, steps)
-        self.assertNotIn(2375, steps)
+        self.assertIn(2125, steps)
+        self.assertIn(2360, steps)
+        self.assertNotIn(2250, steps)
 
     def test_ready_required_by_default(self) -> None:
         import tempfile

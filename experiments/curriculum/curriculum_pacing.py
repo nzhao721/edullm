@@ -15,7 +15,8 @@ Pacing names
 ``expanding_25_1000``
     Eligible pool grows from easiest 25% at step 0 to 100% at step 1000.
 ``warmup_1000``
-    Strict easy→hard order for steps 0–999; uniform shuffle thereafter.
+    Strict easy→hard order for steps 0–999 (non-overlapping walk:
+    ``start = (step * global_batch_seqs) % n``); uniform shuffle thereafter.
 ``interleave_i10_linear``
     Ten segments; within each, replay a full linear N=10 mini-curriculum.
 """
@@ -173,7 +174,7 @@ class PoolSpec:
     start: int
     end: int
     ordered: bool = False
-    # Absolute position in the ordered stream (warmup only).
+    # Absolute global step for ordered warmup (stream uses step * n_take).
     ordered_offset: Optional[int] = None
 
 
@@ -209,14 +210,14 @@ def pool_for_step(
 
     if name == "warmup_1000":
         if int(step) < WARMUP_SWITCH:
-            # Strict ascending: each global step advances through the ranked list
-            # wrapping if needed. Batching is handled by the stream.
+            # Strict easy→hard walk: stream consumes ``n_take`` consecutive ranks
+            # per step via ``start = (step * n_take) % n`` (resume-addressable).
             return PoolSpec(
                 mode=name,
                 start=0,
                 end=n,
                 ordered=True,
-                ordered_offset=int(step) % n,
+                ordered_offset=int(step),  # step index; stream multiplies by n_take
             )
         return PoolSpec(mode=name, start=0, end=n, ordered=False)
 
@@ -278,11 +279,12 @@ class CurriculumChunkStream:
         n_take = int(batch_size) * self.world_size
 
         if pool.ordered:
-            # Deterministic ascending walk shared across ranks, then slice.
-            # Prefer step-derived ordered_offset (resume / step-addressed access);
-            # fall back to the stream cursor for uninterrupted sequential draws.
+            # Deterministic non-overlapping easy→hard walk shared across ranks.
+            # ``ordered_offset`` is the global step (resume-addressable); each step
+            # consumes ``n_take`` consecutive ranks: start = (step * n_take) % n.
+            # Fall back to the stream cursor only when offset is unset.
             if pool.ordered_offset is not None:
-                start = int(pool.ordered_offset) % len(self.ranked)
+                start = (int(pool.ordered_offset) * n_take) % len(self.ranked)
             else:
                 start = self._warmup_cursor % len(self.ranked)
             pos = np.arange(start, start + n_take, dtype=np.int64) % len(self.ranked)

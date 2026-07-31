@@ -11,10 +11,11 @@ Set `PYTHONPATH=experiments/token-selection` from the repo root.
 
 | Method | Selection | Scorer | Arm dir |
 |--------|-----------|--------|---------|
-| `full` | all valid tokens | none | `../control/` (standalone) |
+| `full` | all valid tokens | none | warmup / ablations only |
+| `random` | uniform random keep-k | none (seeded per step) | `../control/` (standalone) |
 | `rel_ema` | top-k `L_hist − L_curr` | EMA history (`exp` or constant α; optional RefHQ seed) | `../rel-ema-exp/`, `../rel-ema-refhq/` |
 | `rho_excess` | top-k `L_curr − L_ref` | frozen RefHQ | `../rho-1/` |
-| `middle_ppl` | middle-k by `L_curr` | train-forward CE | `../middle-ppl-token/` |
+| `middle_ppl` | middle-k by frozen RefHQ `L_ref` | frozen-ref forward | `../middle-ppl-token/` |
 | `attention_topk` | top-k attn-received | last-layer Q/K recompute | `../attention/` |
 | `learnability` | top-k `L_early − L_late` | dual frozen RefHQ | `../learnability-token/` |
 
@@ -52,25 +53,35 @@ token_selection/
 ## Shared contracts
 
 - Architecture: `olmo2_370M`, GBS `4_194_304`, seq 2048 (RefHQ-matched).
-- Permanent ladder: `{0,125,…,2250,2384}` for 2384-step runs (skip 2375).
+- Permanent ladder: `{0,125,…,2125,2360}` for 2360-step (9.9B) runs (skip 2250).
+- Token budget: one epoch under published `pretrain/regmix-10b` train (~9.989B catalog); `max_tokens: 9900000000`.
 - Task loss: full 20-label RC 5-shot `task_loss_bpb` on every permanent save.
 - Hardware: `torchrun` world size; leave `train.cuda_visible_devices` empty unless pinning intentionally.
+- **Corpus**: `data.dataset_id` → published `s3://edullm-data/` (never legacy `edullm-datasets`).
+- **Ephemeral runtime**: `--launch` stages tokens+order from edullm-data and materializes
+  RefHQ refs from `reference.s3_uri`. Durable ckpts/metrics/fingerprints export to
+  `s3://edullm-checkpoints/token-sel/<arm>/`. `--resume` fetches from that prefix when
+  the local save folder is empty — do not assume scratch persistence or a pre-baked venv.
 
 ## Quick start (YAML arms)
 
 ```bash
-# Preflight (needs local tokens + order contract + refs where required)
-python -m token_selection.scripts.validate_experiment --config <arm.yaml>
+# Preflight (optional --stage fetches tokens+order onto a clean machine)
+python -m token_selection.scripts.validate_experiment --config <arm.yaml> --stage
 
-# Dry-run plan / derived steps
+# Dry-run plan / derived steps (resolves edullm-data; no local shards required)
 python -m token_selection.scripts.train_method --config <arm.yaml> --method <method>
 
-# Launch (requires pinned olmo_core)
+# Launch (requires pinned olmo_core; stages corpus + exports durable ckpts)
 python -m token_selection.scripts.train_olmo_template \
-  --config <arm.yaml> --method <method> --launch
+  --config <arm.yaml> --method <method> --olmo-root /path/to/OLMo-core --launch
+
+# Resume on a wiped scratch host (pulls fingerprints + step dirs from edullm-checkpoints)
+python -m token_selection.scripts.train_olmo_template \
+  --config <arm.yaml> --method <method> --olmo-root /path/to/OLMo-core --launch --resume
 ```
 
-RHO / RefHQ-seeded REL / learnability need local reference `.pt` files first
-(`../reference/export_refhq_reference.py` or arm-specific export scripts).
+RHO / RefHQ-seeded REL / learnability need `reference.s3_uri` (or early/late S3 fields)
+in YAML; `--launch` materializes local `.pt` files. Optional local `load_path` still works.
 
 See the top-level [`../README.md`](../README.md) for the full arm table.

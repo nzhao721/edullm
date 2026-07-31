@@ -1,7 +1,8 @@
-# Control arm — plain CE on RegMix 10B
+# Control arm — random 60% keep on RegMix 10B
 
-Vanilla cross-entropy baseline for the token-selection experiment matrix.
-**No token masking / selection** — trains on the entire RegMix 10B corpus.
+Random-pruning baseline for the token-selection experiment matrix (Marion et al.
+style). Each sequence keeps a **uniform random 60%** of valid next-token
+positions; the rest are masked out of the CE loss.
 
 ## Architecture (RefHQ-matched)
 
@@ -20,57 +21,67 @@ Vanilla cross-entropy baseline for the token-selection experiment matrix.
 
 | Knob | Value |
 |------|-------|
-| Selection | none (plain CE) |
-| Default `run_id` | **`control-regmix10b-v1`** |
+| Selection | uniform random keep `k=0.6` (per sequence, seeded by step) |
+| Method | `random` via shared `TokenSelectTrainModule` |
+| Default `run_id` | **`control-regmix10b-v2`** |
 
-Do **not** reuse or append to the old `edullm-370M-ce-regmix10b` prefix.
-Old control checkpoints are orphaned for this experiment’s eval grid.
+Do **not** reuse or append to the old `edullm-370M-ce-regmix10b` or `control-regmix10b-v1` prefixes.
 
-## S3 export
+## Ephemeral scratch + durable S3
 
-Checkpoints and task-loss results → `s3://edullm-checkpoints/token-sel/control/`
-(`s3.prefix` / code constant: `token-sel/control` via `token_selection.olmo_ext.s3_layout`).
-Disable with `S3_EXPORT=0`.
+Designed for a clean machine whose scratch starts empty and is wiped after the job:
 
-Standalone trainer (no YAML spine); S3 routing is `export_arm_checkpoint("control", …)`.
+- **Train data:** published+validated `pretrain/regmix-10b` on `s3://edullm-data/` via `edullm_data.read` (never `s3://edullm-datasets/`).
+- **Stage OK:** `--stage-dir` / `STAGE_DIR` fetches `.u32le.bin` shards for the job.
+- **Local saves are not durable:** checkpoints/progress under `SAVE_FOLDER` / `PROGRESS_DIR` are job-local.
+- **Durable destination:** `s3://edullm-checkpoints/token-sel/control/` — fail-closed per-save sync + upload-before-end (`S3_EXPORT=0` / `SKIP_S3_UPLOAD=1` disables for local smoke only).
+- **Resume:** stage a checkpoint from S3 into `--load-path` / `LOAD_PATH`. Local auto-resume is off unless `ALLOW_LOCAL_RESUME=1` (same-job only).
 
 ## Data
 
-- Source: `s3://edullm-datasets/regmix/regmix-10b/`
-- Tokenized memmaps (typical): `…/regmix-10b/tokenized/<domain>/<domain>.npy`
-- Budget: 10B tokens → **2384** optimizer steps
-
 ```bash
-python prepare_control_data.py \
-  --work /path/to/work \
-  --train-tokenized-root /path/to/regmix-10b/tokenized
+# Optional pre-stage (trainer can also stage via STAGE_DIR alone)
+python prepare_control_data.py --work /tmp/control-stage
 # → work/train_tokenized/paths_train.txt
 ```
+
+Budget: **9.9B** tokens (`9900000000`) → **2360** optimizer steps (one epoch under ~9.989B published train; no forced 10B wrap).
 
 ## Permanent checkpoint ladder
 
 Shared helper: `token_selection.olmo_ext.checkpoint_ladder.permanent_checkpoint_steps`.
 
-For 2384 steps / interval 125:
+For 2360 steps / interval 125:
 
-`{0, 125, 250, …, 2250, 2384}` — **omit 2375** (within 125 of final).
+`{0, 125, 250, …, 2125, 2360}` — **omit 2250** (within 125 of final).
 
-Every save is permanent (`max_checkpoints=None`); no ephemeral rotation.
+Every save is permanent (`max_checkpoints=None`); no ephemeral rotation of the ladder.
 On each save, rank 0 triggers the full **20-label** OLMo-ladder `task_loss_bpb`
-eval (`scripts/farmshare/task_loss/eval_task_loss_olmo_core.py`) asynchronously.
-Disable with `--no-task-loss-on-save` or `TASK_LOSS_EVAL=0`.
+eval. Disable with `--no-task-loss-on-save` or `TASK_LOSS_EVAL=0`.
 
 ## Launch
 
 Paths are required via env/CLI — no hardcoded GPU indices or host paths.
 
-### 1 GPU
+### Clean ephemeral machine (resolve + stage)
 
 ```bash
-export TRAIN_PATHS_FILE=/path/to/paths_train.txt
-export SAVE_FOLDER=/path/to/ckpts/${NAME:-control-regmix10b-v1}
-export PROGRESS_DIR=/path/to/progress/${NAME:-control-regmix10b-v1}
+export STAGE_DIR=/tmp/control-stage/regmix-10b
+export SAVE_FOLDER=/tmp/control-ckpts/${NAME:-control-regmix10b-v2}
+export PROGRESS_DIR=/tmp/control-progress/${NAME:-control-regmix10b-v2}
 export NPROC=1
+export FRESH=1
+./launch_control.sh
+```
+
+### After optional prepare
+
+```bash
+python prepare_control_data.py --work /tmp/control-stage
+export TRAIN_PATHS_FILE=/tmp/control-stage/train_tokenized/paths_train.txt
+export SAVE_FOLDER=/tmp/control-ckpts/${NAME:-control-regmix10b-v2}
+export PROGRESS_DIR=/tmp/control-progress/${NAME:-control-regmix10b-v2}
+export NPROC=4
 ./launch_control.sh
 ```
 
@@ -79,33 +90,13 @@ Or directly:
 ```bash
 PYTHONPATH=experiments/token-selection \
   python experiments/token-selection/control/train_ce_regmix_olmo_370m.py \
-  --name control-regmix10b-v1 \
-  --train-paths-file /path/to/paths_train.txt \
-  --save-folder /path/to/ckpts \
-  --progress-dir /path/to/progress \
-  --length-tokens 10000000000
-```
-
-### Multi-GPU
-
-```bash
-export TRAIN_PATHS_FILE=...
-export SAVE_FOLDER=...
-export PROGRESS_DIR=...
-export NPROC=4   # any world size that divides GBS / rank_microbatch
-./launch_control.sh
-```
-
-Or:
-
-```bash
-PYTHONPATH=experiments/token-selection \
-  torchrun --standalone --nproc_per_node=4 \
-  experiments/token-selection/control/train_ce_regmix_olmo_370m.py \
-  --name control-regmix10b-v1 \
-  --train-paths-file /path/to/paths_train.txt \
-  --save-folder /path/to/ckpts \
-  --progress-dir /path/to/progress
+  --name control-regmix10b-v2 \
+  --stage-dir /tmp/control-stage/regmix-10b \
+  --save-folder /tmp/control-ckpts \
+  --progress-dir /tmp/control-progress \
+  --length-tokens 9900000000 \
+  --mask-keep-rate 0.6 \
+  --fresh
 ```
 
 `global_batch_tokens` must be divisible by `world_size * rank_microbatch_tokens`
@@ -116,8 +107,8 @@ if needed — the scripts never hardcode them.
 
 | File | Role |
 |------|------|
-| `train_ce_regmix_olmo_370m.py` | Trainer (custom loop + HSDP) |
-| `prepare_control_data.py` | Build memmap path list |
+| `train_ce_regmix_olmo_370m.py` | Trainer (custom loop + `TokenSelectTrainModule` + S3 upload-before-end) |
+| `prepare_control_data.py` | Optional edullm-data stage → path list |
 | `launch_control.sh` | 1..N GPU launcher |
 | `README.md` | This doc |
 

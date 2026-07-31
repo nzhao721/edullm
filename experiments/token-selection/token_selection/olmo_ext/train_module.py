@@ -1,9 +1,9 @@
 """Token-selection train helpers + optional OLMo-core TrainModule subclass.
 
-Supports ``method=full``, ``rel_ema`` (REL + EMA), ``rho_excess`` (frozen-ref
-excess loss), ``middle_ppl`` (middle-k by current CE), ``attention_topk``
-(last-layer attention-received), and ``learnability`` (dual frozen RefHQ
-early−late). When ``olmo_core`` is not installed, ``TokenSelectLoop`` still
+Supports ``method=full``, ``random`` (uniform random keep-k), ``rel_ema`` (REL + EMA),
+``rho_excess`` (frozen-ref excess loss), ``middle_ppl`` (middle-k by frozen-ref CE),
+``attention_topk`` (last-layer attention-received), and ``learnability`` (dual frozen
+RefHQ early−late). When ``olmo_core`` is not installed, ``TokenSelectLoop`` still
 runs for local smokes.
 """
 
@@ -50,6 +50,10 @@ class TokenSelectConfig:
     late_reference_load_path: Optional[str] = None
 
     @property
+    def uses_random(self) -> bool:
+        return self.method == "random"
+
+    @property
     def uses_rel(self) -> bool:
         return self.method == "rel_ema"
 
@@ -72,7 +76,8 @@ class TokenSelectConfig:
     @property
     def uses_selection(self) -> bool:
         return (
-            self.uses_rel
+            self.uses_random
+            or self.uses_rel
             or self.uses_rho
             or self.uses_middle_ppl
             or self.uses_attention
@@ -82,7 +87,12 @@ class TokenSelectConfig:
     @property
     def needs_scoring_forward(self) -> bool:
         """True when selection needs ≥1 no-grad scoring forward."""
-        return self.uses_rel or self.uses_rho or self.uses_learnability
+        return (
+            self.uses_rel
+            or self.uses_rho
+            or self.uses_middle_ppl
+            or self.uses_learnability
+        )
 
 
 def load_reference_state_dict(path: Union[str, Path]) -> Dict[str, Tensor]:
@@ -311,7 +321,7 @@ class TokenSelectState:
                     p.requires_grad_(False)
                 if self.ema is not None and self.ema.has_history:
                     self.ema.copy_to(self.history_model)
-        if cfg.uses_rho:
+        if cfg.uses_rho or cfg.uses_middle_ppl:
             if frozen_ref is not None:
                 self.frozen_ref = frozen_ref
             elif cfg.reference_load_path:
@@ -319,7 +329,8 @@ class TokenSelectState:
                 self.frozen_ref = FrozenReference.from_state_dict(model, weights)
             else:
                 raise ValueError(
-                    "rho_excess requires frozen_ref=... or TokenSelectConfig.reference_load_path"
+                    f"{cfg.method} requires frozen_ref=... or "
+                    "TokenSelectConfig.reference_load_path"
                 )
         if cfg.uses_learnability:
             if frozen_ref_early is not None:
@@ -500,11 +511,19 @@ class TokenSelectLoop:
         middle_active = bool(cfg.uses_middle_ppl and not warmup)
         attn_active = bool(cfg.uses_attention and not warmup)
         learn_active = bool(cfg.uses_learnability and not warmup)
+        random_active = bool(cfg.uses_random and not warmup)
         select_active = (
-            rel_active or rho_active or middle_active or attn_active or learn_active
+            rel_active
+            or rho_active
+            or middle_active
+            or attn_active
+            or learn_active
+            or random_active
         )
-        scoring_forward = rel_active or rho_active or learn_active
-        scoring_passes = (1 if (rel_active or rho_active) else 0) + (2 if learn_active else 0)
+        scoring_forward = rel_active or rho_active or middle_active or learn_active
+        scoring_passes = (
+            1 if (rel_active or rho_active or middle_active) else 0
+        ) + (2 if learn_active else 0)
 
         valid = torch.ones_like(input_ids, dtype=torch.bool)
         valid[:, 0] = False
@@ -519,7 +538,7 @@ class TokenSelectLoop:
 
         # Frozen-ref scoring must run *before* the grad-enabled forward: swap_to mutates
         # parameters in place, which would invalidate autograd if the train forward ran first.
-        if rho_active:
+        if rho_active or middle_active:
             assert st.frozen_ref is not None
             with torch.no_grad():
                 with st.frozen_ref.swap_to(self.model):
@@ -538,7 +557,7 @@ class TokenSelectLoop:
             scoring_tokens += 2 * int(input_ids.numel())
 
         # Folded: ONE training forward (with grad) and ONE cross-entropy over its logits.
-        # REL / middle_ppl reuse that CE as the current-model score (detached).
+        # REL / rho_excess reuse that CE as the current-model score (detached).
         # attention_topk hooks last-layer attention input during this forward, then
         # recomputes Q/K (FlashAttention-safe) for the received-mass score.
         self.model.train()
@@ -558,8 +577,13 @@ class TokenSelectLoop:
                 logits_h = st.history_model(input_ids)
                 history_loss = per_token_ce(logits_h, input_ids)
             scoring_tokens += int(input_ids.numel())
-        elif rho_active or middle_active:
+        elif rho_active:
             current_loss = token_ce.detach()
+
+        mask_generator: Optional[torch.Generator] = None
+        if random_active:
+            mask_generator = torch.Generator(device=input_ids.device)
+            mask_generator.manual_seed(cfg.seed + st.step * 1_000_003)
 
         label_mask = build_mask(
             method=cfg.method,
@@ -573,6 +597,7 @@ class TokenSelectLoop:
             shape_ref=input_ids,
             valid=valid,
             warmup=warmup,
+            generator=mask_generator,
         )
         loss_sum, n_tok = masked_ce_from_token_ce(token_ce, label_mask)
         if n_tok == 0:
@@ -587,8 +612,8 @@ class TokenSelectLoop:
             score = history_loss - current_loss
         elif rho_active and current_loss is not None and reference_loss is not None:
             score = current_loss - reference_loss
-        elif middle_active and current_loss is not None:
-            score = current_loss
+        elif middle_active and reference_loss is not None:
+            score = reference_loss
         elif attn_active and attention_score is not None:
             score = attention_score
         elif learn_active and early_loss is not None and late_loss is not None:
@@ -753,13 +778,14 @@ _EMPTY_SELECTION_DELTA: Dict[str, float] = {
 
 
 class TokenSelectTrainModule(TransformerTrainModule if _HAS_OLMO else object):  # type: ignore[misc]
-    """OLMo-core train module for full-token, REL+EMA, RHO, middle-PPL, attention, and learnability.
+    """OLMo-core train module for full-token, random keep-k, REL+EMA, RHO, middle-PPL,
+    attention, and learnability.
 
     REL/RHO use a no-grad scoring forward (EMA history or frozen reference) plus one
     grad-enabled current forward whose logits are reused for both the current score and
     the selected-token CE. Learnability runs *two* frozen-ref scoring forwards
-    (early + late) then the train forward. ``middle_ppl`` reuses the train-forward CE
-    only (one forward). ``attention_topk`` hooks last-layer attention input during the
+    (early + late) then the train forward. ``middle_ppl`` runs one frozen-ref scoring
+    forward then the train forward. ``attention_topk`` hooks last-layer attention input during the
     train forward and recomputes Q/K for FlashAttention-safe received-mass scores.
     Intentionally rejects TP/CP and z-loss configurations: their public APIs do not
     expose unsharded per-token logits compatible with this scoring path.
@@ -913,10 +939,18 @@ class TokenSelectTrainModule(TransformerTrainModule if _HAS_OLMO else object):  
         middle_active = bool(cfg.uses_middle_ppl and not warmup)
         attn_active = bool(cfg.uses_attention and not warmup)
         learn_active = bool(cfg.uses_learnability and not warmup)
+        random_active = bool(cfg.uses_random and not warmup)
         select_active = (
-            rel_active or rho_active or middle_active or attn_active or learn_active
+            rel_active
+            or rho_active
+            or middle_active
+            or attn_active
+            or learn_active
+            or random_active
         )
-        scoring_passes = (1 if (rel_active or rho_active) else 0) + (2 if learn_active else 0)
+        scoring_passes = (
+            1 if (rel_active or rho_active or middle_active) else 0
+        ) + (2 if learn_active else 0)
         scoring_forward = scoring_passes > 0
         valid = self._valid_targets(batch, input_ids)
         selected_total = self._selected_count(valid, select_active=select_active, k=cfg.k)
@@ -978,7 +1012,7 @@ class TokenSelectTrainModule(TransformerTrainModule if _HAS_OLMO else object):  
                         history_loss = per_token_ce(history_logits, micro_input_ids)
                     del history_logits
                     self.model.reset_auxiliary_metrics()
-                elif rho_active:
+                elif rho_active or middle_active:
                     assert st.frozen_ref is not None
                     with self._score_eval_mode(), torch.no_grad(), st.frozen_ref.swap_to(self.model):
                         ref_logits = self._forward_logits(micro_input_ids, **model_kwargs)
@@ -1007,9 +1041,15 @@ class TokenSelectTrainModule(TransformerTrainModule if _HAS_OLMO else object):  
                 token_ce = per_token_ce(logits, micro_input_ids)
                 current_loss = (
                     token_ce.detach()
-                    if (select_active and not learn_active and not attn_active)
+                    if (rel_active or rho_active)
                     else None
                 )
+                mask_generator: Optional[torch.Generator] = None
+                if random_active:
+                    mask_generator = torch.Generator(device=self.device)
+                    mask_generator.manual_seed(
+                        cfg.seed + int(st.step) * 1_000_003 + micro_batch_idx
+                    )
                 label_mask = build_mask(
                     method=cfg.method,
                     k=cfg.k,
@@ -1022,6 +1062,7 @@ class TokenSelectTrainModule(TransformerTrainModule if _HAS_OLMO else object):  
                     shape_ref=micro_input_ids,
                     valid=micro_valid,
                     warmup=warmup,
+                    generator=mask_generator,
                 )
                 loss_sum, n_tokens = masked_ce_from_token_ce(token_ce, label_mask)
                 planned = self._selected_count(micro_valid, select_active=select_active, k=cfg.k)
@@ -1036,8 +1077,8 @@ class TokenSelectTrainModule(TransformerTrainModule if _HAS_OLMO else object):  
                     score = history_loss - current_loss
                 elif rho_active and reference_loss is not None and current_loss is not None:
                     score = current_loss - reference_loss
-                elif middle_active and current_loss is not None:
-                    score = current_loss
+                elif middle_active and reference_loss is not None:
+                    score = reference_loss
                 elif attn_active and attention_score is not None:
                     score = attention_score
                 elif learn_active and early_loss is not None and late_loss is not None:
@@ -1112,7 +1153,13 @@ def make_ts_config(
     cfg: Dict[str, Any],
     *,
     method: Literal[
-        "full", "rel_ema", "rho_excess", "middle_ppl", "attention_topk", "learnability"
+        "full",
+        "random",
+        "rel_ema",
+        "rho_excess",
+        "middle_ppl",
+        "attention_topk",
+        "learnability",
     ],
     total_steps: Optional[int] = None,
     t0_steps: Optional[int] = None,
@@ -1123,6 +1170,7 @@ def make_ts_config(
 
         total_steps, t0_steps = derive_steps(cfg)
     uses_selection = method in (
+        "random",
         "rel_ema",
         "rho_excess",
         "middle_ppl",

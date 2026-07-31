@@ -6,18 +6,23 @@ Train from scratch on the RegMix 10B corpus with **fixed token budget** and **on
 
 ## Execution environment
 
-**Training and task-loss evals run on AWS.** Instance type, GPU model, and GPU count are **not chosen in this plan** — scripts must work on any CUDA host with 1–N GPUs via `torchrun`.
+**Ephemeral runtime.** Training assumes job-scoped scratch starts empty and is wiped after the job. Stage train/curriculum bytes from validated `s3://edullm-data/` into a job-local cache. Durable checkpoints, progress, and task-loss land on `s3://edullm-checkpoints/curriculum/<arm_id>/` (trainer `--s3-export`, default on) **and** Weights & Biases project `curriculum` (SmolLM FarmShare protocol: train/eval/checkpoint logging). Export failure after a permanent save or final sync **aborts all ranks**. Local smoke only: `S3_EXPORT=0` / `--no-s3-export` with `--wandb-mode disabled --allow-local-only`. Resume with `--load-path` pointing at a local step dir or `s3://edullm-checkpoints/curriculum/<arm>/checkpoints/stepN`. Do not rely on FarmShare/laptop leftovers or persistent scratch checkpoints.
 
-- Data and checkpoints: S3 (`edullm-datasets`, `edullm-checkpoints`); sync or stream to local scratch on the AWS worker as needed
+Instance type, GPU model, and GPU count are **not chosen in this plan** — scripts must work on any CUDA host with 1–N GPUs via `torchrun`.
+
+- Data: resolve+stage from `s3://edullm-data/` (`pretrain/regmix-10b`, `curriculum/regmix-*-370m`)
+- Checkpoints / progress / task_loss: job-local write → `aws s3 sync` to `edullm-checkpoints`
+- Metrics / evals / checkpoints also logged to W&B project `curriculum` (entity = account default unless `WANDB_ENTITY` set; same convention as SmolLM)
+- Resume via `--load-path` (local step dir or `s3://edullm-checkpoints/curriculum/<arm>/checkpoints/stepN`)
 - No slurm/FarmShare-specific launch paths, queue names, or GPU SKU assumptions in required code paths
 - `--device-batch-size` and grad accumulation are CLI parameters; derive steps from global batch `4_194_304` and discovered `world_size`
 - Curriculum index build is a CPU job; runnable locally, on AWS, or any host with S3 access — not tied to training hardware
 
-Label **generation** and **S3 upload** live in **`datasets/regmix/`** (see below); training code in `experiments/curriculum/` consumes the published S3 artifacts only.
+Label **generation** lives in **`datasets/regmix/`**; publish token corpora / curriculum orders via the `edullm-data` package. Training code in `experiments/curriculum/` consumes published `edullm-data` artifacts only (legacy dataset buckets are refused).
 
 ## Training contract
 
-Fork [`experiments/token-selection/control/train_ce_regmix_olmo_370m.py`](experiments/token-selection/control/train_ce_regmix_olmo_370m.py) and reuse shared helpers from [`experiments/token-selection/token_selection/olmo_ext/`](experiments/token-selection/token_selection/olmo_ext/) for checkpoint ladder and task-loss wiring.
+Fork [`experiments/token-selection/control/train_ce_regmix_olmo_370m.py`](experiments/token-selection/control/train_ce_regmix_olmo_370m.py) and reuse shared helpers from [`experiments/token-selection/token_selection/olmo_ext/`](experiments/token-selection/token_selection/olmo_ext/) for checkpoint ladder, task-loss wiring, and `s3_export.sync_to_s3`.
 
 ### Architecture
 
@@ -45,13 +50,14 @@ Reference implementation: [`experiments/token-selection/reference/train_olmo3_37
 - **LR warmup**: 24 steps
 - **LR after warmup**: constant peak (`alpha_f=1.0`)
 - **Token budget**: ~10B → **2384 steps**
-- **Train corpus**: `s3://edullm-datasets/regmix/regmix-10b/`
+- **Train corpus**: published `pretrain/regmix-10b` on `s3://edullm-data/`
+- **Curriculum orders**: published `curriculum/regmix-{compression,flesch,mtld,learnability}-370m` (fail closed if unpublished)
 
-Control arm reads flat `tokenized/`; curriculum arms read the `curriculum/` index.
+Control arm reads flat token memmaps from `pretrain/regmix-10b`; curriculum arms apply in-process pacing over the published token-order for the chosen difficulty metric.
 
 ### Checkpoint saving
 
-Ladder via `permanent_checkpoint_steps()` from [`token_selection.olmo_ext.checkpoint_ladder`](experiments/token-selection/token_selection/olmo_ext/checkpoint_ladder.py) (manual equivalent of `checkpointer_kwargs_for_ladder()`):
+Ladder via `permanent_checkpoint_steps()` from [`token_selection.olmo_ext.checkpoint_ladder`](experiments/token-selection/token_selection/olmo_ext/checkpoint_ladder.py):
 
 - Step **0** (pre-train snapshot)
 - Every **125** steps: 125, 250, …, `125 * floor(total_steps / 125)`
@@ -59,6 +65,7 @@ Ladder via `permanent_checkpoint_steps()` from [`token_selection.olmo_ext.checkp
 - Omit last on-grid step when within one interval of final → `{0, 125, …, 2250, 2384}` — omit 2375
 - `max_checkpoints=None` — permanent saves only; no ephemeral pruning
 - Checkpoint format `model_and_optim` / `full_state_dict_v1`
+- After each permanent save (and at job end): fail-closed sync to `s3://edullm-checkpoints/curriculum/<arm_id>/`
 
 ### Task-loss eval
 
@@ -66,8 +73,8 @@ Ladder via `permanent_checkpoint_steps()` from [`token_selection.olmo_ext.checkp
 - Full **20-label** `*_rc_5shot_bpb` suite (ARC, BoolQ, CSQA, HellaSwag, OpenBookQA, PIQA, SocialIQA, WinoGrande, MMLU×4)
 - Trigger on every permanent checkpoint save (step 0 + each ladder step + final); async/subprocess OK
 - [`token_selection.olmo_ext.task_loss_hook.trigger_task_loss_eval`](experiments/token-selection/token_selection/olmo_ext/task_loss_hook.py); rank 0 only; `--task-loss-on-save` default on
-- Evaluator script: [`scripts/farmshare/task_loss/eval_task_loss_olmo_core.py`](scripts/farmshare/task_loss/eval_task_loss_olmo_core.py) (repo path only; runs on the AWS training/eval worker)
-- Outputs: `task_loss_results/<arm>/step{N}_task_loss.json`
+- Evaluator script: [`scripts/farmshare/task_loss/eval_task_loss_olmo_core.py`](scripts/farmshare/task_loss/eval_task_loss_olmo_core.py) (repo path only; runs on the training/eval worker)
+- Outputs: job-local `$PROGRESS_DIR/task_loss_results/step{N}_task_loss.json` → synced under the arm S3 prefix
 
 Post-hoc EMA merge runs the 20-label eval on the merged artifact in addition to per-checkpoint evals.
 
@@ -76,7 +83,7 @@ Post-hoc EMA merge runs the 20-label eval on the merged artifact in addition to 
 - World size from `torchrun` / `LOCAL_RANK` / `WORLD_SIZE` (or 1 if unset)
 - No hardcoded GPU indices, `CUDA_VISIBLE_DEVICES`, instance types, or host paths as required defaults
 - Global batch `4_194_304`; per-rank microbatch / grad-accum from `world_size` and `--device-batch-size`; fail-fast if not divisible
-- Eval scripts: 1+ GPU compatible on the same AWS worker policy as training
+- Eval scripts: 1+ GPU compatible on the same worker policy as training
 
 ### S3 export layout
 
@@ -88,31 +95,25 @@ s3://edullm-checkpoints/curriculum/<arm_id>/
   progress/
 ```
 
-Use `arm_s3_prefix(arm_id)` in the trainer (`curriculum/<arm_id>`); same layout as `token_selection.olmo_ext.s3_layout` patterns.
+Use `arm_s3_prefix(arm_id)` / `curriculum_s3_uri` in the trainer (`curriculum/<arm_id>`).
 
 ## Local repo layout (`C:\alpha_ai\edullm`)
 
-### `datasets/regmix/` — labeling and S3 upload
+### `datasets/regmix/` — labeling and publish inputs
 
-All document labeling and upload to `s3://edullm-datasets/regmix/regmix-10b/` stay in the regmix dataset package:
+Document labeling stays in the regmix dataset package; publish validated corpora into `edullm-data` (not a legacy raw-datasets bucket):
 
 ```
 datasets/regmix/
-├── submit_regmix_labeling.sh          # heuristic metrics (existing)
-├── submit_regmix_doc_lm_labeling.sh   # learnability LM labels (existing)
-├── label_regmix_shard.sbatch          # ...
-├── label_regmix_doc_lm.py             # ...
-├── finalize_regmix_lm_labels.py       # ...
-├── finalize_regmix_upload.py          # mix corpus upload (existing pattern)
-├── finalize_regmix_labels_upload.py   # NEW: labels/ + lm_labels/ → S3
-└── submit_regmix_labels_upload.sh     # NEW: driver for label upload
+├── submit_regmix_labeling.sh
+├── submit_regmix_doc_lm_labeling.sh
+├── label_regmix_shard.sbatch
+├── label_regmix_doc_lm.py
+├── finalize_regmix_lm_labels.py
+├── finalize_regmix_upload.py
+├── finalize_regmix_labels_upload.py
+└── submit_regmix_labels_upload.sh
 ```
-
-`finalize_regmix_labels_upload.py` mirrors [`finalize_regmix_upload.py`](datasets/regmix/finalize_regmix_upload.py):
-
-- Inputs: `--run-dir`, `--dst-bucket edullm-datasets`, `--dst-prefix regmix/regmix-10b`
-- Upload `labels/` and `lm_labels/` trees; write `labels_upload_manifest.json`
-- Update [`S3_DATASETS.md`](S3_DATASETS.md) and [`datasets/regmix/README.md`](datasets/regmix/README.md)
 
 ### `experiments/curriculum/` — training experiment code
 
@@ -122,7 +123,7 @@ experiments/curriculum/
 ├── curriculum_pacing.py
 ├── ema_merge_checkpoints.py
 ├── scripts/
-│   └── build_curriculum_index.py    # reads S3 labels → curriculum/ index
+│   └── build_curriculum_index.py    # local index staging → publish via edullm-data
 ├── launch/
 │   ├── launch_arm.sh
 │   └── submit_matrix.sh
@@ -136,17 +137,15 @@ experiments/curriculum/
 **Dependencies** (existing code, imported — not duplicated):
 
 - [`experiments/token-selection/control/train_ce_regmix_olmo_370m.py`](experiments/token-selection/control/train_ce_regmix_olmo_370m.py) — trainer fork source
-- [`experiments/token-selection/token_selection/olmo_ext/`](experiments/token-selection/token_selection/olmo_ext/) — checkpoint ladder, task_loss, S3 layout
-- [`datasets/regmix/`](datasets/regmix/) — labeling + label upload (no duplicate upload scripts under `experiments/curriculum/`)
+- [`experiments/token-selection/token_selection/olmo_ext/`](experiments/token-selection/token_selection/olmo_ext/) — checkpoint ladder, task_loss, `s3_export`
+- [`datasets/regmix/`](datasets/regmix/) — labeling (no duplicate upload scripts under `experiments/curriculum/`)
 
-**S3 `regmix-10b/curriculum/`** is the published training index (built by `build_curriculum_index.py`), not the source tree.
+Published training inputs are `edullm-data` dataset IDs (`pretrain/regmix-10b`, `curriculum/regmix-*-370m`), not paths under a legacy datasets bucket.
 
-## Data on S3
+## Data on S3 (`edullm-data`)
 
-- **`tokenized/<domain>/`**: On S3 — produced by `datasets/regmix/` mix pipeline
-- **`labels/`**: To upload — produced by `datasets/regmix/` heuristic labeling + `finalize_regmix_labels_upload.py`
-- **`lm_labels/`**: To upload — produced by `datasets/regmix/` LM labeling + `finalize_regmix_labels_upload.py`
-- **`curriculum/`**: To build — produced by `experiments/curriculum/scripts/build_curriculum_index.py`
+- **`pretrain/regmix-10b`**: tokenized parent pool (control + curriculum arms)
+- **`curriculum/regmix-compression-370m`** / **`…-flesch-…`** / **`…-mtld-…`** / **`…-learnability-…`**: published token-order curricula (fail closed if missing from `_catalog/`)
 
 **17 arms:** 1 control + 4 pacing × 4 metrics (`compression_ratio`, `flesch`, `mtld`, `learnability`).
 
@@ -154,16 +153,15 @@ experiments/curriculum/
 
 ## Phases
 
-### Phase 0: Label upload (`datasets/regmix/`)
+### Phase 0: Label + publish (`datasets/regmix/` → `edullm-data`)
 
-- Add `datasets/regmix/finalize_regmix_labels_upload.py` + `submit_regmix_labels_upload.sh`
-- Upload completed FarmShare label runs: `labels/` and `lm_labels/` → S3
-- Update [`S3_DATASETS.md`](S3_DATASETS.md) and [`datasets/regmix/README.md`](datasets/regmix/README.md)
+- Label runs produce `labels/` and `lm_labels/`
+- Publish validated corpora / curriculum orders into `s3://edullm-data/` via the `edullm-data` package
 
 ### Phase 1: Build curriculum index (`experiments/curriculum/`)
 
-- `experiments/curriculum/scripts/build_curriculum_index.py` — merge labels from S3, per-metric ranks, doc/chunk index, tokenize docs
-- CPU job; upload to `s3://edullm-datasets/regmix/regmix-10b/curriculum/`
+- `experiments/curriculum/scripts/build_curriculum_index.py` — merge labels, per-metric ranks, optional tokenize
+- CPU job; local staging only by default; publish resulting token-order datasets into `edullm-data`
 
 ### Phase 2: Pacing library
 
@@ -172,24 +170,24 @@ experiments/curriculum/
 ### Phase 3: Shared trainer
 
 - `experiments/curriculum/train_curriculum_regmix_370m.py` — fork from control trainer; `--lr-alpha-f 1.0`
-- Checkpoint ladder via `permanent_checkpoint_steps()`; S3 prefix via `arm_s3_prefix()`; task-loss via `trigger_task_loss_eval`
-- `experiments/curriculum/tests/test_training_defaults.py` — ladder `{0,125,…,2250,2384}` omits 2375; GBS/microbatch defaults
+- Checkpoint ladder via `permanent_checkpoint_steps()`; durable S3 via `curriculum_s3_uri` + `sync_to_s3`; task-loss via `trigger_task_loss_eval`
+- `experiments/curriculum/tests/test_training_defaults.py` — ladder `{0,125,…,2250,2384}` omits 2375; GBS/microbatch defaults; edullm-data binding
 
 ### Phase 4: Post-hoc EMA
 
 - `experiments/curriculum/ema_merge_checkpoints.py` — merge steps 2000/2125/2250/2384, α=0.8
-- Checkpoints: `s3://edullm-checkpoints/curriculum/<arm_id>/`
+- Pull checkpoints from `s3://edullm-checkpoints/curriculum/<arm_id>/` into a work dir first
 
 ### Phase 5: Launch matrix
 
-- `experiments/curriculum/launch/launch_arm.sh` — `python` (1 rank) or `torchrun` (N ranks); all paths via CLI/env
-- `experiments/curriculum/launch/submit_matrix.sh` — thin wrapper for AWS job submission (service chosen at launch time)
+- `experiments/curriculum/launch/launch_arm.sh` — `python` (1 rank) or `torchrun` (N ranks); all paths via CLI/env; job-scoped scratch
+- `experiments/curriculum/launch/submit_matrix.sh` — thin wrapper for job submission (service chosen at launch time)
 - Arm matrix: see [Arm matrix (17 arms)](#arm-matrix-17-arms) below
 
 ### Phase 6: Smoke test → full runs
 
-- Short smoke on AWS (single rank) for control + one curriculum arm
-- Full 17-arm matrix on AWS after labels and curriculum index are on S3
+- Short smoke (single rank) for control + one curriculum arm on empty scratch
+- Full 17-arm matrix after `pretrain/regmix-10b` and curriculum orders are published on `edullm-data`
 
 ## Arm matrix (17 arms)
 
@@ -213,34 +211,54 @@ experiments/curriculum/
 
 Print the matrix: `bash experiments/curriculum/launch/submit_matrix.sh --print-only`
 
-Example launches (paths are local scratch; S3 layout is `curriculum/<arm_id>/checkpoints` and `…/progress`):
+Example launches (job-scoped scratch; durable layout is `curriculum/<arm_id>/checkpoints` and `…/progress` on S3 + W&B project `curriculum`):
 
 ```bash
+RUN_DIR="${TMPDIR:-/tmp}/curriculum-job-$$"
+mkdir -p "$RUN_DIR"/{ckpts,progress,cache}
+
+# FarmShare: mint on laptop, push session envs into RUN_DIR (SmolLM protocol)
+# bash scripts/farmshare/push_aws_session_to_farmshare.sh "$RUN_DIR"
+# bash scripts/farmshare/push_wandb_session_to_farmshare.sh "$RUN_DIR"
+export WANDB_PROJECT=curriculum WANDB_MODE=online
+
 # Control
-ARM_ID=control PACING=control TRAIN_PATHS_FILE=/data/regmix/paths_train.txt \
-  SAVE_FOLDER=/scratch/curriculum/control/checkpoints \
-  PROGRESS_DIR=/scratch/curriculum/control/progress \
+ARM_ID=control PACING=control \
+  SAVE_FOLDER=$RUN_DIR/ckpts PROGRESS_DIR=$RUN_DIR/progress \
+  DATA_CACHE_DIR=$RUN_DIR/cache \
   bash experiments/curriculum/launch/launch_arm.sh
 
 # Curriculum example (linear + compression_ratio)
 ARM_ID=linear10-cr PACING=linear_n10 DIFFICULTY_METRIC=compression_ratio \
-  CURRICULUM_INDEX=/data/regmix/curriculum \
-  SAVE_FOLDER=/scratch/curriculum/linear10-cr/checkpoints \
-  PROGRESS_DIR=/scratch/curriculum/linear10-cr/progress \
+  SAVE_FOLDER=$RUN_DIR/ckpts PROGRESS_DIR=$RUN_DIR/progress \
+  DATA_CACHE_DIR=$RUN_DIR/cache \
   bash experiments/curriculum/launch/launch_arm.sh
 
-# Optional post-hoc EMA (task-loss default on)
+# Local smoke (no durable sink)
+# WANDB_MODE=disabled S3_EXPORT=0 ALLOW_LOCAL_ONLY=1 bash …/launch_arm.sh
+
+# Optional post-hoc EMA (after syncing checkpoints from S3 into a work dir)
 python experiments/curriculum/ema_merge_checkpoints.py \
-  --checkpoints-root /scratch/curriculum/linear10-cr/checkpoints \
+  --checkpoints-root /path/to/staged/linear10-cr/checkpoints \
   --arm-id linear10-cr
 ```
 
+### W&B naming
+
+| Field | Default |
+| --- | --- |
+| Project | `curriculum` |
+| Entity | unset (W&B account default; same as SmolLM — set `WANDB_ENTITY` only if needed) |
+| Run name | `ARM_ID`, or `ARM_ID-SLURM_JOB_ID` when Slurm sets `SLURM_JOB_ID` |
+
+Logged: `train/loss`, `train/lr`, throughput; task-loss eval metrics + artifacts; checkpoint artifacts on each permanent ladder save.
+
 ## Implementation order
 
-1. `datasets/regmix/`: label upload script + submit driver + docs
+1. `datasets/regmix/`: label + publish into `edullm-data`
 2. Create `experiments/curriculum/` tree
-3. `build_curriculum_index.py` + S3 upload
+3. `build_curriculum_index.py` + publish curriculum orders
 4. `curriculum_pacing.py` + tests
-5. `train_curriculum_regmix_370m.py`
+5. `train_curriculum_regmix_370m.py` (ephemeral scratch + S3 durable export)
 6. `ema_merge_checkpoints.py` + launch scripts
-7. AWS smoke → full 17-arm matrix
+7. Smoke → full 17-arm matrix

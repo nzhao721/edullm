@@ -12,7 +12,7 @@ todos:
     content: "Export all ckpts + results to s3://edullm-checkpoints/token-sel/<arm>/ (YAML prefixes, sync/export helpers, FarmShare/train hooks)"
     status: completed
   - id: rebuild-control
-    content: "control/ rebuilt (code); retrain full CE on RegMix 10B still required"
+    content: "control/ rebuilt (code); retrain random-60% control on RegMix 10B still required"
     status: pending
   - id: rebuild-blade
     content: "blade/ rebuilt (code, locked syncs); GPU retrain still required"
@@ -92,9 +92,9 @@ Permanent ladder only — **no ephemeral pruning**:
 - `max_checkpoints=None` — keep **every** save permanently
 - Format: same as each trainer’s existing full state (`model_and_optim` / `full_state_dict_v1` as used by that arm), but cadence and retention are mandatory for all
 
-Example for a 2384-step run (`125 * 19 = 2375`, and `2384 - 2375 = 9 < 125`):
+Example for a 2360-step run (`125 * 18 = 2250`, and `2360 - 2250 = 110 < 125`):
 
-`{0, 125, 250, …, 2250, 2384}` — **omit 2375**
+`{0, 125, 250, …, 2125, 2360}` — **omit 2250**
 
 Enforce this in every arm trainer (standalone scripts and the shared `token_selection` spine). Existing control defaults (250 permanent + ephemeral) and middle_ppl YAML (`checkpoint_every_steps: 250`) must be rewritten to this contract.
 
@@ -155,11 +155,11 @@ Outputs: per-arm `task_loss_results/<arm>/step{N}_task_loss.json` with the full 
 ## Shared data contract
 
 
-- **Main train corpus**: `s3://edullm-datasets/regmix/regmix-10b/`
+- **Main train corpus**: published `pretrain/regmix-10b` under `s3://edullm-data/` (resolve via `data.dataset_id` + `edullm_data.read`; stage per job — do not assume FarmShare/laptop scratch tokens persist)
 - **Keep fraction**: **k / γ = 0.6**
-- **Token budget (main runs)**: 10B → **~2384 steps**
+- **Token budget (main runs)**: one epoch of the published train split (~**9.989B** catalog rows / `resolve_latest` + train `rows`) — configs pin **`max_tokens: 9900000000`** → **2360 steps** at GBS `4_194_304` (under per-shard usable sequences so the loader does **not** wrap to force 10B/2384)
 - **Selection-mask warmup**: **None** for online scorers (`t0_steps=0` / `t0_frac=0`); selection active from step 0. **Exception:** BLADE keeps its **500-step** proxy-only warmup (no selection until step 500).
-- **Reference (when needed)**: RefHQ 370M step1315 — `s3://edullm-checkpoints/olmo-370m/edullm-370M-refhq-5p5b/checkpoints/step1315/`
+- **Reference (when needed)**: RefHQ 370M step1315 — `s3://edullm-checkpoints/olmo-370m/edullm-370M-refhq-5p5b/checkpoints/step1315/` (materialized at `--launch` from `reference.s3_uri`)
 - **Learnability early / late**: RefHQ **step250** vs **avg of step1000/1125/1315**
 
 
@@ -178,15 +178,16 @@ s3://edullm-checkpoints/token-sel/<arm>/
 Arm directory names match `experiments/token-selection/<arm>/`, e.g. `token-sel/blade/`, `token-sel/rho-1/`, `token-sel/rel-ema-exp/`.
 
 - YAML `s3.prefix` **must** be `token-sel/<arm>` (see `token_selection.olmo_ext.s3_layout`).
-- Pre-tokenized train data stays on `edullm-datasets` (`data.tokens_s3`); do not upload tokens into `token-sel/`.
-- Helpers: `sync_artifacts.py`, `s3_export.py`; disable live export with `S3_EXPORT=0` / `SKIP_S3_UPLOAD=1`.
+- Pre-tokenized train data stays on **`s3://edullm-data/`** (`data.dataset_id`); do not upload tokens into `token-sel/`.
+- Ephemeral jobs: local `output_dir` is a staging area only. Keep `S3_EXPORT=1` so step dirs + `run_fingerprint.json` + metrics land on `edullm-checkpoints`. `--resume` fetches from that prefix when the local save folder is empty — do not rely on scratch-only checkpoints.
+- Helpers: `sync_artifacts.py`, `s3_export.py`; disable live export with `S3_EXPORT=0` / `SKIP_S3_UPLOAD=1` (local smoke only).
 
 ## Per-arm directory layout
 
 Each experiment arm owns scripts under `experiments/token-selection/<arm>/`. Shared library stays in `[token_selection/](experiments/token-selection/token_selection/)` (package only — no arm-specific launch scripts left only there).
 
 
-- **Control (full CE)** (`control/`): **Delete entire dir → rebuild** + retrain
+- **Control (random 60%)** (`control/`): uniform random keep baseline; retrain under ladder contract
 - **BLADE** (`blade/`): **Delete entire dir → rebuild** + retrain
 - **RHO-1** (`rho-1/`): **Delete entire dir → rebuild** + retrain from scratch (discard in-progress run)
 - **REL no-init exp-α** (`rel-ema-exp/`): **Create new**
@@ -237,7 +238,7 @@ flowchart TB
 1. **Control**
    - Selection: none
    - Status: Code ready; **GPU retrain required**
-   - Action: `control/` rebuilt; new run_id; RegMix 10B CE
+   - Action: `control/` rebuilt; new run_id `control-regmix10b-v2`; random 60% keep on RegMix 10B
 2. **REL, no init, α=`1−e^(−t/300)`**
    - Selection: top 60% `L_hist−L_curr`
    - Status: Code ready; **GPU run required**
@@ -255,7 +256,7 @@ flowchart TB
    - Status: Filter+CE ready; **LM labels pending**
    - Action: `middle-ppl-doc/` offline filter → CE after labels READY
 6. **Middle PPL, token**
-   - Selection: middle 60% by `L_curr`
+   - Selection: middle 60% by frozen RefHQ `L_ref` (late avg)
    - Status: Code ready; **GPU launch required**
    - Action: `middle-ppl-token/` owns YAML+launch; shared `middle_ppl` scorer
 7. **Attention**

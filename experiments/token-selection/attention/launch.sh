@@ -8,8 +8,13 @@
 #   NPROC                 — torchrun nproc_per_node (default: # of visible GPUs, else 1)
 #   CUDA_VISIBLE_DEVICES  — physical GPU pin (required outside Slurm unless YAML sets it)
 #   CONFIG                — override YAML path
-#   RESUME=1              — resume from latest matching save-folder fingerprint
+#   RESUME=1              — resume; fetches durable ckpts from edullm-checkpoints
+#                           when the local save folder is empty (ephemeral scratch)
 #   TOKEN_SELECTION_SKIP_IDLE_CHECK=1 — skip idle GPU probe (Slurm sets this path too)
+#
+# W&B (SmolLM2 protocol; additive to S3): project token-selection. Push
+# wandb-session.env via scripts/farmshare/push_wandb_session_to_farmshare.sh
+# "$RUN_DIR" (or set WANDB_SESSION_ENV). Local smoke: WANDB_MODE=disabled.
 #
 # Examples (from experiments/token-selection/):
 #   # 1 GPU
@@ -53,6 +58,9 @@ if [[ "${RESUME:-0}" == "1" ]]; then
 fi
 
 echo "attention launch: NPROC=${NPROC} CONFIG=${CONFIG} METHOD=${METHOD}"
+_ATTENTION_RUN_NAME="${RUN_NAME:-attention-topk-10b-scratch-v1}"
+# shellcheck disable=SC1091
+source "${TS_ROOT}/token_selection/scripts/wandb_env.sh" "attention" "${_ATTENTION_RUN_NAME}"
 exec python -m torch.distributed.run --standalone --nproc_per_node="${NPROC}" \
   -m token_selection.scripts.train_olmo_template \
   "${LAUNCH_ARGS[@]}"

@@ -10,7 +10,7 @@ Writes:
   <work>/length_tokens.txt
   <work>/middle_ppl_doc_data_summary.json
 
-Training upsamples the kept docs to ``--length-tokens`` (default 10B → ~2384 steps).
+Training upsamples the kept docs to ``--length-tokens`` (default 9.9B → 2360 steps).
 """
 
 from __future__ import annotations
@@ -29,8 +29,8 @@ KNOWN_DOMAINS = (
     "wiki",
 )
 
-# 10B token budget → 10_000_000_000 // 4_194_304 = 2384 steps.
-DEFAULT_LENGTH_TOKENS = 10_000_000_000
+# One-epoch matrix budget → 9_900_000_000 // 4_194_304 = 2360 steps.
+DEFAULT_LENGTH_TOKENS = 9_900_000_000
 
 
 def discover_domain_npys(tokenized_root: Path) -> list[Path]:
@@ -93,7 +93,7 @@ def main() -> int:
         "--length-tokens",
         type=int,
         default=DEFAULT_LENGTH_TOKENS,
-        help="Training token budget via upsample (default: 10B → ~2384 steps)",
+        help="Training token budget via upsample (default: 9.9B → 2360 steps)",
     )
     args = ap.parse_args()
 

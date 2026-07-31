@@ -1,7 +1,7 @@
 # REL no-init exponential-α arm (Arm 2).
 # Selection: top 60% by REL = L_hist − L_curr from step 0 (t0=0).
 # EMA: bias-corrected from zero (NO RefHQ / θ0 seed); α(t)=1−exp(−t/300).
-# Architecture: RefHQ-matched olmo2_370M. Corpus: RegMix 10B (~2384 steps).
+# Architecture: RefHQ-matched olmo2_370M. Corpus: RegMix one-epoch (~9.9B → 2360 steps).
 # New run_id — do NOT reuse rel-ema-10b-scratch-v1.
 #
 # Near-clone of rel-ema-refhq: only EMA seed_mode + α schedule should differ.
@@ -34,12 +34,14 @@ reference:
   load_path: null
 
 data:
-  tokens_s3: s3://edullm-datasets/regmix/regmix-10b/tokenized
-  tokenizer: allenai/dolma2-tokenizer
+  # Published+validated corpus (edullm_data.read.resolve_latest / dataset_paths).
+  dataset_id: pretrain/regmix-10b
+  tokenizer: allenai/dolma2-tokenizer  # same vocab as tokenizer/dolma2-bpe v1
   sequence_length: 2048
 
 s3:
-  dataset_bucket: edullm-datasets
+  # Train inputs resolve via data.dataset_id → s3://edullm-data/ (not this field).
+  dataset_bucket: edullm-data
   checkpoint_bucket: edullm-checkpoints
   # Checkpoints + results → s3://edullm-checkpoints/token-sel/rel-ema-exp/
   prefix: token-sel/rel-ema-exp
@@ -57,7 +59,8 @@ olmo_core:
   revision: 99e0009ed67679c90da970ec5ba439c9459e3757
 
 train:
-  max_tokens: 10000000000
+  # One epoch under published train (~9.989B catalog rows); 9.9B → 2360 steps at GBS.
+  max_tokens: 9900000000
   global_batch_size: 4194304
   lr: 4.0e-4
   lr_alpha_f: 0.1
@@ -79,7 +82,7 @@ train:
   # Informational only; torchrun --nproc_per_node is the authority at launch.
   num_gpus: null
   num_workers: 8
-  # Permanent ladder via shared checkpointer helper: {0,125,…,2250,2384} (skip 2375).
+  # Permanent ladder via shared checkpointer helper: {0,125,…,2125,2360} (skip 2250).
   checkpoint_every_steps: 125
   checkpoint_keep_last: null
   pre_train_checkpoint: true

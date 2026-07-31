@@ -36,8 +36,9 @@ isProject: false
 - **A offline:** `A_ij = max(0, L_j(r_RegMix,chin) - L_j(i,chin))` using Chinchilla-extrapolated (tpp=20, step **5806**) family losses; `L_j(r_RegMix)` from `mixlaw_fit_chinchilla.json` at RegMix base weights (same as mixlaw mix01 / `DOMAIN_BASE_WEIGHTS`)
 - **A online:** recompute `A(r)` from `[mixlaw/mixlaw_fit_chinchilla.json](experiments/skill-dag/mixlaw/mixlaw_fit_chinchilla.json)` via the mixing-law derivative (see **Mixing-law derivative** below; not LightGBM)
 - **Skill-It:** eta=0.2, w=1; start at RegMix weights; updates at steps **500, 875, 1250, 1625, 2000**
-- **Full runs:** OLMo2-370M, 10B tokens, curriculum-matching hparams; stream from **olmohq** with time-varying domain weights
+- **Full runs:** OLMo2-370M, 10B tokens, curriculum-matching hparams; stream from **published edullm-data** with time-varying domain weights
 - **Platform:** no AWS/FarmShare/GPU SKU hardcoding; `NPROC=1` → python, `NPROC>1` → `torchrun`
+- **Ephemeral scratch:** empty run dirs OK; stage pools from `edullm-data`; require `TRAIN_VENV` (prebuilt GPU env / image with torch + olmo-core); durable saves → `s3://edullm-checkpoints/skillit/`
 
 ## Mixing-law derivative (Skill-It-compatible)
 
@@ -73,10 +74,13 @@ evaluated at the **current** domain weights `r` for the online (`skillit-deriv`)
 
 New code under `[experiments/skill-dag/skillit/](experiments/skill-dag/skillit/)`:
 
-- `skillit/probes.json` — 7 one-hot mixture definitions
+- `skillit/probes.json` — 7 one-hot mixture definitions (schema 2, olmohq stream)
+- `skillit/prepare_skillit_probe_data.py` — per-probe `mix_weights.json` sidecars
 - `skillit/build_adjacency.py` — Chinchilla-extrapolate probes → write `A_offline.npy` + JSON
 - `skillit/skillit_math.py` — Shared: softmax update, offline A load, online derivative A from mixlaw fit
-- `skillit/domain_stream.py` — Domain-stratified chunk sampler with time-varying `p`
+- `skillit/skillit_train_recipe.json` — 370M dual-arm recipe (initial RegMix weights, olmohq source)
+- `skillit/prepare_skillit_370m_data.py` — per-arm `arm_weights.json` sidecars
+- `skillit/submit_skillit_train_pool.sh` / `submit_skillit_370m.sh` — FarmShare pool + training
 - `skillit/train_skillit_370m.py` — OLMo2-370M trainer (fork of curriculum control path)
 - `skillit/launch_probe.sh` — Platform-agnostic probe launcher
 - `skillit/launch_arm.sh` — Platform-agnostic 370M arm launcher
@@ -85,8 +89,9 @@ New code under `[experiments/skill-dag/skillit/](experiments/skill-dag/skillit/)
 Reuse from sibling `[experiments/skill-dag/mixlaw/](experiments/skill-dag/mixlaw/)` (import or subprocess; do not duplicate):
 
 - `mixlaw_common.py` — domains, curve families, token budget math, `DOMAINS`, `CURVE_FAMILIES`
-- `build_mixture_data.py` — materialize probe slices from olmohq
-- `train_datadecide_60m.py` — 60M probe training
+- `domain_stream.py` — olmohq domain-stratified sampler (`set_weights` for 370M)
+- `recipe_data.py` / `olmo_domain_stream_patch.py` — shared recipe + 60M OLMo stream hook
+- `train_datadecide_60m.py` — 60M training (`--pool-dir` + `--mix-weights-json`)
 - `eval_task_loss.py` — post-run 6-family eval
 - `extrapolate_chinchilla.py` — step-law extrapolation to Chinchilla step 5806
 - `run_mixture.sh` — launch pattern reference
@@ -121,11 +126,11 @@ No uniform 1/7 probe: offline **A** compares each one-hot domain to **RegMix** v
 
 ### Data
 
-- Source pool: `s3://edullm-datasets/olmo100b/olmo-mix-1124-30b` (olmohq), same working-pool tokenize path as mixlaw pilots
-- Materialize via `mixlaw/build_mixture_data.py` with `--mixtures ../skillit/probes.json` (or copy probes.json into mixlaw work dir)
-- Local work dir (env `SKILLIT_PROBE_WORK`): `$WORK/skillit-probes/`
-- Published probe artifacts: `s3://edullm-datasets/skillit/probes/` (slice plans + `paths_train.txt` per probe)
-- Progress/logs: `s3://edullm-checkpoints/skillit/probes/<probe_id>/` (optional sync; weight ckpts stay local)
+- Source: published `s3://edullm-data/pretrain/olmo-127b` (via `edullm_data.read`; never `edullm-datasets`)
+- Recipe sidecars: `prepare_skillit_probe_data.py` → `<work>/<probe_id>/mix_weights.json`
+- Train: `POOL_DIR` (must include `edullm_data_source.json`) + `MIX_WEIGHTS_JSON` via `launch_probe.sh`
+- Progress/logs: `s3://edullm-checkpoints/skillit/probes/<probe_id>/` (optional sync via `RESULTS_S3`)
+- GPU env: set `TRAIN_VENV` explicitly — no hardcoded ladder scratch venv
 
 ### Evals (exact mixlaw pilot match)
 
@@ -153,7 +158,7 @@ Do **not** pass `--full-task-suite-in-run` or `--skip-eval` on probe runs.
 
 ### Launch
 
-`skillit/launch_probe.sh` mirrors curriculum style: env `PROBE_ID`, `SAVE_FOLDER`, `NPROC` (1 or >1), no cluster SKU. Calls `mixlaw/train_datadecide_60m.py` against materialized slices.
+`skillit/launch_probe.sh` streams from `POOL_DIR` at one-hot recipe weights (`MIX_WEIGHTS_JSON`). Calls `mixlaw/train_datadecide_60m.py` with `olmo_domain_stream_patch`.
 
 ---
 
@@ -227,14 +232,15 @@ From `[train_curriculum_regmix_370m.py](experiments/curriculum/train_curriculum_
 - Checkpoints: every **125** steps + 0 + 2384; omit 2375
 - Task loss: **all 20** ladder bpb labels at every permanent checkpoint
 
-### Domain sampling (required for mid-run reweight)
+### Domain sampling (edullm-data recipe + live reweight)
 
 Do **not** use fixed RegMix-10B concat shuffle (weights baked into corpus sizes).
 
-- Stream from olmohq tokenized pool with **domain-stratified** sampling: at each step draw domain ~ `p_t`, then a random 2048-token chunk from that domain’s memmap (`domain_stream.py`).
-- Materialize / cache a working pool sized for 10B with headroom (reuse `mixlaw/prepare_data.sh` / working-pool tooling); S3:
-  - Pool: `s3://edullm-datasets/skillit/train-pool/` (or reuse existing olmohq tokenized working pool if already present)
-  - Per-arm logs: `s3://edullm-checkpoints/skillit/<arm_id>/`
+- **Recipe:** `skillit_train_recipe.json` — RegMix initial weights, two arms (`skillit-probe`, `skillit-deriv`), `data_source.dataset_id=pretrain/olmo-original-30b`.
+- **Pool:** stage once via `submit_skillit_train_pool.sh` or let `submit_skillit_370m.sh` submit a CPU stage job into `${RUN_DIR}/pool` from edullm-data. No assumed persistent scratch pool.
+- **Env:** set `TRAIN_VENV` to a prebuilt GPU Python with torch + olmo-core (this repo does not bake a CUDA install into the submit script).
+- **Stream:** `DomainMixtureStream` over the pool; at each step draw domain ~ `p_t`, then a random 2048-token chunk. Mid-run Skill-It updates call `set_weights(p)` — no new corpora.
+- **Artifacts:** `s3://edullm-checkpoints/skillit/<arm_id>/` (live sync when `S3_EXPORT` enabled)
 
 ### Arms (only A differs)
 
@@ -283,16 +289,21 @@ eta = 0.2
 ### Launch
 
 ```bash
-# single GPU
-NPROC=1 ARM_ID=skillit-probe A_MODE=probe \
-  SAVE_FOLDER=... PROGRESS_DIR=... POOL_DIR=... \
-  bash experiments/skill-dag/skillit/launch_arm.sh
+# 1. Optional: stage pool alone (or skip — submit_skillit_370m.sh can stage)
+bash experiments/skill-dag/skillit/submit_skillit_train_pool.sh
 
-# multi-GPU
-NPROC=8 ARM_ID=skillit-deriv A_MODE=derivative ...
+# 2. Train both arms (requires TRAIN_VENV with torch + olmo-core)
+TRAIN_VENV=/path/to/gpu-venv \
+  bash experiments/skill-dag/skillit/submit_skillit_370m.sh
+
+# Single arm, local (auto-stages pool into sibling of PROGRESS_DIR if missing)
+NPROC=1 ARM_ID=skillit-probe A_MODE=probe \
+  ARM_WEIGHTS_JSON=$WORK/skillit-probe/arm_weights.json \
+  POOL_DIR=... SAVE_FOLDER=... PROGRESS_DIR=... \
+  bash experiments/skill-dag/skillit/launch_arm.sh
 ```
 
-No Slurm/AWS submit baked in. Optional post-save S3 sync follows the token-selection pattern (see **S3 export** below).
+Slurm submit scripts: `submit_skillit_train_pool.sh`, `submit_skillit_370m.sh`. Recipe prep: `prepare_skillit_370m_data.py`. Offline A default: `artifacts/probes_full/A_offline.npy`.
 
 ---
 
@@ -311,7 +322,7 @@ No Slurm/AWS submit baked in. Optional post-save S3 sync follows the token-selec
 
 ## Implementation order
 
-1. `skillit/probes.json` + materialize 7 slices via `mixlaw/build_mixture_data.py`
+1. `skillit/probes.json` + `prepare_skillit_probe_data.py` (recipe sidecars; edullm-data stream)
 2. Run 7 one-hot probes via `mixlaw/train_datadecide_60m.py`; extrapolate via `mixlaw/extrapolate_chinchilla.py`; `skillit/build_adjacency.py` → offline A vs RegMix
 3. `skillit/skillit_math.py` (update + derivative A from `mixlaw/mixlaw_fit_chinchilla.json`) unit-tested against toy numbers
 4. `skillit/domain_stream.py` + `skillit/train_skillit_370m.py` + launch scripts

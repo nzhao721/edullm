@@ -6,6 +6,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from token_selection.olmo_ext.frozen_ref import FrozenReference
 from token_selection.olmo_ext.train_module import (
     RELCallback,
     TokenSelectConfig,
@@ -126,6 +127,26 @@ def test_rel_warmup_then_select():
     assert 0.4 < fracs[-1] < 0.8
 
 
+def test_random_keep_fraction():
+    torch.manual_seed(0)
+    model = Tiny()
+    cfg = TokenSelectConfig(method="random", k=0.6, t0_steps=0, total_steps=4, seed=7)
+    loop = TokenSelectLoop(model, cfg)
+    opt = torch.optim.SGD(model.parameters(), lr=0.1)
+    fracs = []
+    for _ in range(4):
+        x = torch.randint(1, 32, (2, 16))
+        out = loop.train_step(x)
+        opt.zero_grad()
+        out["loss"].backward()
+        opt.step()
+        loop.optim_step_done()
+        assert out["scoring_tokens"] == 0
+        assert out["method"] == "random"
+        fracs.append(out["selected_frac"])
+    assert all(0.45 < f < 0.75 for f in fracs)
+
+
 def test_full_no_scoring_overhead():
     torch.manual_seed(0)
     model = Tiny()
@@ -208,13 +229,15 @@ def test_state_without_history_module_uses_swap():
     assert logits.shape[-1] == 32
 
 
-def test_middle_ppl_warmup_then_select_no_scoring_forward():
+def test_middle_ppl_warmup_then_select_with_frozen_ref():
     torch.manual_seed(0)
     model = Tiny()
+    frozen = FrozenReference.from_module(model)
     cfg = TokenSelectConfig(method="middle_ppl", k=0.6, t0_steps=2, total_steps=6, seed=0)
-    loop = TokenSelectLoop(model, cfg)
+    loop = TokenSelectLoop(model, cfg, frozen_ref=frozen)
     opt = torch.optim.SGD(model.parameters(), lr=0.1)
     fracs = []
+    scoring_tokens_hist = []
     for _ in range(6):
         x = torch.randint(1, 32, (2, 16))
         out = loop.train_step(x)
@@ -223,10 +246,12 @@ def test_middle_ppl_warmup_then_select_no_scoring_forward():
         opt.step()
         loop.optim_step_done()
         fracs.append(out["selected_frac"])
+        scoring_tokens_hist.append(out["scoring_tokens"])
         assert out["loss"].isfinite()
-        assert out["scoring_tokens"] == 0
-        assert out["compute"]["forward_tokens_history"] == 0
         assert out["method"] == "middle_ppl"
+    assert scoring_tokens_hist[0] == 0
+    assert scoring_tokens_hist[1] == 0
+    assert scoring_tokens_hist[-1] > 0
     assert fracs[0] > 0.9
     assert fracs[1] > 0.9
     assert 0.4 < fracs[-1] < 0.8

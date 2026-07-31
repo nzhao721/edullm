@@ -32,7 +32,7 @@ run_eval() {
     # shellcheck disable=SC1091
     source "$VENV/bin/activate"
   fi
-  export WANDB_DISABLED=1 WANDB_MODE=disabled PYTHONUNBUFFERED=1
+  export PYTHONUNBUFFERED=1
   torchrun --standalone --nproc_per_node=1 \
     "$EVAL_PY" \
     --checkpoint "$CHECKPOINT_DIR" \

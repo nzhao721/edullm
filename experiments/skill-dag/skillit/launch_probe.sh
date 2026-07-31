@@ -1,28 +1,24 @@
 #!/usr/bin/env bash
-# Platform-agnostic Skill-It DataDecide-60M probe launcher.
+# Platform-agnostic Skill-It DataDecide-60M probe launcher (edullm-data stream).
 #
 # Required:
-#   PROBE_ID       e.g. probe_dclm | probe_arxiv | ...
-#   SAVE_FOLDER    checkpoint directory
-#   PATHS_FILE     paths_train.txt for this probe (from build_mixture_data)
+#   PROBE_ID           e.g. probe_dclm
+#   POOL_DIR           working pool with edullm_data_source.json (from edullm-data)
+#   MIX_WEIGHTS_JSON   per-probe sidecar from prepare_skillit_probe_data.py
+#   SAVE_FOLDER        checkpoint directory (ephemeral OK; sync via RESULTS_S3)
 #
 # Optional:
-#   PROGRESS_DIR   default: <SAVE_FOLDER>/../progress or $PROGRESS_DIR
-# Optional:
-#   NPROC          ranks (default 1): 1 → python, >1 → torchrun
-#   DEVICE_BATCH_SIZE / NUM_WORKERS / SEED / WARMUP_MODE
-#   RESULTS_S3     optional progress/log sync prefix (aws s3 sync; best-effort)
-#   PYTHON         python executable
-#
-# Exact mixlaw pilot eval cadence (do NOT pass --full-task-suite-in-run):
-#   eval_interval=120, eval_subset_batches=4, device_eval_batch_size=32
+#   PROGRESS_DIR       default: sibling of SAVE_FOLDER
+#   RESULTS_S3         durable upload prefix for progress/
+#   NPROC              ranks (default 1)
+#   WANDB_PROJECT      default skillit (final eval metrics only; mixlaw trainer untouched)
+#   WANDB_MODE          online|offline|disabled (default: online if WANDB_API_KEY set)
 #
 # Example:
-#   PROBE_ID=probe_dclm PATHS_FILE=$WORK/slices/probe_dclm/paths_train.txt \
+#   PROBE_ID=probe_dclm POOL_DIR=$WORK/pool \
+#     MIX_WEIGHTS_JSON=$WORK/recipe/probe_dclm/mix_weights.json \
 #     SAVE_FOLDER=$WORK/runs/probe_dclm/checkpoints \
-#     PROGRESS_DIR=$WORK/runs/probe_dclm/progress \
-#     NPROC=1 bash launch_probe.sh
-
+#     bash launch_probe.sh
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -32,8 +28,9 @@ PYTHON="${PYTHON:-python}"
 NPROC="${NPROC:-1}"
 
 : "${PROBE_ID:?PROBE_ID is required}"
+: "${POOL_DIR:?POOL_DIR is required}"
+: "${MIX_WEIGHTS_JSON:?MIX_WEIGHTS_JSON is required}"
 : "${SAVE_FOLDER:?SAVE_FOLDER is required}"
-: "${PATHS_FILE:?PATHS_FILE is required}"
 
 PROGRESS_DIR="${PROGRESS_DIR:-$(cd "$(dirname "${SAVE_FOLDER}")" && pwd)/progress}"
 DEVICE_BATCH_SIZE="${DEVICE_BATCH_SIZE:-32}"
@@ -44,6 +41,14 @@ NUM_WORKERS="${NUM_WORKERS:-6}"
 SEED="${SEED:-6198}"
 WARMUP_MODE="${WARMUP_MODE:-capped}"
 RESULTS_S3="${RESULTS_S3:-}"
+WANDB_PROJECT="${WANDB_PROJECT:-skillit}"
+if [[ -z "${WANDB_MODE:-}" ]]; then
+  if [[ -n "${WANDB_API_KEY:-}" ]]; then
+    WANDB_MODE="online"
+  else
+    WANDB_MODE="disabled"
+  fi
+fi
 if [[ -n "${EXTRA_TRAIN_ARGS:-}" || "${SKIP_EVAL:-0}" == "1" ]]; then
   echo "[launch_probe] probe eval contract does not allow EXTRA_TRAIN_ARGS or SKIP_EVAL" >&2
   exit 2
@@ -51,14 +56,18 @@ fi
 PROBE_PORT_OFFSET="$(printf '%s' "${PROBE_ID}" | cksum | awk '{print $1 % 1000}')"
 MASTER_PORT="${MASTER_PORT:-$((29500 + PROBE_PORT_OFFSET))}"
 
+# Keep mixlaw trainer quiet on W&B; we log final eval from skillit side only.
 export WANDB_DISABLED=1
-export WANDB_MODE=disabled
 export OLMO_FLASH_ATTENTION=0
 export TOKENIZERS_PARALLELISM=false
 export OMP_NUM_THREADS="${OMP_NUM_THREADS:-8}"
 
-if [[ ! -f "${PATHS_FILE}" ]]; then
-  echo "[${PROBE_ID}] missing PATHS_FILE=${PATHS_FILE}" >&2
+if [[ ! -f "${MIX_WEIGHTS_JSON}" ]]; then
+  echo "[${PROBE_ID}] missing MIX_WEIGHTS_JSON=${MIX_WEIGHTS_JSON}" >&2
+  exit 2
+fi
+if [[ ! -f "${POOL_DIR}/edullm_data_source.json" ]]; then
+  echo "[${PROBE_ID}] missing ${POOL_DIR}/edullm_data_source.json — stage from edullm-data first" >&2
   exit 2
 fi
 
@@ -69,7 +78,6 @@ if [[ -f "${FINAL_JSON}" ]]; then
   exit 0
 fi
 
-# Drop partial checkpoints from a crashed run (resume is not supported for probes).
 if compgen -G "${SAVE_FOLDER}/step*" >/dev/null || [[ -f "${SAVE_FOLDER}/config.yaml" ]]; then
   echo "[${PROBE_ID}] clearing partial checkpoints under ${SAVE_FOLDER}"
   rm -rf "${SAVE_FOLDER:?}/"*
@@ -80,7 +88,8 @@ EVAL_SCRIPT="${MIXLAW_ROOT}/eval_task_loss.py"
 
 ARGS=(
   --name "${PROBE_ID}"
-  --paths-file "${PATHS_FILE}"
+  --pool-dir "${POOL_DIR}"
+  --mix-weights-json "${MIX_WEIGHTS_JSON}"
   --save-folder "${SAVE_FOLDER}"
   --progress-dir "${PROGRESS_DIR}"
   --device-batch-size "${DEVICE_BATCH_SIZE}"
@@ -92,7 +101,7 @@ ARGS=(
   --seed "${SEED}"
 )
 
-echo "[launch_probe] PROBE_ID=${PROBE_ID} NPROC=${NPROC} mbs=${DEVICE_BATCH_SIZE} eval_mbs=${DEVICE_EVAL_BATCH_SIZE} eval_interval=${EVAL_INTERVAL}"
+echo "[launch_probe] PROBE_ID=${PROBE_ID} POOL_DIR=${POOL_DIR} NPROC=${NPROC} WANDB_PROJECT=${WANDB_PROJECT} WANDB_MODE=${WANDB_MODE}"
 
 run_train() {
   if [[ "${NPROC}" -eq 1 ]]; then
@@ -119,7 +128,6 @@ run_eval() {
 
 run_train
 
-# Newest unsharded checkpoint (OLMo writes step*-unsharded directories) or plain step*.
 LATEST_CKPT="$(find "${SAVE_FOLDER}" -maxdepth 1 \( -name 'step*-unsharded' -o -name 'step*' \) -type d \
   2>/dev/null | sort -V | tail -n 1 || true)"
 if [[ -z "${LATEST_CKPT}" ]]; then
@@ -129,6 +137,25 @@ fi
 
 echo "[launch_probe] post-eval from ${LATEST_CKPT} (6 curve labels)"
 run_eval "${LATEST_CKPT}"
+
+# Final probe eval → same W&B project as 370M arms (no mixlaw trainer edits).
+if [[ "${WANDB_MODE}" != "disabled" ]]; then
+  unset WANDB_DISABLED || true
+  export WANDB_MODE
+  PYTHONPATH="${SKILLIT_ROOT}:${PYTHONPATH:-}" \
+    "${PYTHON}" -c "
+from pathlib import Path
+from wandb_logging import log_probe_final_eval
+url = log_probe_final_eval(
+    eval_path=Path(r'''${FINAL_JSON}'''),
+    probe_id=r'''${PROBE_ID}''',
+    project=r'''${WANDB_PROJECT}''',
+    entity=(r'''${WANDB_ENTITY:-}''' or None),
+    mode=r'''${WANDB_MODE}''',
+)
+print(f'[launch_probe] wandb probe eval url={url}', flush=True)
+"
+fi
 
 if [[ -n "${RESULTS_S3}" ]]; then
   if command -v aws >/dev/null 2>&1; then

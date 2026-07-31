@@ -1,0 +1,53 @@
+{
+  "schema": 2,
+  "description": "Skill-It OLMo2-370M dual-arm training (10B tokens). Streams from published edullm-data domain shards at RegMix initial weights; mid-run Skill-It updates via DomainMixtureStream.set_weights.",
+  "budget_tokens": 10000000000,
+  "domain_order": [
+    "dclm",
+    "arxiv",
+    "starcoder",
+    "pes2o",
+    "open-web-math",
+    "algebraic-stack",
+    "wiki"
+  ],
+  "seed": 42,
+  "data_source": {
+    "dataset_id": "pretrain/olmo-original-30b",
+    "bucket": "edullm-data",
+    "mode": "domain_stratified_stream",
+    "reader": "edullm_data.read.dataset_paths"
+  },
+  "initial_weights": [
+    0.375,
+    0.25,
+    0.1406,
+    0.0938,
+    0.0635,
+    0.0615,
+    0.0156
+  ],
+  "pool_peak_recipes": [
+    "../mixlaw/validation_mixtures_10b.json",
+    "probes.json"
+  ],
+  "skillit": {
+    "update_steps": [500, 875, 1250, 1625, 2000],
+    "eta": 0.2,
+    "w": 1.0
+  },
+  "arms": [
+    {
+      "id": 0,
+      "arm_id": "skillit-probe",
+      "a_mode": "probe",
+      "label": "fixed offline A"
+    },
+    {
+      "id": 1,
+      "arm_id": "skillit-deriv",
+      "a_mode": "derivative",
+      "label": "online mixing-law A(r)"
+    }
+  ]
+}

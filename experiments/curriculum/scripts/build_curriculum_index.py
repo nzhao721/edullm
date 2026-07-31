@@ -3,9 +3,10 @@
 
 Merges heuristic ``labels/`` and LM ``lm_labels/`` metrics on doc ``id``, assigns
 per-metric easy→hard ranks, optionally tokenizes labeled docs into 2048-token
-chunks, and writes local staging artifacts intended for::
-
-    s3://edullm-datasets/regmix/regmix-10b/curriculum/
+chunks, and writes **local** staging artifacts. Publish the resulting token-order
+curricula into ``s3://edullm-data/curriculum/regmix-*-370m`` via the
+``edullm-data`` package (trainer consumes those IDs; this script does not write
+legacy raw-datasets buckets).
 
 **S3 mutations are opt-in.** Default is local staging only. ``--dry-run-upload``
 prints the planned object keys without contacting AWS. ``--upload`` is refused
@@ -47,7 +48,8 @@ log = logging.getLogger("build_curriculum_index")
 SEQ_LEN = 2048
 TOKENIZER_ID = "allenai/dolma2-tokenizer"
 EOS_TOKEN_ID = 100_257
-DEFAULT_DST_URI = "s3://edullm-datasets/regmix/regmix-10b/curriculum/"
+# Documentation / dry-run listing only — publish via edullm-data, not a legacy bucket.
+DEFAULT_DST_URI = "s3://edullm-data/curriculum/"
 
 
 def open_maybe_gzip(path: Path, mode: str = "rt"):

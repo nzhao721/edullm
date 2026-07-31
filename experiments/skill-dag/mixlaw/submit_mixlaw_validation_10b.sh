@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
-# Build 10B mixlaw validation mixtures on FarmShare; upload to edullm-datasets/mixlaw/.
-# NEVER writes to regmix-10b (mix01 is a server-side copy into mixlaw only).
+# DEPRECATED / DO-NOT-USE for new work.
+# Per-mix slice materialization + upload to edullm-datasets/mixlaw/ is unsupported.
+# Sole supported path: submit_mixlaw_validation_pool.sh +
+# submit_mixlaw_validation_370m.sh (DomainMixtureStream over an edullm-data peak pool).
+#
+# Historical: build 10B mixlaw validation mixtures on FarmShare; upload to
+# edullm-datasets/mixlaw/. NEVER writes to regmix-10b.
 set -Eeuo pipefail
 
 SUNET="${SUNET:-nzhao2}"

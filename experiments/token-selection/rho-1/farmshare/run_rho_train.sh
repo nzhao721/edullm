@@ -1,6 +1,17 @@
 #!/usr/bin/env bash
 # RHO-1 FarmShare / local helper — RegMix 10B (run_id=rho-1-regmix10b-v1).
 #
+# Ephemeral empty-scratch contract:
+#   - Stage train shards: YAML data.dataset_id → edullm_data.read → s3://edullm-data/
+#   - Never uses s3://edullm-datasets/ or TRAIN_DATA_S3.
+#   - Do not assume RUN_DIR already holds tokens, venvs, or checkpoints across wipe.
+#   - Durable saves → s3://edullm-checkpoints/token-sel/rho-1/ (background sync + spine).
+#   - RESUME=1: train_olmo_template fetches durable ckpts when local save_folder is empty.
+#
+# W&B (SmolLM2 protocol; additive to S3): project token-selection. Push
+# wandb-session.env via scripts/farmshare/push_wandb_session_to_farmshare.sh
+# "$RUN_DIR" (or set WANDB_SESSION_ENV). Local smoke: WANDB_MODE=disabled.
+#
 # Does NOT resume the discarded rho-excess-10b-scratch-v1 (~step200) run.
 # World size / GPU count are discovered from the environment (no hard-coded host).
 #
@@ -10,7 +21,7 @@
 #   bash $EDULLM_ROOT/experiments/token-selection/rho-1/farmshare/run_rho_train.sh prepare
 #   bash $EDULLM_ROOT/experiments/token-selection/rho-1/farmshare/run_rho_train.sh train
 #
-# Crash resume within THIS run_id only:
+# Crash resume within THIS run_id only (durable S3 if local empty):
 #   RESUME=1 bash .../run_rho_train.sh train
 set -euo pipefail
 
@@ -60,7 +71,13 @@ fi
 RUN_ID="rho-1-regmix10b-v1"
 DISCARDED_RUN_ID="rho-excess-10b-scratch-v1"
 CKPT_S3="${CKPT_S3:-s3://edullm-checkpoints/token-sel/rho-1}"
-TRAIN_DATA_S3="${TRAIN_DATA_S3:-s3://edullm-datasets/regmix/regmix-10b/tokenized}"
+# Train shards come from YAML data.dataset_id → edullm_data.read → s3://edullm-data/
+# (ensure_train_tokens). Do not set TRAIN_DATA_S3 / edullm-datasets.
+if [[ -n "${TRAIN_DATA_S3:-}" ]]; then
+  echo "ERROR: TRAIN_DATA_S3 is no longer supported (got ${TRAIN_DATA_S3})." >&2
+  echo "  Set data.dataset_id in the YAML (pretrain/regmix-10b); staging uses edullm-data." >&2
+  exit 2
+fi
 REF_CKPT_S3="${REF_CKPT_S3:-s3://edullm-checkpoints/olmo-370m/edullm-370M-refhq-5p5b/checkpoints/step1315/}"
 # Experiment results (metrics) live under the same arm prefix on edullm-checkpoints.
 METRICS_S3="${METRICS_S3:-s3://edullm-checkpoints/token-sel/rho-1/metrics}"
@@ -141,12 +158,16 @@ fi
 
 mkdir -p "$WORK" "$LOG_DIR" "$PROGRESS_DIR" "$REF_DIR" "$TOK_DIR" "$CKPT_LOCAL"
 
+# Optional convenience only — never required across ephemeral hosts.
 if [[ -x "$WORK/venv/bin/python" ]]; then
   # shellcheck disable=SC1091
   source "$WORK/venv/bin/activate"
 elif [[ -x "$EDULLM_ROOT/.venv/bin/python" ]]; then
   # shellcheck disable=SC1091
   source "$EDULLM_ROOT/.venv/bin/activate"
+elif ! command -v python3 >/dev/null 2>&1; then
+  echo "ERROR: no python3 on PATH (and no job-local venv). Install deps for this job." >&2
+  exit 2
 fi
 
 if [[ "$OFFLINE" != "1" && -f "${AWS_SESSION_ENV:-$WORK/aws-session.env}" ]]; then
@@ -161,8 +182,6 @@ export NCCL_DEBUG="${NCCL_DEBUG:-WARN}"
 export OMP_NUM_THREADS="${OMP_NUM_THREADS:-4}"
 export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
 export OLMO_ATTN_BACKEND="$ATTN_BACKEND"
-export WANDB_DISABLED=1
-export WANDB_MODE=disabled
 export TOKEN_SELECTION_TASK_LOSS_EVAL_SCRIPT="${TOKEN_SELECTION_TASK_LOSS_EVAL_SCRIPT:-$ENQUEUE_TASK_LOSS}"
 
 python3 - <<PY
@@ -204,16 +223,6 @@ prepare() {
       python -m pip install -q -e "$OLMO_CORE_DIR" 'PyYAML>=6.0'
   else
     log "prepare: olmo_core already importable"
-  fi
-
-  log "prepare: RegMix tokens"
-  if [[ -f "$TOK_DIR/paths.txt" ]] && find "$TOK_DIR" -name '*.npy' -print -quit | grep -q .; then
-    log "SKIP train sync — reusing local $TOK_DIR"
-  elif [[ "$OFFLINE" == "1" ]]; then
-    echo "ERROR: OFFLINE=1 but missing preloaded tokens at $TOK_DIR" >&2
-    exit 2
-  else
-    aws s3 sync "$TRAIN_DATA_S3" "$TOK_DIR" --only-show-errors
   fi
 
   log "prepare: RefHQ reference -> $REF_PT"
@@ -275,11 +284,47 @@ print(f"  output_dir={out_dir}")
 print(f"  num_gpus={num_gpus} rank_mbz={rank_mbz} dp={dp_type} compile={train['compile_model']}")
 PY
 
-  log "prepare: build_token_manifest + freeze_order"
-  python3 -m token_selection.scripts.build_token_manifest --config "$RUNTIME_CFG" \
-    2>&1 | tee "$LOG_DIR/build_token_manifest.log"
-  python3 -m token_selection.scripts.freeze_order --config "$RUNTIME_CFG" \
-    2>&1 | tee "$LOG_DIR/freeze_order.log"
+  log "prepare: stage train tokens from edullm-data (data.dataset_id → ensure_train_tokens)"
+  if [[ "$OFFLINE" == "1" ]]; then
+    if [[ ! -f "$TOK_DIR/manifest.json" ]]; then
+      echo "ERROR: OFFLINE=1 but missing staged tokens at $TOK_DIR/manifest.json" >&2
+      exit 2
+    fi
+    log "OFFLINE=1 — reusing staged $TOK_DIR (skip edullm-data fetch)"
+    python3 - "$RUNTIME_CFG" "$OUT_DIR" <<'PY' 2>&1 | tee "$LOG_DIR/stage_tokens.log"
+import sys
+from pathlib import Path
+from token_selection.scripts import load_config
+from token_selection.scripts.edullm_data_tokens import ensure_order_contract
+
+cfg = load_config(Path(sys.argv[1]))
+ensure_order_contract(cfg, Path(sys.argv[2]))
+print("order contract ok")
+PY
+  else
+    python3 - "$RUNTIME_CFG" "$OUT_DIR" <<'PY' 2>&1 | tee "$LOG_DIR/stage_tokens.log"
+import sys
+from pathlib import Path
+from token_selection.scripts import load_config
+from token_selection.scripts.edullm_data_tokens import (
+    ensure_order_contract,
+    ensure_train_tokens,
+)
+
+cfg_path, out_dir = Path(sys.argv[1]), Path(sys.argv[2])
+cfg = load_config(cfg_path)
+dataset_id = (cfg.get("data") or {}).get("dataset_id")
+if not dataset_id:
+    raise SystemExit("data.dataset_id required (e.g. pretrain/regmix-10b)")
+manifest = ensure_train_tokens(cfg, out_dir / "tokens")
+ensure_order_contract(cfg, out_dir)
+print(
+    f"staged dataset_id={manifest.get('dataset_id')} "
+    f"version={manifest.get('dataset_version')} "
+    f"n_tokens={manifest.get('n_tokens')} → {out_dir / 'tokens'}"
+)
+PY
+  fi
   python3 -m token_selection.scripts.validate_experiment \
     --config "$RUNTIME_CFG" \
     --olmo-root "$OLMO_CORE_DIR" \
@@ -315,7 +360,7 @@ PY
 
   EXTRA_ARGS=()
   if [[ "$RESUME" == "1" ]]; then
-    log "RESUME=1 — fingerprint-gated resume under run_id=$RUN_ID (not $DISCARDED_RUN_ID)"
+    log "RESUME=1 — fingerprint-gated resume under run_id=$RUN_ID (not $DISCARDED_RUN_ID); fetches from $CKPT_S3 if local empty"
     EXTRA_ARGS+=(--resume)
   elif [[ "$FROM_SCRATCH" == "1" ]]; then
     scratch_reset
@@ -336,6 +381,8 @@ PY
   fi
 
   log "train: torchrun nproc=$NUM_GPUS run_id=$RUN_ID FROM_SCRATCH=$FROM_SCRATCH RESUME=$RESUME"
+  # shellcheck disable=SC1091
+  source "${TS_ROOT}/token_selection/scripts/wandb_env.sh" "rho-1" "${RUN_ID}"
   nvidia-smi || true
   date -Is > "$PROGRESS_DIR/heartbeat.txt"
 
@@ -360,7 +407,7 @@ PY
     SYNC_PID=$!
     trap 'kill $SYNC_PID 2>/dev/null || true' EXIT
   else
-    log "SKIP_S3_UPLOAD=1 — checkpoints stay local only"
+    log "SKIP_S3_UPLOAD=1 — checkpoints stay local-only (not durable on ephemeral scratch)"
     (
       while true; do
         sleep "${SYNC_INTERVAL_SEC:-120}"

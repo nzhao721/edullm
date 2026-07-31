@@ -51,17 +51,17 @@ class TestMiddleTokenMass(unittest.TestCase):
         self.assertEqual([r.doc_id for r in kept], ["mid"])
         self.assertEqual(summary["tokens_kept"], 50)
 
-    def test_ladder_2384_imported(self) -> None:
+    def test_ladder_2360_imported(self) -> None:
         ts = Path(__file__).resolve().parents[1]
         sys.path.insert(0, str(ts))
         from token_selection.olmo_ext.checkpoint_ladder import permanent_checkpoint_steps
         from token_selection.olmo_ext.s3_layout import arm_prefix
 
-        steps = permanent_checkpoint_steps(2384, 125)
+        steps = permanent_checkpoint_steps(2360, 125)
         self.assertIn(0, steps)
-        self.assertIn(2250, steps)
-        self.assertIn(2384, steps)
-        self.assertNotIn(2375, steps)
+        self.assertIn(2125, steps)
+        self.assertIn(2360, steps)
+        self.assertNotIn(2250, steps)
         self.assertEqual(arm_prefix("middle-ppl-doc"), "token-sel/middle-ppl-doc")
 
     def test_trainer_arm_constants(self) -> None:
@@ -72,11 +72,43 @@ class TestMiddleTokenMass(unittest.TestCase):
         text = trainer.read_text(encoding="utf-8")
         self.assertIn('ARM = "middle-ppl-doc"', text)
         self.assertIn("edullm-370M-middle-ppl-doc-ladder125-v1", text)
-        self.assertIn("DEFAULT_LENGTH_TOKENS = 10_000_000_000", text)
+        self.assertIn("DEFAULT_LENGTH_TOKENS = 9_900_000_000", text)
+        self.assertIn('DEFAULT_DATASET_ID = "pretrain/middle-ppl-doc-mid60"', text)
+        self.assertNotIn('DEFAULT_DATASET_ID = "pretrain/regmix-10b"', text)
+        self.assertIn("resolve_latest", text)
+        self.assertIn("dataset_paths", text)
+        self.assertIn("edullm-data", text)
+        self.assertIn('LEGACY_DATA_BUCKET = "edullm-datasets"', text)
+        self.assertIn("_reject_legacy_uri", text)
+        self.assertIn("--stage-dir", text)
+        self.assertIn("_durable_export_checkpoint", text)
+        self.assertIn("--allow-local-only", text)
+        self.assertIn("do not auto-resume scratch trees", text)
+        self.assertIn("ephemeral_scratch", text)
         self.assertIn('OLMO_ATTN_BACKEND", "torch"', text)
         self.assertIn('--save-interval"', text)
         self.assertIn('method": "plain_ce"', text)
         self.assertIn("export_arm_checkpoint(ARM, path)", text)
+        self.assertNotIn("--train-paths-file", text)
+        self.assertNotIn("S3 export after checkpoint failed", text)
+
+    def test_readme_and_launch_ephemeral(self) -> None:
+        folder = Path(__file__).resolve().parent
+        readme = (folder / "README.md").read_text(encoding="utf-8")
+        launch = (folder / "launch_train.sh").read_text(encoding="utf-8")
+        self.assertNotIn("TRAIN_PATHS_FILE", readme)
+        self.assertNotIn("--train-paths-file", readme)
+        self.assertIn("pretrain/middle-ppl-doc-mid60", readme)
+        self.assertIn("STAGE_DIR", readme)
+        self.assertIn("edullm-checkpoints", readme)
+        self.assertIn("Ephemeral runtime", readme)
+        self.assertIn("Does **not** read", readme)
+        self.assertIn("STAGE_DIR", launch)
+        self.assertIn("pretrain/middle-ppl-doc-mid60", launch)
+        self.assertIn('FRESH="${FRESH:-1}"', launch)
+        self.assertIn("ALLOW_LOCAL_ONLY", launch)
+        self.assertNotIn("TRAIN_PATHS_FILE", launch)
+        self.assertIn("Does not read edullm-datasets", launch)
 
 
 if __name__ == "__main__":

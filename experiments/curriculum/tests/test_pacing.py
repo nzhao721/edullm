@@ -132,31 +132,47 @@ def test_segment_range_last():
     assert start == 2250 and end == 2384
 
 
-def test_warmup_fresh_stream_honors_ordered_offset():
-    """Fresh CurriculumChunkStream at step N must start at ordered_offset, not 0."""
+def test_warmup_fresh_stream_is_step_addressed_nonoverlapping():
+    """Fresh stream at step N uses (step * n_take) % n, not a zeroed cursor."""
     n = 20
     ranked = list(range(n))
-    step = 999
+    step = 3
+    batch_size = 4
     pool = pool_for_step(step, n, "warmup_1000")
     assert pool.ordered is True
-    assert pool.ordered_offset == step % n  # 19
+    assert pool.ordered_offset == step
 
     stream = CurriculumChunkStream(ranked, pacing="warmup_1000", difficulty_metric="compression_ratio")
-    idxs = stream.next_indices(step, batch_size=4)
+    idxs = stream.next_indices(step, batch_size=batch_size)
     # Must not restart from the beginning of the ranked list.
     assert idxs != [0, 1, 2, 3]
-    expected_start = int(pool.ordered_offset)
-    assert idxs[0] == ranked[expected_start]
-    expected = [ranked[(expected_start + i) % n] for i in range(4)]
+    expected_start = (step * batch_size) % n
+    expected = [ranked[(expected_start + i) % n] for i in range(batch_size)]
     assert idxs == expected
 
 
-def test_warmup_sequential_steps_follow_ordered_offset():
-    """Sequential step-addressed draws advance with step % n, not a zeroed cursor."""
+def test_warmup_sequential_steps_nonoverlapping():
+    """Consecutive steps with batch>1 must not heavily overlap (strict walk)."""
+    n = 100
+    ranked = list(range(n))
+    stream = CurriculumChunkStream(ranked, pacing="warmup_1000", difficulty_metric="compression_ratio")
+    batch_size = 8
+    seen_prev: set[int] = set()
+    for step in range(5):
+        idxs = stream.next_indices(step, batch_size=batch_size)
+        assert len(idxs) == batch_size
+        expected_start = (step * batch_size) % n
+        assert idxs == [ranked[(expected_start + i) % n] for i in range(batch_size)]
+        if seen_prev:
+            assert set(idxs).isdisjoint(seen_prev)
+        seen_prev = set(idxs)
+
+
+def test_warmup_batch_one_matches_step_mod_n():
+    """With batch_size=1, start reduces to step % n (resume-friendly)."""
     n = 20
     ranked = list(range(n))
     stream = CurriculumChunkStream(ranked, pacing="warmup_1000", difficulty_metric="compression_ratio")
     for step in (0, 1, 5, 19, 20):
-        pool = pool_for_step(step, n, "warmup_1000")
         idxs = stream.next_indices(step, batch_size=1)
-        assert idxs == [ranked[int(pool.ordered_offset) % n]]
+        assert idxs == [ranked[step % n]]

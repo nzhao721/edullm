@@ -63,8 +63,13 @@ Result: **24 designed probe points** (not random uniform samples). Tags:
 | `C1-dclm50/55/60` | Injected high-DCLM points |
 | `C1` | Standard grid points |
 
-Mixture proportions are realized as **exact per-domain sequence counts** on disk
-(largest-remainder allocation); one epoch shuffles non-overlapping 2048-token chunks.
+Training realizes those weights **only** via **`DomainMixtureStream`** over a
+shared peak-sized working pool staged from `edullm-data` (domain-stratified
+sampling; see `domain_stream.py` / `olmo_domain_stream_patch.py`). Peak
+per-domain pool sizes use largest-remainder allocation so every recipe mix
+fits. Exact per-mix slice materialization (`build_mixture_data.py`) is
+**not supported** for new work — do not re-materialize slices to bit-match
+checked-in `pilot_runs/` curves.
 
 ---
 
@@ -105,13 +110,18 @@ Columns follow `domain_order` in `mixtures.json`. Weights sum to 1.
 
 | Script | Role |
 |--------|------|
-| `prepare_data.sh` | One-time pipeline: fetch olmohq shards, tokenize working pool, build 24 mixture slices |
-| `select_and_fetch_shards.py` | Random shard draw per domain from S3 inventory (overshoot-aware) |
-| `tokenize_working_pool.py` | Tokenize fetched raw shards into per-domain memmaps |
-| `build_mixture_data.py` | Plan + materialize per-mixture random subsamples from the working pool |
+| `prepare_data.sh` | Write recipe sidecars after edullm-data pool exists (`prepare_mixlaw_pilot_data.py`) |
+| `submit_mixlaw_pilot_pool.sh` | FarmShare: stage peak pool from edullm-data into ephemeral RUN_DIR |
+| `stage_working_pool_from_edullm_data.py` | Download+concat domain memmaps; write `edullm_data_source.json` |
+| `prepare_mixlaw_pilot_data.py` | Per-mix `mix_weights.json` from `mixtures.json` |
+| `recipe_data.py` / `domain_stream.py` | Shared recipe sidecars + olmohq domain sampler |
+| `olmo_domain_stream_patch.py` | OLMo classic 60M trainer streaming hook |
+| `select_and_fetch_shards.py` | Legacy raw-shard draw (pre-edullm-data); not used by training |
+| `tokenize_working_pool.py` | Legacy tokenize path; not used by training |
+| `build_mixture_data.py` | **Deprecated / do-not-use** — legacy slice materialization; not a supported training path |
 | `budget_calculator.py` | GPU-hour / token budget vs olmohq availability |
 | `train_datadecide_60m.py` | Train one mixture (DataDecide 60M, in-run curve eval) |
-| `run_mixture.sh` | Single-GPU worker: train + full eval for one `mixNN` |
+| `run_mixture.sh` | Single-GPU worker: train + full eval + S3 upload-before-end |
 | `eval_task_loss.py` | Task-loss eval on the six curve labels (or `--full-suite` for all 20) |
 | `run_task_loss_eval.py` | Batch re-eval helper for finished checkpoints |
 | `extrapolate_chinchilla.py` | Extrapolate in-run jsonl curves to Chinchilla step (tpp = 20); excludes step-1451 final anchor |
@@ -125,11 +135,14 @@ Columns follow `domain_order` in `mixtures.json`. Weights sum to 1.
 | `mixtures.json` | 24 probe mixtures (Algorithm 2 grid + injected points) |
 | `reoptimize_constraints.py` | Re-run optima / near-optimal sampling on saved fits |
 | `write_validation_mixtures.py` | Emit 370M validation recipe (`validation_mixtures_10b.json`) |
-| `prepare_validation_370m_data.py` | Local `paths_train.txt` + weight sidecars from recipe |
+| `prepare_validation_370m_data.py` | Per-arm `mix_weights.json` sidecars from recipe |
+| `train_mixlaw_validation_370m.py` | OLMo2-370M CE trainer (streams at recipe weights) |
 | `launch_validation_370m.sh` | One OLMo2-370M CE arm on a recipe mix |
-| `submit_mixlaw_validation_370m.sh` | Slurm array over all recipe mixes |
-| `build_working_pool_from_shards.py` | Peak olmohq pool for 370M validation slices |
-| `finalize_mixlaw_upload.py` | Publish validation corpora to `s3://edullm-datasets/mixlaw/` |
+| `submit_mixlaw_validation_pool.sh` | FarmShare: stage peak pool from edullm-data |
+| `stage_validation_pool_from_edullm_data.py` | 370M peak pool download+concat from edullm-data |
+| `submit_mixlaw_validation_370m.sh` | Slurm array over all recipe mixes (`TRAIN_VENV` required) |
+| `build_working_pool_from_shards.py` | **Deprecated** — peak pool from `tokenized_manifest.json` |
+| `check_validation_pool.py` | Peak demand vs olmohq inventory |
 | `validation_mixtures_10b.json` | Eight 10B-mix recipe for 370M scale-up |
 | `generate_readme.py` | Regenerate this README from JSON artifacts |
 
@@ -139,16 +152,30 @@ Columns follow `domain_order` in `mixtures.json`. Weights sum to 1.
 
 | Artifact | Location | Notes |
 |----------|----------|-------|
-| **Training corpus** | `s3://edullm-datasets/olmo100b/olmo-mix-1124-30b` | Raw olmohq json.gz shards; only a subset is fetched locally |
-| **Pilot results** | `s3://edullm-checkpoints/token-selection/mixlaw-pilot/mix01` … `mix24` | Logs + progress only (no weight checkpoints on S3) |
-| **370M validation corpora** | `s3://edullm-datasets/mixlaw/` | 10B tokens × 8 mixes; `READY` + `validation_mixtures_10b.json` |
-| Per-mix corpus | `…/mixlaw/mixes/<run_name>/` | Tokenized slices; mix01 copied from regmix-10b |
+| **Training corpus** | `s3://edullm-data/pretrain/olmo-127b` | Published+validated; staged via `stage_*_from_edullm_data.py` |
+| **Pilot results** | `s3://edullm-checkpoints/mixlaw/60m-pilot/mix01` … `mix24` | Checkpoints + progress + logs (upload-before-end) |
+| **370M validation results** | `s3://edullm-checkpoints/mixlaw/370m-validation/<mix>/` | Fail-closed sync from trainer / `train_one.sh` |
+| **370M validation recipe** | `validation_mixtures_10b.json` | Domain weights per arm; training streams from edullm-data pool |
+| **Working pool** | ephemeral `POOL_DIR` (job scratch) | Peak-sized memmap pool staged each job; provenance required |
 | Per-mix progress | `…/mixNN/progress/` | `run_meta.json`, `task_loss_final.json`, `task_loss.jsonl` |
 | Per-mix logs | `…/mixNN/logs/` | `train.log`, `eval.log` |
-| **Local mirror** | `pilot_runs/mixNN/progress/` | Checked-in progress JSON from the completed pilot |
+| **Local mirror** | `pilot_runs/mixNN/progress/` | Historical progress JSON from the completed (pre-streaming) pilot; not a replay target |
 
-Set `RESULTS_S3=s3://edullm-checkpoints/token-selection/mixlaw-pilot` in `run_mixture.sh`
-to sync progress/logs after each mix finishes. Weight checkpoints stay on local NVMe only.
+`run_mixture.sh` defaults `RESULTS_S3=s3://edullm-checkpoints/mixlaw/60m-pilot` and
+syncs checkpoints + progress + logs before exit. Set `ALLOW_LOCAL_ONLY=1` only for
+smoke tests on durable local disks.
+
+### Weights & Biases
+
+Trainers log to W&B project **`mixlaw`** (SmolLM-style) when enabled:
+
+- CLI: `--wandb-project mixlaw --wandb-mode online|offline|disabled`
+- FarmShare: push `wandb-session.env` via `scripts/farmshare/push_wandb_session_to_farmshare.sh $RUN_DIR`
+- `run_mixture.sh` / `launch_validation_370m.sh` auto-enable `online` when the session
+  file or `WANDB_API_KEY` is present; otherwise mode stays `disabled` (S3-only).
+- Run names: 60M pilot → `mixNN`; 370M validation → `mixlaw-370m-<MIX_NAME>`
+  (group `60m-pilot` / `370m-validation`).
+- W&B is **additive** — fail-closed S3 export is unchanged.
 
 
 ---
@@ -402,49 +429,48 @@ py -3 generate_readme.py   # refresh this file
 
 ---
 
-## 370M validation corpora (built)
+## 370M validation (olmohq stream + recipe)
 
-Materialized **10B dolma2 tokens per mixture** for OLMo-370M scale-up. Recipe: `validation_mixtures_10b.json` (canonical copy on S3 at `mixlaw/validation_mixtures_10b.json`). **Rebuild required** after the 2026-07-30 recipe change (`ML-pilot_caps`, `ML-near-opt-4`, `LGB-near-opt-8`); prior S3 `READY` (2026-07-29) still has the old surrogate mix names.
+Eight **10B-token** OLMo-370M arms. Domain weights live in `validation_mixtures_10b.json` (schema 2). Training **streams from a shared olmohq working pool** at those weights — no per-mix corpora under `mixlaw/mixes/`.
 
-| Mixture | S3 prefix |
-|---------|-----------|
-| `olmo-mix-1124` | `mixlaw/mixes/olmo-mix-1124/` |
-| `mix01` | `mixlaw/mixes/mix01/` |
-| `mix07` | `mixlaw/mixes/mix07/` |
-| `mix18` | `mixlaw/mixes/mix18/` |
-| `ML-pilot_caps` | `mixlaw/mixes/ML-pilot_caps/` |
-| `ML-near-opt-4` | `mixlaw/mixes/ML-near-opt-4/` |
-| `LGB-min1pct` | `mixlaw/mixes/LGB-min1pct/` |
-| `LGB-near-opt-8` | `mixlaw/mixes/LGB-near-opt-8/` |
+| Mixture | Role |
+|---------|------|
+| `olmo-mix-1124` | Natural olmo-mix-1124 reference weights |
+| `mix01` | RegMix base weights (same proportions as pilot mix01) |
+| `mix07`, `mix18` | Pilot grid points |
+| `ML-pilot_caps`, `ML-near-opt-4` | Mixing-law surrogates |
+| `LGB-min1pct`, `LGB-near-opt-8` | LightGBM surrogates |
 
-**mix01 policy:** server-side copy *from* `s3://edullm-datasets/regmix/regmix-10b/` into `mixlaw/mixes/mix01/` only. `regmix/regmix-10b` is **read-only** and must never be modified.
+**Data source:** `s3://edullm-data/pretrain/olmo-127b/` (published+validated). Stage one peak-sized working pool from edullm-data, then train every arm from it.
 
-The other seven mixes are sliced offline from a peak-sized olmohq working pool (`olmo100b/olmo-mix-1124-30b` tokenized shards). Slices are contiguous 2048-token chunks with largest-remainder domain allocation (same convention as the 60M pilot).
+### Pipeline
 
-### Build pipeline
+1. **pool** — `submit_mixlaw_validation_pool.sh` → `stage_validation_pool_from_edullm_data.py` (peak demand from recipe @ 10B).
+2. **recipe sidecars** — `prepare_validation_370m_data.py` writes per-arm `mix_weights.json`.
+3. **train** — `submit_mixlaw_validation_370m.sh` → `train_mixlaw_validation_370m.py` (`DomainMixtureStream`).
 
-1. **pool** — `build_working_pool_from_shards.py` downloads olmohq `.npy` shards and concatenates a peak-sized pool per domain.
-2. **slice** — `build_mixture_data.py plan` + `build` materializes each non-reuse mixture under `slices/<run_name>/`.
-3. **upload** — `finalize_mixlaw_upload.py` syncs slices to `mixlaw/mixes/`, copies mix01 from regmix server-side, writes `mixlaw_upload_receipt.json`, and publishes `READY` last.
-
-### Validation build scripts
+### Validation scripts
 
 | Script | Role |
 |--------|------|
 | `write_validation_mixtures.py` | Emit `validation_mixtures_10b.json` from fit JSON + pilot mixtures |
-| `prepare_validation_370m_data.py` | Build `paths_train.txt` + weight sidecars from the recipe |
-| `launch_validation_370m.sh` | Train one OLMo2-370M CE arm on a recipe mix |
-| `submit_mixlaw_validation_370m.sh` | Slurm array over all recipe mixes |
-| `build_working_pool_from_shards.py` | Peak pool from olmohq `tokenized_manifest.json` |
-| `build_mixture_data.py` | Plan + materialize per-mixture slices from the working pool |
-| `finalize_mixlaw_upload.py` | Upload to `mixlaw/`; mix01 = regmix server-side copy |
-| `validation_mixtures_10b.json` | Eight-mix recipe (`reuse_s3` only on mix01) |
+| `submit_mixlaw_validation_pool.sh` | FarmShare: stage peak pool from edullm-data |
+| `stage_validation_pool_from_edullm_data.py` | Download+concat domain memmaps for 370M peak demand |
+| `prepare_validation_370m_data.py` | Per-arm `mix_weights.json` sidecars from recipe |
+| `train_mixlaw_validation_370m.py` | OLMo2-370M CE trainer (domain-stratified stream) |
+| `launch_validation_370m.sh` | Train one recipe arm |
+| `submit_mixlaw_validation_370m.sh` | Slurm array over all recipe arms |
+| `domain_stream.py` | Shared olmohq domain sampler (also used by skillit) |
+| `check_validation_pool.py` | Peak demand vs olmohq inventory |
 
-Regenerate the recipe locally after refitting:
+**Unsupported for new work:** `submit_mixlaw_validation_10b.sh` + `build_mixture_data.py` + `build_working_pool_from_shards.py` + `finalize_mixlaw_upload.py` (per-mix slices / `edullm-datasets/mixlaw/`). Use the streaming peak-pool pipeline above only.
+
+Regenerate the recipe after refitting:
 
 ```bash
 cd experiments/skill-dag/mixlaw
 py -3 write_validation_mixtures.py
-bash submit_mixlaw_validation_10b.sh   # rematerialize + upload new weights
+bash submit_mixlaw_validation_pool.sh
+TRAIN_VENV=/path/to/gpu-venv POOL_DIR=$RUN_DIR/pool SAVE_ROOT=... PROGRESS_ROOT=... bash submit_mixlaw_validation_370m.sh
 ```
 

@@ -151,6 +151,8 @@ def test_rel_ema_refhq_arm_contract():
     assert (cfg.get("eval") or {}).get("task_loss", {}).get("results_dir") == (
         "task_loss_results/rel-ema-refhq"
     )
+    assert cfg["data"]["dataset_id"] == "pretrain/regmix-10b"
+    assert cfg["reference"].get("dataset") == "pretrain/refhq-regmix-5p5b"
 
     # Independent-var contrast vs rel-ema-exp (near-clone pair).
     exp_cfg = load_config(
@@ -163,6 +165,7 @@ def test_rel_ema_refhq_arm_contract():
     assert str(exp_cfg.get("alpha_schedule") or "") == "exp"
     assert cfg["run_id"] != exp_cfg["run_id"]
     assert cfg["s3"]["prefix"] != exp_cfg["s3"]["prefix"]
+    assert exp_cfg["data"]["dataset_id"] == "pretrain/regmix-10b"
 
 
 def test_validate_experiment_refuses_missing_rho_reference(tmp_path, monkeypatch):
@@ -186,7 +189,7 @@ def test_validate_experiment_refuses_missing_rho_reference(tmp_path, monkeypatch
                 "alpha_end": 0.98,
                 "reference": {"load_path": str(tmp_path / "missing_ref.pt")},
                 "data": {
-                    "tokens_s3": "s3://bucket/tokens",
+                    "dataset_id": "pretrain/regmix-10b",
                     "tokenizer": "allenai/dolma2-tokenizer",
                     "sequence_length": 8,
                 },
@@ -289,7 +292,7 @@ def test_manifest_rejects_np_save_shards(tmp_path):
         tokens,
         {"n_tokens": 16, "shards": [{"path": "tokens_0000.npy", "n_tokens": 16}]},
     )
-    with pytest.raises(ValueError, match="np.save"):
+    with pytest.raises(ValueError, match="claims 16 tokens but the file holds 48"):
         validate_token_manifest(tokens)
 
 
@@ -320,11 +323,14 @@ def test_manifest_requires_n_tokens_and_shards(tmp_path):
 
 
 def test_tokens_uri_placeholder_is_refused():
-    with pytest.raises(ValueError, match="placeholder"):
+    with pytest.raises(ValueError, match="placeholder|REPLACE_ME"):
         resolve_tokens_s3({"data": {"tokens_s3": "s3://REPLACE_ME/tokens"}})
-    assert resolve_tokens_s3({"data": {"tokens_s3": "s3://real-bucket/tokens/"}}) == (
-        "s3://real-bucket/tokens"
-    )
+    with pytest.raises(ValueError, match="edullm-datasets"):
+        resolve_tokens_s3(
+            {"data": {"tokens_s3": "s3://edullm-datasets/regmix/regmix-10b/tokenized"}}
+        )
+    with pytest.raises(ValueError, match="dataset_id"):
+        resolve_tokens_s3({"data": {}})
 
 
 def test_middle_ppl_token_arm_contract():
@@ -338,10 +344,13 @@ def test_middle_ppl_token_arm_contract():
     mid = load_config(arm_cfg)
 
     assert mid["methods"] == ["middle_ppl"]
-    assert mid["run_id"] == "middle-ppl-token-10b-v1"
+    assert mid["run_id"] == "middle-ppl-token-10b-v2"
     assert int(mid["t0_steps"]) == 0
     assert float(mid.get("t0_frac", 0.0)) == 0.0
     assert float(mid["k"]) == 0.6
+    ref = mid.get("reference") or {}
+    assert ref.get("steps") == [1000, 1125, 1315]
+    assert len(ref.get("s3_uris") or []) == 3
     assert int(mid["train"]["checkpoint_every_steps"]) == 125
     assert mid["train"].get("checkpoint_keep_last") is None
     assert mid["train"].get("ephemeral_checkpoint_every_steps") is None
@@ -356,9 +365,11 @@ def test_middle_ppl_token_arm_contract():
     )
     assert mid["s3"]["prefix"] == "token-sel/middle-ppl-token"
     assert mid["s3"]["checkpoint_bucket"] == "edullm-checkpoints"
-    assert mid["data"]["tokens_s3"].endswith("regmix/regmix-10b/tokenized") or (
-        mid["data"]["tokens_s3"].rstrip("/").endswith("regmix/regmix-10b/tokenized")
-    )
+    assert mid["data"]["dataset_id"] == "pretrain/regmix-10b"
+    assert "edullm-datasets" not in str(mid.get("data") or {})
+
+    validate_scratch_config(mid, method="middle_ppl")
+
 
     # Package configs must not still own a middle_ppl arm YAML.
     assert not (_CONFIGS / "run_middle_ppl_10b.yaml").exists()
@@ -431,7 +442,7 @@ def test_learnability_token_arm_contract():
     assert float(cfg.get("t0_frac", 1.0)) == 0.0
     assert float(cfg["k"]) == 0.6
     total, t0 = derive_steps(cfg)
-    assert total == 2384
+    assert total == 2360
     assert t0 == 0
     assert int(cfg["train"]["checkpoint_every_steps"]) == 125
     assert cfg["train"].get("checkpoint_keep_last") is None
@@ -451,5 +462,7 @@ def test_learnability_token_arm_contract():
     assert cfg["eval"]["task_loss"]["results_dir"] == "task_loss_results/learnability-token"
     assert cfg["s3"]["prefix"] == "token-sel/learnability-token"
     assert cfg["s3"]["checkpoint_bucket"] == "edullm-checkpoints"
-    assert cfg["data"]["tokens_s3"] == "s3://edullm-datasets/regmix/regmix-10b/tokenized"
+    assert cfg["data"]["dataset_id"] == "pretrain/regmix-10b"
+    assert "edullm-datasets" not in str(cfg.get("data") or {})
+    assert cfg["reference"].get("dataset") == "pretrain/refhq-regmix-5p5b"
 

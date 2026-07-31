@@ -12,6 +12,10 @@
 # Prerequisites: export early/late .pt (export_learnability_refs.py) and set
 # reference.early/late.load_path in the YAML (null until then; fail-closed).
 #
+# W&B (SmolLM2 protocol; additive to S3): project token-selection. Push
+# wandb-session.env via scripts/farmshare/push_wandb_session_to_farmshare.sh
+# "$RUN_DIR" (or set WANDB_SESSION_ENV). Local smoke: WANDB_MODE=disabled.
+#
 # Examples (from experiments/token-selection/):
 #   CUDA_VISIBLE_DEVICES=0 NPROC=1 bash learnability-token/launch.sh
 #   CUDA_VISIBLE_DEVICES=0,1 NPROC=2 bash learnability-token/launch.sh
@@ -56,6 +60,9 @@ if [[ "${RESUME:-0}" == "1" ]]; then
 fi
 
 echo "[learnability-token] nproc=${NPROC} config=${CONFIG} method=${METHOD}"
+_LEARNABILITY_TOKEN_RUN_NAME="${RUN_NAME:-learnability-token-10b-scratch-v1}"
+# shellcheck disable=SC1091
+source "${TS_ROOT}/token_selection/scripts/wandb_env.sh" "learnability-token" "${_LEARNABILITY_TOKEN_RUN_NAME}"
 cd "${TS_ROOT}"
 exec python -m torch.distributed.run --standalone --nproc_per_node="${NPROC}" \
   -m token_selection.scripts.train_olmo_template \

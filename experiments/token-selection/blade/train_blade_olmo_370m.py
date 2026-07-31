@@ -11,21 +11,38 @@ Architecture / train stack match RefHQ CE (``reference/train_olmo3_370m_refhq.py
 
 Locked BLADE schedule (do not change without a new ``run_id``):
 
-  * ``total_steps ≈ 2384`` (``10B // 4_194_304``)
+  * ``total_steps = 2360`` (``9900000000 // 4_194_304``; one-epoch matrix budget)
   * ``tau=375``, ``K=75``, ``gamma=0.6``, ``lambda_pen=1.0``
   * ``blade_start=500`` — steps 0..499 proxy-only full CE
-  * syncs at **exactly** 500, 875, 1250, 1625, 2000 then hold ref through 2384
+  * syncs at **exactly** 500, 875, 1250, 1625, 2000 then hold ref through end
   * selection score ``L_ref − L_proxy``, keep top-γ after blade_start
-  * train: RegMix 10B; val/HQ for K updates: RefHQ 5.5B
+  * train: ``pretrain/regmix-10b``; val/HQ for K updates: ``pretrain/refhq-regmix-5p5b``
+    (both from ``s3://edullm-data/`` via ``resolve_latest`` / ``dataset_paths``;
+    stage with ``prepare_blade_data.py`` into job scratch)
 
-Permanent checkpoints ``{0,125,…,2250,2384}`` (skip 2375) store **proxy (+optim)
-and dynamic reference** (post-K at sync steps; ``null`` before first sync).
-Resume loads both — **never** re-sync ``ref ← proxy`` mid-episode.
+Ephemeral-machine contract:
 
-On every permanent save, rank 0 triggers async ``task_loss_bpb`` eval on **proxy**
-weights (see ``token_selection.olmo_ext.task_loss_hook``).
+  * Scratch starts empty and may be wiped after the job — stage data each run.
+  * Do **not** assume FarmShare/laptop corpora, old run dirs, or local venvs/ckpts.
+  * Never read ``s3://edullm-datasets/``.
+  * Permanent artifacts (checkpoints, progress, task_loss JSON) write under
+    job-scoped ``--save-folder`` / ``--progress-dir`` and **fail-closed** export to
+    ``s3://edullm-checkpoints/token-sel/blade/`` (``S3_EXPORT=0`` = local smoke only).
 
-Launch via ``torchrun`` (1..N GPUs). Does **not** call AWS.
+Permanent checkpoints store **proxy (+optim) and dynamic reference** (post-K at sync
+steps; ``null`` before first sync). Resume loads both — **never** re-sync
+``ref ← proxy`` mid-episode. Cross-job resume: ``--fetch-checkpoints-from-s3``
+(optionally with ``--load-path stepN``) pulls durable ckpts into scratch first.
+
+On every permanent save, rank 0 may trigger async ``task_loss_bpb`` eval on **proxy**
+weights (``token_selection.olmo_ext.task_loss_hook``; needs eval script on PATH /
+``TASK_LOSS_EVAL_SCRIPT``, or disable with ``TASK_LOSS_EVAL=0``).
+
+Launch via ``torchrun`` (1..N GPUs) after ``prepare_blade_data.py`` stages shards.
+Durable S3 export after permanent saves is **fail-closed** (all ranks exit on
+failure). ``S3_EXPORT=0`` is the only intentional local-smoke opt-out.
+
+W&B: project ``token-selection``, group ``blade`` (SmolLM2-style soft-skip without API key).
 """
 from __future__ import annotations
 
@@ -38,30 +55,30 @@ import os
 import sys
 import time
 from contextlib import nullcontext
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional, Set, Tuple
-
-os.environ["WANDB_DISABLED"] = "1"
-os.environ["WANDB_MODE"] = "disabled"
-for _var in (
-    "WANDB_API_KEY",
-    "WANDB_ENTITY",
-    "WANDB_PROJECT",
-    "WANDB_NAME",
-    "WANDB_GROUP",
-    "WANDB_RUN_ID",
-    "WANDB_RESUME",
-    "WANDB_DIR",
-    "WANDB_CACHE_DIR",
-    "WANDB_ENABLE",
-):
-    os.environ.pop(_var, None)
 
 # Shared package lives next to this arm dir.
 _TS_ROOT = Path(__file__).resolve().parents[1]
 if str(_TS_ROOT) not in sys.path:
     sys.path.insert(0, str(_TS_ROOT))
+
+# SmolLM2-style W&B: do not hard-disable; soft-skip without API key.
+from token_selection.olmo_ext.wandb_logging import (  # noqa: E402
+    add_wandb_argparse_options,
+    apply_wandb_env_defaults,
+    ensure_wandb_not_hard_disabled,
+    finish_wandb,
+    init_wandb_from_args,
+    namespace_path_config,
+    wandb_log_checkpoint,
+    wandb_log_train,
+    wandb_upload_existing,
+    WandbEvalPoller,
+)
+
+ensure_wandb_not_hard_disabled()
 
 import numpy as np
 import torch
@@ -127,6 +144,7 @@ DEFAULT_TAU = 375
 DEFAULT_K = 75
 DEFAULT_GAMMA = 0.6
 DEFAULT_LAMBDA_PEN = 1.0
+DEFAULT_RUN_ID = "blade-regmix10b-v2"
 
 
 def next_blade_sync_step(after_completed: int) -> int:
@@ -153,12 +171,36 @@ class _Bookkeeping:
     global_train_tokens_seen: int = 0
     dp_process_group: Any = None
     device: torch.device = torch.device("cuda")
+    latest_metrics: Dict[str, float] = field(default_factory=dict)
 
     def record_metric(self, *args: Any, **kwargs: Any) -> None:
-        return None
+        name = kwargs.get("name")
+        value = kwargs.get("value")
+        if name is None and args:
+            name = args[0]
+        if value is None and len(args) >= 2:
+            value = args[1]
+        namespace = kwargs.get("namespace", "train")
+        if name is None or value is None:
+            return
+        try:
+            key = f"{namespace}/{name}" if namespace else str(name)
+            self.latest_metrics[key] = float(value.item() if hasattr(value, "item") else value)
+        except Exception:
+            return
 
     def record_ce_loss(self, *args: Any, **kwargs: Any) -> None:
-        return None
+        value = kwargs.get("value")
+        if value is None and args:
+            value = args[0]
+        if value is None:
+            return
+        try:
+            self.latest_metrics["train/ce_loss"] = float(
+                value.item() if hasattr(value, "item") else value
+            )
+        except Exception:
+            return
 
 
 # ---------------------------------------------------------------------------
@@ -167,15 +209,22 @@ class _Bookkeeping:
 
 
 class MemmapTokenDataset(Dataset):
-    """Contiguous SEQ_LEN chunks over one or more uint32 token memmaps."""
+    """Contiguous SEQ_LEN chunks over one or more packed token memmaps (``.u32le.bin``)."""
 
-    def __init__(self, paths: List[str], chunk_size: int = SEQ_LEN) -> None:
+    def __init__(
+        self,
+        paths: List[str],
+        chunk_size: int = SEQ_LEN,
+        *,
+        dtype: Any = np.uint32,
+    ) -> None:
         self.chunk_size = int(chunk_size)
+        np_dtype = np.dtype(dtype)
         self._mmaps: List[np.memmap] = []
         self._cum_chunks: List[int] = []
         total = 0
         for p in paths:
-            mm = np.memmap(p, mode="r", dtype=np.uint32)
+            mm = np.memmap(p, mode="r", dtype=np_dtype)
             n = (len(mm) - 1) // self.chunk_size
             if n <= 0:
                 continue
@@ -207,10 +256,25 @@ def collate_input_ids(batch: List[torch.Tensor]) -> Dict[str, torch.Tensor]:
     return {"input_ids": torch.stack(batch, dim=0)}
 
 
+LEGACY_DATA_BUCKET = "edullm-datasets"
+
+
 def read_paths(path: Path) -> List[str]:
     paths = [ln.strip() for ln in path.read_text().splitlines() if ln.strip()]
     if not paths:
         raise SystemExit(f"No paths in {path}")
+    for p in paths:
+        norm = p.replace("\\", "/")
+        if LEGACY_DATA_BUCKET in norm:
+            raise SystemExit(
+                f"Refusing legacy edullm-datasets path in {path}: {p}\n"
+                "Stage from s3://edullm-data via prepare_blade_data.py instead."
+            )
+        if norm.startswith("s3://"):
+            raise SystemExit(
+                f"Trainer expects local memmap paths (got {p!r}). "
+                "Run prepare_blade_data.py to stage shards into job scratch."
+            )
     return paths
 
 
@@ -744,6 +808,31 @@ def gather_reference_state_dict(reference: Optional[nn.Module]) -> Optional[dict
     return {"model": _plainify_state_tree(reference.state_dict())}
 
 
+ARM = "blade"
+
+
+def _broadcast_export_ok(export_ok: bool) -> bool:
+    """Share rank-0 export success with every rank; return the consensus value."""
+    if not is_distributed() or get_world_size() <= 1:
+        return export_ok
+    flag = torch.tensor(
+        [1 if export_ok else 0],
+        device=torch.device("cuda" if torch.cuda.is_available() else "cpu"),
+    )
+    dist.broadcast(flag, src=0)
+    return bool(flag.item())
+
+
+def _fail_closed_export(path: Path, export_ok: bool, *, what: str) -> None:
+    export_ok = _broadcast_export_ok(export_ok)
+    if not export_ok:
+        raise SystemExit(
+            f"Durable S3 export failed for {what} ({path}). "
+            "Fix AWS credentials / aws CLI on the train host, then retry. "
+            "Set S3_EXPORT=0 only for intentional non-durable local smoke runs."
+        )
+
+
 def save_checkpoint(
     path: Path,
     step: int,
@@ -754,44 +843,71 @@ def save_checkpoint(
     *,
     task_loss_dir: Optional[Path] = None,
     task_loss_enabled: bool = True,
+    progress_dir: Optional[Path] = None,
 ) -> None:
-    """All ranks enter (HSDP gather). Rank 0 writes proxy+ref ``state.pt`` and may spawn eval."""
+    """All ranks enter (HSDP gather). Rank 0 writes; durable S3 export is fail-closed."""
     train_module_sd = gather_train_module_state_dict(train_module)
     ref_sd = gather_reference_state_dict(reference)
-    if get_rank() != 0:
-        return
-    path.mkdir(parents=True, exist_ok=True)
-    state = {
-        "step": step,
-        "train_module": train_module_sd,
-        "reference": ref_sd,
-        "args": vars(args),
-        "meta": meta,
-        "architecture": "olmo_core.TransformerConfig.olmo2_370M",
-        "train_stack": "TransformerTrainModule/HSDP/SkipStepAdamW (RefHQ-matched)",
-        "method": "BLADE",
-        "blade_sync_steps": list(BLADE_SYNC_STEPS),
-        "blade_start": BLADE_START,
-        "selection_score": "L_ref - L_proxy",
-        "checkpoint_format": CHECKPOINT_FORMAT,
-        "has_reference": ref_sd is not None,
-    }
-    tmp = path / "state.pt.tmp"
-    torch.save(state, tmp)
-    tmp.replace(path / "state.pt")
-    (path / "step.txt").write_text(str(step) + "\n")
-    n_model = len(train_module_sd.get("model") or {})
-    log.info(
-        "Saved BLADE checkpoint → %s (step=%s, proxy_tensors=%d, has_ref=%s, has_optim=%s)",
-        path,
-        step,
-        n_model,
-        ref_sd is not None,
-        train_module_sd.get("optim") is not None,
-    )
-    if task_loss_enabled and task_loss_dir is not None:
+    export_ok = True
+    if get_rank() == 0:
+        path.mkdir(parents=True, exist_ok=True)
+        state = {
+            "step": step,
+            "train_module": train_module_sd,
+            "reference": ref_sd,
+            "args": vars(args),
+            "meta": meta,
+            "architecture": "olmo_core.TransformerConfig.olmo2_370M",
+            "train_stack": "TransformerTrainModule/HSDP/SkipStepAdamW (RefHQ-matched)",
+            "method": "BLADE",
+            "blade_sync_steps": list(BLADE_SYNC_STEPS),
+            "blade_start": BLADE_START,
+            "selection_score": "L_ref - L_proxy",
+            "checkpoint_format": CHECKPOINT_FORMAT,
+            "has_reference": ref_sd is not None,
+        }
+        tmp = path / "state.pt.tmp"
+        torch.save(state, tmp)
+        tmp.replace(path / "state.pt")
+        (path / "step.txt").write_text(str(step) + "\n")
+        n_model = len(train_module_sd.get("model") or {})
+        log.info(
+            "Saved BLADE checkpoint → %s (step=%s, proxy_tensors=%d, has_ref=%s, has_optim=%s)",
+            path,
+            step,
+            n_model,
+            ref_sd is not None,
+            train_module_sd.get("optim") is not None,
+        )
+        from token_selection.olmo_ext.s3_export import (
+            export_arm_checkpoint,
+            export_arm_task_loss_dir,
+            s3_export_enabled,
+            sync_to_s3,
+        )
+        from token_selection.olmo_ext.s3_layout import arm_uri
+
+        if not s3_export_enabled():
+            log.warning(
+                "S3 export disabled (S3_EXPORT=0 / SKIP_S3_UPLOAD=1); checkpoint is local-only "
+                "and will be lost when ephemeral scratch is wiped"
+            )
+        else:
+            export_ok = bool(export_arm_checkpoint(ARM, path))
+            if export_ok and task_loss_dir is not None:
+                export_ok = bool(export_arm_task_loss_dir(ARM, task_loss_dir))
+            if export_ok and progress_dir is not None:
+                export_ok = bool(sync_to_s3(progress_dir, arm_uri(ARM, "progress")))
+        wb_run = getattr(args, "_wandb_run", None)
+        if wb_run is not None:
+            tokens_seen = int(step) * int(GLOBAL_BATCH_TOKENS)
+            wandb_log_checkpoint(wb_run, path, step=int(step), tokens_seen=tokens_seen)
+
+    _fail_closed_export(path, export_ok, what=f"checkpoint step{step}")
+
+    # Eval only after durable export succeeds (rank 0).
+    if get_rank() == 0 and task_loss_enabled and task_loss_dir is not None:
         out = task_loss_dir / f"step{step}_task_loss.json"
-        # enabled=None → honor TASK_LOSS_EVAL env (0/false/off disables).
         trigger_task_loss_eval(
             path,
             run_name=str(args.name),
@@ -800,17 +916,75 @@ def save_checkpoint(
             async_=True,
             enabled=None,
         )
-    try:
-        from token_selection.olmo_ext.s3_export import (
-            export_arm_checkpoint,
-            export_arm_task_loss_dir,
-        )
 
-        export_arm_checkpoint("blade", path)
-        if task_loss_dir is not None:
-            export_arm_task_loss_dir("blade", task_loss_dir)
-    except Exception as exc:  # noqa: BLE001 — never kill training
-        log.warning("S3 export after checkpoint failed: %s", exc)
+
+def final_durable_export(
+    *,
+    save_folder: Path,
+    progress_dir: Path,
+    task_loss_dir: Optional[Path],
+) -> None:
+    """Fail-closed end-of-run sync of checkpoints + progress + task_loss (all ranks)."""
+    from token_selection.olmo_ext.s3_export import (
+        export_arm_task_loss_dir,
+        s3_export_enabled,
+        sync_to_s3,
+    )
+    from token_selection.olmo_ext.s3_layout import arm_uri
+
+    export_ok = True
+    if get_rank() == 0:
+        if not s3_export_enabled():
+            log.warning(
+                "S3_EXPORT disabled at end of run; local save_folder/progress are not durable"
+            )
+        else:
+            ckpt_ok = sync_to_s3(save_folder, arm_uri(ARM, "checkpoints"))
+            prog_ok = sync_to_s3(progress_dir, arm_uri(ARM, "progress"))
+            tl_ok = True
+            if task_loss_dir is not None:
+                tl_ok = bool(export_arm_task_loss_dir(ARM, task_loss_dir))
+            export_ok = bool(ckpt_ok and prog_ok and tl_ok)
+            if export_ok:
+                log.info("Final durable export → %s", arm_uri(ARM))
+    _fail_closed_export(save_folder, export_ok, what="final checkpoints/progress/task_loss")
+
+
+def maybe_fetch_checkpoints_from_s3(
+    save_folder: Path,
+    *,
+    load_path: Optional[str],
+) -> None:
+    """Pull durable checkpoints into job scratch (rank 0). Raises on failure."""
+    from token_selection.olmo_ext.s3_export import (
+        fetch_arm_method_checkpoints,
+        sync_from_s3,
+    )
+    from token_selection.olmo_ext.s3_layout import arm_uri
+
+    if load_path:
+        dest = Path(load_path)
+        if (dest / "state.pt").is_file():
+            log.info("load-path already local: %s (skip S3 fetch)", dest)
+            return
+        remote = arm_uri(ARM, "checkpoints", dest.name)
+        log.info("Fetching resume checkpoint %s → %s", remote, dest)
+        sync_from_s3(remote, dest, raise_on_error=True)
+        if not (dest / "state.pt").is_file():
+            raise RuntimeError(f"{remote}/ has no state.pt after sync")
+        return
+
+    if find_latest_checkpoint(save_folder) is not None:
+        log.info("Local checkpoints already under %s (skip S3 fetch)", save_folder)
+        return
+    remote = arm_uri(ARM, "checkpoints")
+    log.info("Fetching arm checkpoints %s → %s", remote, save_folder)
+    fetch_arm_method_checkpoints(ARM, save_folder, raise_on_error=True)
+    if find_latest_checkpoint(save_folder) is None:
+        raise RuntimeError(
+            f"no step*/state.pt under {save_folder} after syncing {remote}/; "
+            "start with --fresh, or pass --load-path for a known step"
+        )
 
 
 def load_checkpoint(
@@ -935,11 +1109,30 @@ def find_latest_checkpoint(save_folder: Path) -> Optional[Path]:
 def parse_args() -> argparse.Namespace:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--name", required=True, help="Run id (e.g. blade-regmix10b-v2)")
-    ap.add_argument("--train-paths-file", required=True)
-    ap.add_argument("--ref-paths-file", required=True)
+    ap.add_argument(
+        "--train-paths-file",
+        required=True,
+        help="Local memmap path list from prepare_blade_data.py (edullm-data staged shards)",
+    )
+    ap.add_argument(
+        "--ref-paths-file",
+        required=True,
+        help="Local RefHQ memmap path list from prepare_blade_data.py",
+    )
     ap.add_argument("--save-folder", required=True)
     ap.add_argument("--progress-dir", required=True)
-    ap.add_argument("--length-tokens", type=int, required=True)
+    ap.add_argument(
+        "--length-tokens",
+        type=int,
+        required=True,
+        help="Proxy train token budget (default via prepare: 9900000000 -> 2360 steps)",
+    )
+    ap.add_argument(
+        "--token-dtype",
+        type=str,
+        default="uint32",
+        help="Numpy dtype for staged .u32le.bin shards (from dataset_paths dtype)",
+    )
     ap.add_argument(
         "--device-batch-size",
         type=int,
@@ -960,7 +1153,19 @@ def parse_args() -> argparse.Namespace:
     )
     ap.add_argument("--num-workers", type=int, default=4)
     ap.add_argument("--seed", type=int, default=6198, help="Init / data seed (RefHQ-aligned default)")
-    ap.add_argument("--load-path", type=str, default=None)
+    ap.add_argument(
+        "--load-path",
+        type=str,
+        default=None,
+        help="Checkpoint dir to resume (local, or pulled via --fetch-checkpoints-from-s3)",
+    )
+    ap.add_argument(
+        "--fetch-checkpoints-from-s3",
+        action="store_true",
+        help="Before resume, sync durable checkpoints from "
+        "s3://edullm-checkpoints/token-sel/blade/checkpoints/ into --save-folder "
+        "(or --load-path step dir). Required for cross-job resume on wiped scratch.",
+    )
     ap.add_argument("--fresh", action="store_true")
     ap.add_argument("--compile", dest="compile", action="store_true", default=True)
     ap.add_argument("--no-compile", dest="compile", action="store_false")
@@ -977,13 +1182,15 @@ def parse_args() -> argparse.Namespace:
         "--task-loss-dir",
         type=str,
         default=None,
-        help="Directory for step{N}_task_loss.json (default: ../task_loss_results/blade)",
+        help="Directory for step{N}_task_loss.json "
+        "(default: <progress-dir>/task_loss_results — job-scoped scratch)",
     )
     ap.add_argument(
         "--task-loss-eval-script",
         type=str,
         default=None,
-        help="Path to eval_task_loss_olmo_core.py (optional; auto-resolved from repo)",
+        help="Path to eval_task_loss_olmo_core.py (optional; or set TASK_LOSS_EVAL_SCRIPT). "
+        "Missing script skips eval without failing training.",
     )
     ap.add_argument(
         "--no-task-loss-eval",
@@ -991,6 +1198,7 @@ def parse_args() -> argparse.Namespace:
         help="Do not spawn task_loss eval on permanent checkpoints "
         "(also gated by TASK_LOSS_EVAL=0 when eval is otherwise enabled)",
     )
+    add_wandb_argparse_options(ap, default_run_name=DEFAULT_RUN_ID)
     return ap.parse_args()
 
 
@@ -1074,7 +1282,8 @@ def _run(args: argparse.Namespace) -> None:
     if args.task_loss_dir:
         task_loss_dir = Path(args.task_loss_dir)
     else:
-        task_loss_dir = _TS_ROOT / "task_loss_results" / "blade"
+        # Job-scoped under progress (not repo-tree); uploaded with progress via S3 export.
+        task_loss_dir = progress_dir / "task_loss_results"
     task_loss_enabled = not bool(args.no_task_loss_eval)
 
     if rank == 0:
@@ -1082,6 +1291,35 @@ def _run(args: argparse.Namespace) -> None:
         save_folder.mkdir(parents=True, exist_ok=True)
         if task_loss_enabled:
             task_loss_dir.mkdir(parents=True, exist_ok=True)
+
+    apply_wandb_env_defaults(project="token-selection", run_name=args.name, group=ARM)
+    ensure_wandb_not_hard_disabled()
+    wb_run = None
+    eval_poller: Optional[WandbEvalPoller] = None
+    if rank == 0:
+        wb_run = init_wandb_from_args(
+            args,
+            run_name=args.name,
+            config=namespace_path_config(args),
+            group=ARM,
+            tags=(ARM, "blade"),
+            dir=progress_dir / "wandb",
+            id_path=progress_dir / "wandb_run_id.txt",
+            is_main=True,
+            alert_title=f"token-selection {ARM} started",
+        )
+        args._wandb_run = wb_run
+        eval_poller = WandbEvalPoller(str(task_loss_dir), wb_run)
+        if wb_run is not None and bool(getattr(args, "wandb_upload_existing", False)):
+            wandb_upload_existing(
+                wb_run,
+                checkpoint_dir=save_folder,
+                task_loss_dir=str(task_loss_dir),
+                progress_dir=progress_dir,
+                tokens_per_step=GLOBAL_BATCH_TOKENS,
+            )
+    else:
+        args._wandb_run = None
 
     meta = {
         "architecture": "olmo_core.TransformerConfig.olmo2_370M",
@@ -1119,11 +1357,16 @@ def _run(args: argparse.Namespace) -> None:
         "compile": bool(args.compile),
         "attn_backend": str(resolve_attn_backend()),
         "s3_prefix": "token-sel/blade",
-        "train_dataset": "s3://edullm-datasets/regmix/regmix-10b/",
-        "ref_dataset": "s3://edullm-datasets/refhq/refhq-regmix-5p5b-v1/",
+        "s3_export_uri": "s3://edullm-checkpoints/token-sel/blade/",
+        "train_dataset": "pretrain/regmix-10b",
+        "ref_dataset": "pretrain/refhq-regmix-5p5b",
+        "train_dataset_uri": "s3://edullm-data/pretrain/regmix-10b/",
+        "ref_dataset_uri": "s3://edullm-data/pretrain/refhq-regmix-5p5b/",
+        "token_dtype": str(args.token_dtype),
         "seed": args.seed,
         "task_loss_dir": str(task_loss_dir),
         "task_loss_on_save": task_loss_enabled,
+        "ephemeral_scratch": True,
     }
     if rank == 0:
         (progress_dir / "run_meta.json").write_text(json.dumps(meta, indent=2) + "\n")
@@ -1146,9 +1389,12 @@ def _run(args: argparse.Namespace) -> None:
                     f"ref_mbs_seqs={ref_mbs}  seqs_per_rank={seqs_per_rank}",
                     f"lr={lr}  cos_warmup={args.lr_warmup_steps}  alpha_f={args.lr_alpha_f}",
                     f"compile={args.compile}",
-                    "train=s3://edullm-datasets/regmix/regmix-10b/",
-                    "refhq=s3://edullm-datasets/refhq/refhq-regmix-5p5b-v1/",
+                    "train=pretrain/regmix-10b (s3://edullm-data/)",
+                    "refhq=pretrain/refhq-regmix-5p5b (s3://edullm-data/)",
+                    f"token_dtype={args.token_dtype}",
                     f"task_loss_dir={task_loss_dir}",
+                    "s3_export=s3://edullm-checkpoints/token-sel/blade/  # fail-closed",
+                    "ephemeral_scratch=True  # stage each job; S3_EXPORT=0 = local smoke only",
                     "",
                 ]
             )
@@ -1168,8 +1414,9 @@ def _run(args: argparse.Namespace) -> None:
 
     train_paths = read_paths(Path(args.train_paths_file))
     ref_paths = read_paths(Path(args.ref_paths_file))
-    train_ds = MemmapTokenDataset(train_paths, SEQ_LEN)
-    ref_ds = MemmapTokenDataset(ref_paths, SEQ_LEN)
+    token_dtype = np.dtype(str(args.token_dtype))
+    train_ds = MemmapTokenDataset(train_paths, SEQ_LEN, dtype=token_dtype)
+    ref_ds = MemmapTokenDataset(ref_paths, SEQ_LEN, dtype=token_dtype)
     workers = args.num_workers if world_size == 1 else max(1, args.num_workers // world_size)
     train_stream = InfiniteBatchStream(
         train_ds, mbs, workers, args.seed, rank=rank, world_size=world_size
@@ -1203,9 +1450,46 @@ def _run(args: argparse.Namespace) -> None:
     start_step = 0
     if args.fresh:
         if rank == 0:
-            log.info("--fresh: starting from scratch")
+            log.info("--fresh: starting from scratch (ignoring local / S3 checkpoints)")
     else:
-        load_dir = Path(args.load_path) if args.load_path else find_latest_checkpoint(save_folder)
+        if args.fetch_checkpoints_from_s3:
+            fetch_ok = True
+            if rank == 0:
+                try:
+                    maybe_fetch_checkpoints_from_s3(
+                        save_folder, load_path=args.load_path
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    fetch_ok = False
+                    log.error("--fetch-checkpoints-from-s3 failed: %s", exc)
+            if not _broadcast_export_ok(fetch_ok):
+                raise SystemExit(
+                    "--fetch-checkpoints-from-s3 failed. "
+                    "Fix AWS credentials / aws CLI, confirm the step exists under "
+                    "s3://edullm-checkpoints/token-sel/blade/checkpoints/, "
+                    "or start with --fresh."
+                )
+            if is_distributed():
+                dist.barrier()
+        load_dir: Optional[Path] = None
+        if args.load_path:
+            load_dir = Path(args.load_path)
+            if not (load_dir / "state.pt").is_file():
+                raise SystemExit(
+                    f"--load-path {load_dir} has no state.pt. "
+                    "Pass --fetch-checkpoints-from-s3 to pull from "
+                    "s3://edullm-checkpoints/token-sel/blade/checkpoints/, "
+                    "or stage the step dir onto this ephemeral machine first."
+                )
+        else:
+            load_dir = find_latest_checkpoint(save_folder)
+            if load_dir is None and rank == 0:
+                log.info(
+                    "No local checkpoint under %s; starting at step 0. "
+                    "For cross-job resume use --fetch-checkpoints-from-s3 "
+                    "(and optionally --load-path stepN).",
+                    save_folder,
+                )
         if load_dir is not None:
             start_step, reference, ref_opt = load_checkpoint(
                 load_dir, train_module, fused_ref=fused_ref
@@ -1237,6 +1521,7 @@ def _run(args: argparse.Namespace) -> None:
             meta,
             task_loss_dir=task_loss_dir,
             task_loss_enabled=task_loss_enabled,
+            progress_dir=progress_dir,
         )
         if is_distributed():
             dist.barrier()
@@ -1378,6 +1663,23 @@ def _run(args: argparse.Namespace) -> None:
                     )
                     + "\n"
                 )
+                train_loss = books.latest_metrics.get("train/ce_loss") or books.latest_metrics.get(
+                    "train/loss"
+                )
+                wandb_log_train(
+                    wb_run,
+                    step=global_step,
+                    train_loss=train_loss,
+                    tokens_seen=global_step * tokens_per_step,
+                    tok_per_s=tok_s,
+                    tok_per_s_avg=tok_s_avg,
+                    extra={
+                        **{k: v for k, v in books.latest_metrics.items() if k.startswith("train/")},
+                        "train/select_frac": select_frac,
+                    },
+                )
+                if eval_poller is not None:
+                    eval_poller.poll()
 
         if global_step in ladder_set:
             if is_distributed():
@@ -1392,12 +1694,24 @@ def _run(args: argparse.Namespace) -> None:
                 meta,
                 task_loss_dir=task_loss_dir,
                 task_loss_enabled=task_loss_enabled,
+                progress_dir=progress_dir,
             )
+            if rank == 0 and eval_poller is not None:
+                eval_poller.poll()
             if is_distributed():
                 dist.barrier()
 
     if rank == 0:
+        if eval_poller is not None:
+            eval_poller.poll()
         log.info("Training complete at step=%d world_size=%d", total_steps, world_size)
+    final_durable_export(
+        save_folder=save_folder,
+        progress_dir=progress_dir,
+        task_loss_dir=task_loss_dir if task_loss_enabled else None,
+    )
+    if rank == 0:
+        finish_wandb(wb_run)
 
 
 if __name__ == "__main__":

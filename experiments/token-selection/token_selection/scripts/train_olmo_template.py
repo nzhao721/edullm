@@ -5,6 +5,14 @@
 Requires edu-llm/OLMo-core installed. Builds trainer configs from the experiment
 YAML and documents the torchrun launch. ``--launch`` fails closed if the requested
 frozen-order controls cannot be represented by the pinned public APIs.
+
+Ephemeral empty-scratch contract:
+
+* Stage train shards from published ``s3://edullm-data/`` (never ``edullm-datasets``).
+* Do not assume FarmShare/laptop corpora, local venvs, or prior save folders.
+* Durable artifacts (permanent step dirs, ``run_fingerprint.json``, metrics,
+  task_loss JSON) export to ``s3://edullm-checkpoints/token-sel/<arm>/``.
+* ``--resume`` hydrates an empty save folder from that durable prefix first.
 """
 
 from __future__ import annotations
@@ -34,7 +42,12 @@ from token_selection.scripts import (
     load_config,
     resolve_output_dir,
     resolve_tokens_s3,
+    resolve_train_dataset,
     s3_uri,
+)
+from token_selection.scripts.edullm_data_tokens import (
+    ensure_order_contract,
+    ensure_train_tokens,
 )
 from token_selection.scripts.experiment_contract import (
     manifest_train_paths,
@@ -248,6 +261,29 @@ def _token_paths(tokens_dir: Path, *, expected_tokenizer: str) -> List[str]:
         raise SystemExit(str(exc)) from exc
 
 
+def prepare_train_data(cfg: Dict[str, Any], out: Path, *, stage: bool = True) -> Dict[str, Any]:
+    """Resolve + optionally stage edullm-data train shards; ensure order contract.
+
+    Never assumes FarmShare scratch / laptop-local tokens already exist. When
+    ``stage`` is true (default on ``--launch``), fetches from validated
+    ``s3://edullm-data/`` via ``ensure_train_tokens``. Plan-only mode still
+    resolves the published corpus so configs cannot silently point at legacy
+    ``edullm-datasets`` URIs.
+    """
+    try:
+        remote = resolve_train_dataset(cfg)
+    except Exception as exc:
+        raise SystemExit(f"train corpus resolution failed: {exc}") from exc
+    tokens_dir = out / "tokens"
+    if stage:
+        try:
+            ensure_train_tokens(cfg, tokens_dir)
+            ensure_order_contract(cfg, out)
+        except Exception as exc:
+            raise SystemExit(f"train data staging failed: {exc}") from exc
+    return remote
+
+
 def build_plan(
     cfg: Dict[str, Any],
     *,
@@ -261,6 +297,12 @@ def build_plan(
     tokenizer = str((cfg.get("data") or {}).get("tokenizer") or "")
     if not tokenizer:
         raise SystemExit("data.tokenizer is required; it fixes the model's vocabulary size")
+    if not (tokens_dir / "manifest.json").exists():
+        raise SystemExit(
+            f"Missing {tokens_dir / 'manifest.json'}. On a clean machine run with "
+            "--launch (auto-stages from data.dataset_id via edullm_data.read) or call "
+            "token_selection.scripts.edullm_data_tokens.ensure_train_tokens first."
+        )
     paths = _token_paths(tokens_dir, expected_tokenizer=tokenizer)
     try:
         token_budget = validate_token_budget(
@@ -270,7 +312,10 @@ def build_plan(
         raise SystemExit(str(exc)) from exc
     order_manifest_path = order_dir / "manifest.json"
     if not order_manifest_path.exists():
-        raise SystemExit(f"Missing order contract {order_manifest_path}; run freeze_order first")
+        raise SystemExit(
+            f"Missing order contract {order_manifest_path}. Re-run with --launch "
+            "(auto-builds from the staged edullm-data corpus) or freeze_order.py."
+        )
     order_manifest = json.loads(order_manifest_path.read_text(encoding="utf-8"))
     try:
         validate_order_contract(
@@ -298,8 +343,8 @@ def build_plan(
     ema_seed_mode = str(
         ema_block.get("seed_mode") or cfg.get("ema_seed_mode") or "zero"
     ).lower()
-    # RHO freezes RefHQ; RefHQ-seeded REL loads the same exported model.pt into EMA only.
-    needs_reference = method == "rho_excess" or (
+    # RHO / middle_ppl freeze RefHQ; RefHQ-seeded REL loads the same exported model.pt into EMA only.
+    needs_reference = method in ("rho_excess", "middle_ppl") or (
         method == "rel_ema" and ema_seed_mode == "refhq"
     )
 
@@ -344,6 +389,7 @@ def build_plan(
         "dataset_cache": str(out / "dataset_cache" / method),
         "metrics_dir": str(out / "metrics" / method),
         "s3_tokens": resolve_tokens_s3(cfg),
+        "dataset_id": str((cfg.get("data") or {}).get("dataset_id") or ""),
         "s3_checkpoints": s3_uri(
             cfg, "checkpoints", method, bucket_key="checkpoint_bucket"
         ),
@@ -357,8 +403,12 @@ def build_plan(
         "num_gpus": int((cfg.get("train") or {}).get("num_gpus") or 0) or None,
         "notes": [
             "TokenSelectTrainModule with NumpyDataLoaderConfig seed + order contract.",
-            "Tokens come from data.tokens_s3; order is produced locally by freeze_order.",
+            "Tokens resolve from data.dataset_id via edullm_data.read (s3://edullm-data/); "
+            "--launch stages them onto the run dir on a clean machine.",
             "Scratch initialization never resumes an existing save folder or loads optimizer/trainer state.",
+            "Durable saves: permanent step dirs + run_fingerprint.json + metrics export to "
+            "s3://edullm-checkpoints/token-sel/<arm>/ (do not rely on scratch persistence).",
+            "--resume fetches those durable artifacts when the local save folder is empty.",
             "Launch pins train.cuda_visible_devices (single index or comma list) and refuses busy devices.",
             "Global batch size is world-size invariant; set nproc_per_node to match the pin length.",
         ],
@@ -502,6 +552,136 @@ def _fingerprint_path(plan: Dict[str, Any]) -> Path:
     return Path(plan["save_folder"]) / "run_fingerprint.json"
 
 
+def _resolve_arm_name(cfg: Mapping[str, Any]) -> str:
+    """Return the arm directory name used under ``token-sel/<arm>/`` on S3."""
+    arm = str(cfg.get("arm") or "").strip()
+    if arm:
+        return arm
+    from token_selection.olmo_ext.s3_layout import arm_from_prefix
+
+    prefix = str((cfg.get("s3") or {}).get("prefix") or "").strip()
+    if not prefix:
+        raise SystemExit(
+            "cfg.arm or s3.prefix (token-sel/<arm>) is required for durable "
+            "checkpoint export / ephemeral resume fetch"
+        )
+    return arm_from_prefix(prefix)
+
+
+def _ensure_resume_artifacts(
+    plan: Dict[str, Any],
+    cfg: Mapping[str, Any],
+    method: MethodName,
+) -> None:
+    """Fetch durable checkpoints (+ metrics) from S3 when local save_folder is empty.
+
+    Ephemeral FarmShare/AWS scratch does not retain a prior job's tokens, order,
+    checkpoints, or venvs. ``--resume`` must not assume a local save folder; it
+    pulls ``run_fingerprint.json`` and step dirs from ``edullm-checkpoints``.
+    """
+    from token_selection.olmo_ext.s3_export import (
+        fetch_arm_method_checkpoints,
+        fetch_arm_method_metrics,
+    )
+
+    save_folder = Path(plan["save_folder"])
+    fingerprint_path = _fingerprint_path(plan)
+    if fingerprint_path.is_file():
+        return
+
+    arm = _resolve_arm_name(cfg)
+    remote = s3_uri(cfg, "checkpoints", method, bucket_key="checkpoint_bucket")
+    print(
+        json.dumps(
+            {
+                "event": "resume_fetch_checkpoints",
+                "arm": arm,
+                "method": method,
+                "remote": remote,
+                "local": str(save_folder),
+            },
+            indent=2,
+        ),
+        flush=True,
+    )
+    try:
+        fetch_arm_method_checkpoints(
+            arm, save_folder, method=method, raise_on_error=True
+        )
+    except Exception as exc:  # noqa: BLE001
+        raise SystemExit(
+            f"--resume: failed to fetch durable checkpoints from {remote}/: {exc}"
+        ) from exc
+
+    if not fingerprint_path.is_file():
+        raise SystemExit(
+            f"--resume set but no run_fingerprint.json under {save_folder} after "
+            f"syncing {remote}/. Ephemeral scratch does not persist checkpoints; "
+            "keep S3_EXPORT enabled during training so fingerprints + step dirs "
+            "land under s3://edullm-checkpoints/token-sel/<arm>/checkpoints/, "
+            "then resume on a clean machine. Launch without --resume to start fresh."
+        )
+
+    metrics_dir = Path(plan["metrics_dir"])
+    fetch_arm_method_metrics(arm, metrics_dir, method=method)
+
+
+def _export_durable_run_state(
+    plan: Dict[str, Any],
+    cfg: Mapping[str, Any],
+    method: MethodName,
+) -> None:
+    """Push fingerprint / metrics / method checkpoints to S3 (upload-before-end).
+
+    Mid-run permanent steps also export via ``TaskLossEvalCallback`` (even when
+    task-loss eval is disabled). This path covers pre-fit fingerprint + post-fit
+    catch-up so ephemeral scratch wipe cannot erase the only copy.
+    """
+    from token_selection.olmo_ext.s3_export import (
+        export_arm_metrics_dir,
+        export_arm_run_fingerprint,
+        s3_export_enabled,
+        sync_to_s3,
+    )
+    from token_selection.olmo_ext.s3_layout import arm_uri
+
+    try:
+        arm = _resolve_arm_name(cfg)
+    except SystemExit:
+        return
+    if not s3_export_enabled():
+        print(
+            json.dumps(
+                {
+                    "event": "s3_export_disabled",
+                    "warning": (
+                        "S3_EXPORT=0 / SKIP_S3_UPLOAD=1 — checkpoints stay local-only "
+                        "and will be lost when ephemeral scratch is wiped"
+                    ),
+                },
+                indent=2,
+            ),
+            flush=True,
+        )
+        return
+    ok = True
+    fp = _fingerprint_path(plan)
+    if fp.is_file():
+        ok = bool(export_arm_run_fingerprint(arm, fp, method=method)) and ok
+    metrics_dir = Path(plan["metrics_dir"])
+    if metrics_dir.exists() and any(metrics_dir.iterdir()):
+        ok = bool(export_arm_metrics_dir(arm, metrics_dir, method=method)) and ok
+    save_folder = Path(plan["save_folder"])
+    if save_folder.exists() and any(save_folder.iterdir()):
+        ok = bool(sync_to_s3(save_folder, arm_uri(arm, "checkpoints", str(method)))) and ok
+    if not ok:
+        raise SystemExit(
+            "Durable S3 export failed for fingerprint/metrics/checkpoints under "
+            f"token-sel/{arm}/. Fix AWS credentials / aws CLI on the train host, then retry. "
+            "Set S3_EXPORT=0 only for intentional non-durable local smoke runs."
+        )
+
+
 def _prepare_run_dir(plan: Dict[str, Any], *, resume: bool) -> None:
     """Enforce fresh-scratch on first launch, or a fingerprint match on resume.
 
@@ -509,6 +689,9 @@ def _prepare_run_dir(plan: Dict[str, Any], *, resume: bool) -> None:
     (``_commit_run_fingerprint``) after the trainer builds successfully, so a build
     that dies (e.g. an OLMo-core API/env error) cannot strand a lone fingerprint that
     would then block a clean relaunch.
+
+    Callers that pass ``resume=True`` must run ``_ensure_resume_artifacts`` first so
+    ephemeral hosts can hydrate the save folder from ``edullm-checkpoints``.
     """
     save_folder = Path(plan["save_folder"])
     fingerprint_path = _fingerprint_path(plan)
@@ -517,7 +700,9 @@ def _prepare_run_dir(plan: Dict[str, Any], *, resume: bool) -> None:
         if not fingerprint_path.exists():
             raise SystemExit(
                 f"--resume set but no run_fingerprint.json under {save_folder}; there is "
-                "nothing to resume. Launch without --resume to start the run."
+                "nothing to resume. On ephemeral scratch, durable checkpoints must exist "
+                "under s3://edullm-checkpoints/ (fetched before this check). "
+                "Launch without --resume to start the run."
             )
         prior = json.loads(fingerprint_path.read_text(encoding="utf-8"))
         if _fingerprints_compatible(prior, current):
@@ -856,6 +1041,73 @@ def build_trainer(plan: Dict[str, Any], cfg: Dict[str, Any], method: MethodName,
             ),
         )
 
+        # W&B: train scalars via olmo_core WandBCallback; ckpt/eval artifacts via side channel.
+        # Soft-skip without WANDB_API_KEY (SmolLM2); never weakens S3 fail-closed export.
+        from token_selection.olmo_ext.wandb_logging import (
+            apply_wandb_env_defaults,
+            ensure_wandb_not_hard_disabled,
+            make_wandb_artifacts_callback,
+            wandb_callback_kwargs_from_env,
+            wandb_enabled,
+        )
+
+        arm_name = str(cfg.get("arm") or plan.get("arm") or method)
+        apply_wandb_env_defaults(
+            project="token-selection",
+            run_name=str(plan["run_id"]),
+            group=arm_name,
+        )
+        ensure_wandb_not_hard_disabled()
+        wb_cfg = (cfg.get("wandb") or {}) if isinstance(cfg.get("wandb"), dict) else {}
+        wb_enabled = wandb_enabled(is_main=True)
+        if "enabled" in wb_cfg:
+            wb_enabled = bool(wb_cfg["enabled"]) and wb_enabled
+        try:
+            from olmo_core.train.callbacks import WandBCallback  # type: ignore
+
+            wb_kwargs = wandb_callback_kwargs_from_env(
+                run_name=str(plan["run_id"]),
+                arm=arm_name,
+                method=str(method),
+                config={
+                    "arm": arm_name,
+                    "method": method,
+                    "run_id": plan["run_id"],
+                    "max_tokens": plan["max_tokens"],
+                    "total_steps": total_steps,
+                    "s3_prefix": (cfg.get("s3") or {}).get("prefix"),
+                },
+                enabled=wb_enabled,
+            )
+            if wb_cfg.get("project"):
+                wb_kwargs["project"] = str(wb_cfg["project"])
+            if wb_cfg.get("entity"):
+                wb_kwargs["entity"] = str(wb_cfg["entity"])
+            trainer_cfg = trainer_cfg.with_callback("wandb", WandBCallback(**wb_kwargs))
+            trainer_cfg = trainer_cfg.with_callback(
+                "wandb_artifacts",
+                make_wandb_artifacts_callback(
+                    results_dir=results_dir,
+                    save_folder=plan["save_folder"],
+                    total_steps=total_steps,
+                    interval=interval,
+                    tokens_per_step=int(plan.get("global_batch_size") or gbs),
+                    upload_checkpoint_artifacts=bool(
+                        wb_cfg.get("upload_checkpoint_artifacts", True)
+                    ),
+                ),
+            )
+        except ImportError:
+            print(
+                json.dumps(
+                    {
+                        "status": "wandb_callback_unavailable",
+                        "detail": "olmo_core.WandBCallback missing; continuing without W&B",
+                    }
+                ),
+                flush=True,
+            )
+
         # --- build -------------------------------------------------------------------
         dataset = dataset_cfg.build()
         model = model_cfg.build(init_device="meta")
@@ -917,6 +1169,8 @@ def try_launch(plan: Dict[str, Any], cfg: Dict[str, Any], method: MethodName, *,
     """Initialize OLMo-core, build, and fit. Resume is gated by a run-fingerprint match."""
     # Pin before any CUDA context: must precede prepare_training_environment / build_trainer.
     pin_cuda_visible_devices(cfg)
+    if resume:
+        _ensure_resume_artifacts(plan, cfg, method)
     _prepare_run_dir(plan, resume=resume)
     try:
         from olmo_core.train import prepare_training_environment, teardown_training_environment  # type: ignore
@@ -962,6 +1216,8 @@ def try_launch(plan: Dict[str, Any], cfg: Dict[str, Any], method: MethodName, *,
         # Only now that the trainer is known to build do we pin the fresh-run identity,
         # so a failed build cannot leave a stale fingerprint that blocks relaunch.
         _commit_run_fingerprint(plan, resume=resume)
+        # Durable copy: ephemeral scratch is not the source of truth for resume.
+        _export_durable_run_state(plan, cfg, method)
         print(
             json.dumps(
                 {
@@ -970,6 +1226,7 @@ def try_launch(plan: Dict[str, Any], cfg: Dict[str, Any], method: MethodName, *,
                     "init_mode": plan["init_mode"],
                     "resume": resume,
                     "save_folder": plan["save_folder"],
+                    "s3_checkpoints": plan.get("s3_checkpoints"),
                     "max_tokens": plan["max_tokens"],
                     "total_steps": plan["total_steps"],
                     "num_visible_gpus": len(visible),
@@ -979,6 +1236,8 @@ def try_launch(plan: Dict[str, Any], cfg: Dict[str, Any], method: MethodName, *,
             )
         )
         trainer.fit()
+        # Final metrics push after fit (checkpoints already exported per permanent save).
+        _export_durable_run_state(plan, cfg, method)
     finally:
         teardown_training_environment()
 
@@ -1017,8 +1276,10 @@ def main() -> None:
         "--resume",
         action="store_true",
         help=(
-            "Resume from the latest save-folder checkpoint iff its run fingerprint "
-            "(init/order/batching/budget) matches. Otherwise a fresh scratch launch."
+            "Resume from the latest checkpoint iff its run fingerprint "
+            "(init/order/batching/budget) matches. On ephemeral scratch, fetches "
+            "fingerprints + step dirs from s3://edullm-checkpoints/token-sel/<arm>/ "
+            "when the local save folder is empty. Do not rely on scratch-only ckpts."
         ),
     )
     args = ap.parse_args()
@@ -1054,9 +1315,29 @@ def main() -> None:
     if method not in allowed:
         raise SystemExit(f"method {method!r} not in config methods {allowed}")
 
+    # Always resolve the published corpus (fail closed on legacy edullm-datasets).
+    # On --launch, also stage shards + order contract onto the run dir (clean machine).
+    remote = prepare_train_data(cfg, out, stage=bool(args.launch))
+    print(
+        json.dumps(
+            {
+                "event": "train_corpus_resolved",
+                "dataset_id": remote["dataset_id"],
+                "version": remote["version"],
+                "tokens_uri": remote["tokens_uri"],
+                "dtype": remote["dtype"],
+                "rows": remote["rows"],
+                "n_shards": len(remote["paths"]),
+                "staged": bool(args.launch),
+            },
+            indent=2,
+        ),
+        flush=True,
+    )
+
     # On --launch, materialize null RefHQ load_paths from YAML s3_uri(s) into the
     # shared local cache (idempotent; multi-rank safe via mkdir lock).
-    if args.launch and method in ("rho_excess", "rel_ema", "learnability"):
+    if args.launch and method in ("rho_excess", "rel_ema", "learnability", "middle_ppl"):
         from token_selection.olmo_ext.refhq_materialize import ensure_reference_paths
 
         try:
@@ -1073,10 +1354,32 @@ def main() -> None:
         except ValueError as exc:
             raise SystemExit(str(exc)) from exc
 
-    plan = build_plan(cfg, method=method, out=out)
     if args.launch:
+        plan = build_plan(cfg, method=method, out=out)
         try_launch(plan, cfg, method, resume=args.resume)
     else:
+        # Plan-only: emit the resolved remote identity without requiring local shards.
+        plan = {
+            "run_id": cfg.get("run_id"),
+            "method": method,
+            "init_mode": "scratch",
+            "dataset_id": remote["dataset_id"],
+            "dataset_version": remote["version"],
+            "s3_tokens": remote["tokens_uri"],
+            "token_dtype": remote["dtype"],
+            "token_rows": remote["rows"],
+            "token_shards": remote["paths"],
+            "tokenizer": (cfg.get("data") or {}).get("tokenizer"),
+            "notes": [
+                "Plan-only: corpus resolved from edullm-data; local shards not required.",
+                "Pass --launch to stage tokens + order onto output_dir and fit.",
+            ],
+        }
+        # If tokens were already staged (optional), enrich with a full build_plan.
+        if (out / "tokens" / "manifest.json").exists() and (
+            out / "order" / "manifest.json"
+        ).exists():
+            plan = build_plan(cfg, method=method, out=out)
         print(json.dumps(plan, indent=2))
 
 

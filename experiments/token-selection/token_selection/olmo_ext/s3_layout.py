@@ -29,6 +29,7 @@ ARM_DIRS: Final[tuple[str, ...]] = (
     "attention",
     "learnability-token",
     "learnability-doc",
+    "reference",
 )
 
 
@@ -49,19 +50,23 @@ def arm_uri(arm: str, *parts: str) -> str:
     return f"s3://{CHECKPOINT_BUCKET}/{prefix}"
 
 
-DATASET_BUCKET: Final[str] = "edullm-datasets"
+# Published corpora live in locked ``edullm-data`` (read via edullm_data.read).
+# This constant is only the default *output* dataset_bucket key for older YAML;
+# new configs should omit it and set ``data.dataset_id`` instead.
+DATA_BUCKET: Final[str] = "edullm-data"
+DATASET_BUCKET: Final[str] = DATA_BUCKET  # back-compat alias
 
 
 def default_s3_block(arm: str) -> dict[str, str]:
     """YAML ``s3:`` block for spine configs.
 
     Checkpoints and experiment results publish under
-    ``s3://edullm-checkpoints/token-sel/<arm>/``. Pre-tokenized train data stays
-    on ``edullm-datasets`` (see ``data.tokens_s3``).
+    ``s3://edullm-checkpoints/token-sel/<arm>/``. Pre-tokenized train data is
+    resolved from ``s3://edullm-data`` via ``data.dataset_id`` (see
+    ``token_selection.scripts.train_data_resolve``).
     """
     return {
         "checkpoint_bucket": CHECKPOINT_BUCKET,
-        "dataset_bucket": DATASET_BUCKET,
         "prefix": arm_prefix(arm),
         "profile": "sbsandbox",
     }

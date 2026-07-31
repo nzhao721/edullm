@@ -1,5 +1,6 @@
 # Dual frozen RefHQ refs: early=step250, late=avg(step1000/1125/1315).
-# RegMix 10B / olmo2_370M / permanent ckpt ladder {0,125,…,2250,2384} (skip 2375).
+# RegMix one-epoch (~9.989B catalog / 9.9B budget → 2360 steps) / olmo2_370M /
+# permanent ckpt ladder {0,125,…,2125,2360} (skip 2250).
 # Selection active from step 0 (t0_steps=0). New run_id — do not reuse prior arms.
 #
 # load_path fields may stay null: --launch auto-materializes from s3_uri / s3_uris.
@@ -33,15 +34,18 @@ reference:
       - s3://edullm-checkpoints/olmo-370m/edullm-370M-refhq-5p5b/checkpoints/step1000/
       - s3://edullm-checkpoints/olmo-370m/edullm-370M-refhq-5p5b/checkpoints/step1125/
       - s3://edullm-checkpoints/olmo-370m/edullm-370M-refhq-5p5b/checkpoints/step1315/
-  dataset: s3://edullm-datasets/refhq/refhq-regmix-5p5b-v1/
+  # Provenance only: RefHQ was trained on published pretrain/refhq-regmix-5p5b.
+  dataset: pretrain/refhq-regmix-5p5b
 
 data:
-  tokens_s3: s3://edullm-datasets/regmix/regmix-10b/tokenized
-  tokenizer: allenai/dolma2-tokenizer
+  # Published+validated corpus (edullm_data.read.resolve_latest / dataset_paths).
+  dataset_id: pretrain/regmix-10b
+  tokenizer: allenai/dolma2-tokenizer  # same vocab as tokenizer/dolma2-bpe v1
   sequence_length: 2048
 
 s3:
-  dataset_bucket: edullm-datasets
+  # Train inputs resolve via data.dataset_id → s3://edullm-data/ (not this field).
+  dataset_bucket: edullm-data
   checkpoint_bucket: edullm-checkpoints
   # Checkpoints + results → s3://edullm-checkpoints/token-sel/learnability-token/
   prefix: token-sel/learnability-token
@@ -59,7 +63,8 @@ olmo_core:
   revision: 99e0009ed67679c90da970ec5ba439c9459e3757
 
 train:
-  max_tokens: 10000000000
+  # One epoch under published train (~9.989B catalog rows); 9.9B → 2360 steps at GBS.
+  max_tokens: 9900000000
   global_batch_size: 4194304
   lr: 4.0e-4
   lr_alpha_f: 0.1
@@ -82,7 +87,7 @@ train:
   # Informational only; torchrun --nproc_per_node is the authority at launch.
   num_gpus: null
   num_workers: 8
-  # Permanent ladder via shared checkpointer_kwargs_for_ladder (omit 2375).
+  # Permanent ladder via shared checkpointer_kwargs_for_ladder (omit 2250 for 2360-step runs).
   checkpoint_every_steps: 125
   checkpoint_keep_last: null
   pre_train_checkpoint: true

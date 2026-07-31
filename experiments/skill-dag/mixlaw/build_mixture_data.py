@@ -1,5 +1,19 @@
 #!/usr/bin/env python3
-"""Plan and materialize the per-mixture training data for the 24 mixing-law probes.
+"""DEPRECATED / DO-NOT-USE for new training runs.
+
+Exact per-mix slice materialization is **not a supported training path**.
+All new mixlaw pilot and 370M work must use ``DomainMixtureStream`` over a
+peak-sized pool staged from ``edullm-data`` (see ``prepare_*_data.py``,
+``domain_stream.py``, ``olmo_domain_stream_patch.py``). Do not re-materialize
+slices to bit-match checked-in ``pilot_runs/`` curves.
+
+This module remains only for historical reference and
+``preflight_checks.py`` helpers (e.g. ``_blocks_for_domain``).
+
+---
+Historical behavior (do not use for new runs):
+
+Plan and materialize the per-mixture training data for the 24 mixing-law probes.
 
 Source memmaps are the *working pool* built by ``tokenize_working_pool.py`` from
 ``s3://edullm-datasets/olmo100b/olmo-mix-1124-30b`` raw shards
@@ -291,6 +305,13 @@ def cmd_build(args: argparse.Namespace) -> None:
 
 
 def main() -> None:
+    import sys
+
+    print(
+        "WARNING: build_mixture_data.py is DEPRECATED / DO-NOT-USE for new "
+        "training. Use DomainMixtureStream + edullm-data peak pool instead.",
+        file=sys.stderr,
+    )
     ap = argparse.ArgumentParser(description=__doc__)
     sub = ap.add_subparsers(required=True)
 

@@ -1,7 +1,13 @@
 {
-  "schema": 1,
-  "description": "Skill-It probe mixtures: 7 one-hot domains over olmohq (same domain_order as mixlaw). Offline A compares each one-hot probe to RegMix via mixlaw_fit_chinchilla.json.",
+  "schema": 2,
+  "description": "Skill-It probe mixtures: 7 one-hot domains over published edullm-data (same domain_order as mixlaw). Train by domain-stratified streaming at listed weights.",
   "seed": 42,
+  "data_source": {
+    "dataset_id": "pretrain/olmo-127b",
+    "bucket": "edullm-data",
+    "mode": "domain_stratified_stream",
+    "reader": "edullm_data.read.dataset_paths"
+  },
   "domain_order": [
     "dclm",
     "arxiv",

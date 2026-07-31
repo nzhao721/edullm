@@ -84,10 +84,11 @@ def test_planned_upload_keys_dry_run(tmp_path: Path):
     sub = tmp_path / "tokenized" / "wiki"
     sub.mkdir(parents=True)
     (sub / "wiki.npy").write_bytes(b"\x00\x00\x00\x00")
-    keys = planned_upload_keys(tmp_path, "s3://edullm-datasets/regmix/regmix-10b/curriculum/")
+    keys = planned_upload_keys(tmp_path, "s3://edullm-data/curriculum/")
     assert any(k.endswith("coverage.json") for k in keys)
     assert any("tokenized/wiki/wiki.npy" in k for k in keys)
-    assert all(k.startswith("s3://edullm-datasets/regmix/regmix-10b/curriculum/") for k in keys)
+    assert all(k.startswith("s3://edullm-data/curriculum/") for k in keys)
+    assert not any("edullm-datasets" in k for k in keys)
 
 
 def test_build_skip_tokenize_end_to_end(tmp_path: Path):

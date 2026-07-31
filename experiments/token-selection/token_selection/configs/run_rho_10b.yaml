@@ -35,15 +35,20 @@ reference:
   s3_uri: s3://edullm-checkpoints/olmo-370m/edullm-370M-refhq-5p5b/checkpoints/step1315/
   step: 1315
   planned_total_steps: 1314
-  dataset: s3://edullm-datasets/refhq/refhq-regmix-5p5b-v1/
+  # Provenance only: RefHQ was trained on published pretrain/refhq-regmix-5p5b.
+  dataset: pretrain/refhq-regmix-5p5b
 
 data:
-  tokens_s3: s3://edullm-datasets/regmix/regmix-10b/tokenized
-  tokenizer: allenai/dolma2-tokenizer
+  # Published+validated corpus (edullm_data.read.resolve_latest / dataset_paths).
+  # Do not use s3://edullm-datasets/ or assume scratch/laptop-local tokens exist.
+  dataset_id: pretrain/regmix-10b
+  # dataset_version: v1   # optional pin; omit to take resolve_latest
+  tokenizer: allenai/dolma2-tokenizer  # same vocab as tokenizer/dolma2-bpe v1
   sequence_length: 2048
 
 s3:
-  dataset_bucket: edullm-datasets
+  # Train inputs resolve via data.dataset_id → s3://edullm-data/ (not this field).
+  dataset_bucket: edullm-data
   checkpoint_bucket: edullm-checkpoints
   # Checkpoints + results → s3://edullm-checkpoints/token-sel/rho-1/
   prefix: token-sel/rho-1
@@ -61,7 +66,9 @@ olmo_core:
   revision: 99e0009ed67679c90da970ec5ba439c9459e3757
 
 train:
-  max_tokens: 10000000000
+  # One epoch of published train (~9.989B catalog rows after val carve).
+  # Budget 9.9B → 2360 steps at GBS 4_194_304 (stays under per-shard usable; no wrap).
+  max_tokens: 9900000000
   global_batch_size: 4194304
   lr: 4.0e-4
   lr_alpha_f: 0.1
@@ -84,7 +91,7 @@ train:
   # Informational only; torchrun --nproc_per_node is the authority at launch.
   num_gpus: null
   num_workers: 8
-  # Permanent ladder: {0, 125, …, 2250, 2384} (omit 2375). No ephemeral.
+  # Permanent ladder: {0, 125, …, 2125, 2360} (omit 2250). No ephemeral.
   checkpoint_every_steps: 125
   checkpoint_keep_last: null
   ephemeral_checkpoint_every_steps: null

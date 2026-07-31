@@ -5,8 +5,8 @@ Contract (every arm):
   * every ``interval`` steps on the grid
   * always the true final step
   * omit the last on-grid step when it falls within one interval of the final
-    (avoids a near-duplicate snapshot). Example for 2384 steps / interval 125:
-    ``{0, 125, …, 2250, 2384}`` — omit 2375.
+    (avoids a near-duplicate snapshot). Example for the shared 2360-step /
+    interval-125 main-run budget: ``{0, 125, …, 2125, 2360}`` — omit 2250.
   * ``max_checkpoints=None`` — keep every save permanently; no ephemeral prune.
 """
 

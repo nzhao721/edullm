@@ -1,4 +1,4 @@
-"""Loss masks for full-token, REL, RHO-1, middle-PPL, attention, and learnability.
+"""Loss masks for full-token, random, REL, RHO-1, middle-PPL, attention, and learnability.
 
 Polarity matches OLMo-core ``label_mask``: ``True`` = token contributes to loss.
 """
@@ -11,7 +11,13 @@ import torch
 from torch import Tensor
 
 MethodName = Literal[
-    "full", "rel_ema", "rho_excess", "middle_ppl", "attention_topk", "learnability"
+    "full",
+    "random",
+    "rel_ema",
+    "rho_excess",
+    "middle_ppl",
+    "attention_topk",
+    "learnability",
 ]
 
 def _per_row_keep_counts(valid2d: Tensor, k: float) -> tuple[Tensor, Tensor]:
@@ -131,6 +137,23 @@ def full_mask(shape_ref: Tensor, *, valid: Optional[Tensor] = None) -> Tensor:
     return warmup_mask(shape_ref, valid=valid)
 
 
+def random_mask(
+    shape_ref: Tensor,
+    k: float,
+    *,
+    valid: Optional[Tensor] = None,
+    generator: Optional[torch.Generator] = None,
+) -> Tensor:
+    """Keep a uniform random ``k`` fraction of valid positions (per sequence)."""
+    scores = torch.rand(
+        shape_ref.shape,
+        device=shape_ref.device,
+        dtype=torch.float32,
+        generator=generator,
+    )
+    return top_k_mask(scores, k, valid=valid)
+
+
 def rel_ema_mask(
     current_loss: Tensor,
     history_loss: Tensor,
@@ -154,13 +177,13 @@ def rho_excess_mask(
 
 
 def middle_ppl_mask(
-    current_loss: Tensor,
+    reference_loss: Tensor,
     k: float,
     *,
     valid: Optional[Tensor] = None,
 ) -> Tensor:
-    """Keep the middle ``k`` by current-model CE (``L_curr`` ≈ log-perplexity)."""
-    return middle_k_mask(current_loss, k, valid=valid)
+    """Keep the middle ``k`` by frozen-reference token CE (``L_ref`` ≈ log-PPL)."""
+    return middle_k_mask(reference_loss, k, valid=valid)
 
 
 def learnability_mask(
@@ -204,6 +227,7 @@ def build_mask(
     shape_ref: Optional[Tensor] = None,
     valid: Optional[Tensor] = None,
     warmup: bool = False,
+    generator: Optional[torch.Generator] = None,
 ) -> Tensor:
     """Build loss mask for supported token-selection methods."""
     if method == "full" or warmup:
@@ -211,6 +235,11 @@ def build_mask(
         if ref is None:
             raise ValueError("full/warmup mask requires shape_ref or current_loss")
         return full_mask(ref, valid=valid)
+
+    if method == "random":
+        if shape_ref is None:
+            raise ValueError("random mask requires shape_ref")
+        return random_mask(shape_ref, k, valid=valid, generator=generator)
 
     if method == "rel_ema":
         if current_loss is None or history_loss is None:
@@ -223,9 +252,9 @@ def build_mask(
         return rho_excess_mask(current_loss, reference_loss, k, valid=valid)
 
     if method == "middle_ppl":
-        if current_loss is None:
-            raise ValueError("middle_ppl mask requires current_loss")
-        return middle_ppl_mask(current_loss, k, valid=valid)
+        if reference_loss is None:
+            raise ValueError("middle_ppl mask requires reference_loss")
+        return middle_ppl_mask(reference_loss, k, valid=valid)
 
     if method == "attention_topk":
         if attention_score is None:
@@ -238,6 +267,6 @@ def build_mask(
         return learnability_mask(early_loss, late_loss, k, valid=valid)
 
     raise ValueError(
-        f"Unknown method {method!r}; expected 'full', 'rel_ema', 'rho_excess', "
+        f"Unknown method {method!r}; expected 'full', 'random', 'rel_ema', 'rho_excess', "
         f"'middle_ppl', 'attention_topk', or 'learnability'"
     )

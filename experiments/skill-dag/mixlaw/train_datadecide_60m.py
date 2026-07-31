@@ -6,15 +6,28 @@ DataDecide (allenai/DataDecide-*-60M ``config.json`` plus Appendix Table 2):
 ``d_model=384``, 16 layers, 12 heads, ``mlp_ratio=8``, ``seq_len=2048``, global
 batch 96 sequences, LR 5.8e-3, untied LM head, ``norm_after=False``,
 ``rope_theta=10000``, RMSNorm, SwiGLU. The one deliberate deviation is the
-embedding matrix: the RegMix corpus is already tokenized with dolma2, so the
+embedding matrix: the corpus is already tokenized with dolma2, so the
 vocabulary is dolma2's 100,352 rows instead of DataDecide's 50,304. Every shape
 that defines the 60M *body* is untouched (see ``--help`` on ``--weight-tying``
 for the one knob that changes this trade-off).
 
+Training data is a domain-stratified stream over a **working pool staged from
+published+validated** ``s3://edullm-data/pretrain/olmo-127b`` (``dataset_paths`` /
+``resolve_latest``). ``--pool-dir`` must carry ``edullm_data_source.json`` from
+``stage_working_pool_from_edullm_data.py`` — orphan FarmShare/laptop pools and
+legacy ``s3://edullm-datasets/`` are refused. Scratch under ``--save-folder`` is
+ephemeral; durable checkpoints require ``--remote-save-folder`` / ``RESULTS_S3``
+(unless ``--allow-local-only``).
+
+**W&B.** When ``--wandb-mode online|offline`` and ``WANDB_API_KEY`` are set
+(FarmShare: ``wandb-session.env``), OLMo logs train + in-run task-loss metrics
+to project ``mixlaw`` and uploads checkpoint artifacts. S3 durable sinks stay
+required for ephemeral scratch unless ``--allow-local-only``.
+
 Evaluation is **task loss**, the OLMo-ladder metric: bits-per-byte of the gold
 continuation on the OLMES 5-shot RC suite (Bhagia et al., arXiv:2412.04403).
-There is no LM validation loss and no held-out corpus split — the full 10B RegMix
-corpus is available for training slices.
+There is no LM validation loss and no held-out corpus split — the full budgeted
+token stream is available for training.
 
 Two evaluation cadences, because a full pass over all 20 ladder bpb labels costs
 more forward tokens than a short probe run costs training tokens:
@@ -36,24 +49,7 @@ from dataclasses import dataclass
 from datetime import timedelta
 from math import cos, pi
 from pathlib import Path
-from typing import Optional
-
-# Hard-disable W&B before importing olmo, which reads these at import time.
-os.environ["WANDB_DISABLED"] = "1"
-os.environ["WANDB_MODE"] = "disabled"
-for _var in (
-    "WANDB_API_KEY",
-    "WANDB_ENTITY",
-    "WANDB_PROJECT",
-    "WANDB_NAME",
-    "WANDB_GROUP",
-    "WANDB_RUN_ID",
-    "WANDB_RESUME",
-    "WANDB_DIR",
-    "WANDB_CACHE_DIR",
-    "WANDB_ENABLE",
-):
-    os.environ.pop(_var, None)
+from typing import Any, Optional
 
 import torch
 import torch.distributed as dist
@@ -88,6 +84,10 @@ from mixlaw_common import (
     CURVE_TASK_LOSS_LABELS,
     D_MODEL,
     DATADECIDE_MODEL_SIZE,
+    DEFAULT_RESULTS_S3,
+    DOMAINS,
+    EDULLM_DATA_DATASET_ID,
+    POOL_PROVENANCE_NAME,
     patch_torch_load_for_olmo_checkpoints,
     EMBEDDING_SIZE,
     EOS_TOKEN_ID,
@@ -104,6 +104,16 @@ from mixlaw_common import (
     VOCAB_SIZE,
     ladder_warmup_steps,
     normalize_eval_key,
+)
+from mixlaw_wandb import (
+    add_wandb_args,
+    finish_wandb,
+    init_wandb,
+    wandb_enabled,
+    wandb_log,
+    wandb_log_checkpoint,
+    wandb_log_eval,
+    wandb_upload_existing,
 )
 
 log = logging.getLogger("train_datadecide_60m")
@@ -207,21 +217,98 @@ def resolve_warmup(total_steps: int, mode: str, fraction: float) -> int:
     raise SystemExit(f"unknown --warmup-mode {mode}")
 
 
-def build_config(args: argparse.Namespace) -> TrainConfig:
+def load_pool_provenance(pool_dir: Path, dataset_id: str) -> dict:
+    """Require a pool staged from published edullm-data (not orphan scratch/local)."""
+    path = pool_dir / POOL_PROVENANCE_NAME
+    if not path.is_file():
+        raise SystemExit(
+            f"missing {path}: refuse orphan local/scratch pool without provenance. "
+            f"Stage from edullm-data first "
+            f"(stage_working_pool_from_edullm_data.py --dataset-id {dataset_id})"
+        )
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    got = payload.get("dataset_id")
+    if got != dataset_id:
+        raise SystemExit(
+            f"pool provenance dataset_id={got!r} does not match --dataset-id {dataset_id!r}"
+        )
+    if payload.get("data_bucket") not in (None, "edullm-data"):
+        raise SystemExit(
+            f"pool provenance data_bucket={payload.get('data_bucket')!r} is not edullm-data"
+        )
+    uri = str(payload.get("edullm_data_uri") or payload.get("uri") or "")
+    if "edullm-datasets" in uri:
+        raise SystemExit(
+            f"pool provenance uri={uri!r} still points at legacy edullm-datasets; re-stage"
+        )
+    return payload
+
+
+def resolve_dataset_version(dataset_id: str, pinned: Optional[str], provenance: dict) -> str:
+    """Prefer an explicit pin, then pool provenance, then live catalog resolve_latest."""
+    if pinned:
+        return pinned
+    from_prov = provenance.get("dataset_version")
+    if from_prov:
+        return str(from_prov)
+    try:
+        from edullm_data.read import resolve_latest
+        from edullm_data.s3 import Boto3S3
+    except ImportError as exc:
+        raise SystemExit(
+            "edullm-data is required to resolve dataset versions when the pool "
+            "provenance has no dataset_version"
+        ) from exc
+    ver = resolve_latest(dataset_id, s3=Boto3S3.default())
+    if not ver:
+        raise SystemExit(f"no published versions for {dataset_id}")
+    return ver
+
+
+def resolve_remote_save_folder(args: argparse.Namespace) -> Optional[str]:
+    """Durable checkpoint sink (S3). Scratch under --save-folder is ephemeral."""
+    remote = args.remote_save_folder or os.environ.get("REMOTE_SAVE_FOLDER")
+    if remote:
+        return remote.rstrip("/")
+    results = os.environ.get("RESULTS_S3", "").strip()
+    if results:
+        return f"{results.rstrip('/')}/{args.name}/checkpoints"
+    allow_local = os.environ.get("ALLOW_LOCAL_ONLY", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
+    if allow_local or args.allow_local_only:
+        return None
+    raise SystemExit(
+        "durable saves required on ephemeral scratch: pass --remote-save-folder "
+        f"(e.g. {DEFAULT_RESULTS_S3}/<mix>/checkpoints), set RESULTS_S3, "
+        "or explicitly ALLOW_LOCAL_ONLY=1 / --allow-local-only for smoke tests"
+    )
+
+
+def build_config(
+    args: argparse.Namespace,
+    *,
+    provenance: dict,
+    dataset_version: str,
+    remote_save_folder: Optional[str],
+) -> TrainConfig:
     global _LADDER_T_DECAY
 
-    paths = [ln.strip() for ln in Path(args.paths_file).read_text().splitlines() if ln.strip()]
-    if not paths:
-        raise SystemExit(f"No training paths in {args.paths_file}")
+    from recipe_data import load_mix_weights
+
+    weights, mix_meta = load_mix_weights(Path(args.mix_weights_json))
+    length_tokens = int(args.length_tokens or mix_meta.get("length_tokens") or mix_meta["budget_tokens"])
+    stream_seed = int(mix_meta.get("stream_seed", mix_meta.get("recipe_seed", args.seed)))
+    paths = ["<domain_stream>"]
 
     mbs = args.device_batch_size
     if GLOBAL_BATCH_SEQS % mbs != 0:
         raise SystemExit(f"global batch {GLOBAL_BATCH_SEQS} not divisible by microbatch {mbs}")
 
-    # One epoch over exactly the tokens that were materialized for this mixture.
-    length_tokens = args.length_tokens
-    if length_tokens is None:
-        length_tokens = sum(Path(p).stat().st_size // 4 for p in paths)
+    length_tokens = int(length_tokens)
     total_steps = length_tokens // TOKENS_PER_STEP
     if total_steps < 1:
         raise SystemExit(f"{length_tokens} tokens is less than one step")
@@ -281,12 +368,41 @@ def build_config(args: argparse.Namespace) -> TrainConfig:
         "seed": args.seed,
         "data_seed": args.data_seed,
         "train_paths": len(paths),
+        "data_mode": "domain_stratified_stream",
+        "dataset_id": args.dataset_id,
+        "dataset_version": dataset_version,
+        "data_bucket": "edullm-data",
+        "edullm_data_uri": f"s3://edullm-data/{args.dataset_id}/{dataset_version}/",
+        "pool_dir": str(args.pool_dir),
+        "pool_provenance": provenance,
+        "mix_weights_json": str(args.mix_weights_json),
+        "stream_seed": stream_seed,
+        "domain_weights": weights,
+        "domains": list(DOMAINS),
+        "save_folder": str(args.save_folder),
+        "remote_save_folder": remote_save_folder,
+        "ephemeral_scratch": True,
         "flash_attention": os.environ.get("OLMO_FLASH_ATTENTION", "0") == "1",
         "fused_loss": os.environ.get("OLMO_FUSED_LOSS", "0") == "1",
         "wandb": None,
     }
     progress = Path(args.progress_dir)
     progress.mkdir(parents=True, exist_ok=True)
+
+    # SmolLM-style: one explicit wandb.init in main(); keep TrainConfig.wandb=None
+    # to avoid a second OLMo-managed run.
+    if wandb_enabled(args, is_main=True):
+        meta["wandb"] = {
+            "project": args.wandb_project,
+            "entity": args.wandb_entity,
+            "group": args.wandb_group or args.name,
+            "name": args.wandb_run_name or args.name,
+            "mode": args.wandb_mode,
+            "enabled": True,
+        }
+    else:
+        meta["wandb"] = {"mode": args.wandb_mode, "enabled": False}
+
     (progress / "run_meta.json").write_text(json.dumps(meta, indent=2) + "\n", encoding="utf-8")
     (progress / "total_steps.txt").write_text(f"{total_steps}\n", encoding="utf-8")
 
@@ -319,7 +435,7 @@ def build_config(args: argparse.Namespace) -> TrainConfig:
         global_train_batch_size=GLOBAL_BATCH_SEQS,
         tokenizer=TokenizerConfig(identifier=TOKENIZER_ID),
         save_folder=args.save_folder,
-        remote_save_folder=None,
+        remote_save_folder=remote_save_folder,
         save_overwrite=True,
         save_interval_unsharded=args.save_interval or total_steps,
         save_num_unsharded_checkpoints_to_keep=args.keep_checkpoints,
@@ -362,17 +478,23 @@ class TaskLossHandler(logging.Handler):
 
     OLMo emits downstream metrics as ``eval/downstream_bpb/<label>_bpb=<value>``; for
     a ``bpb`` metric type that value *is* the task loss. Appending them to a JSONL
-    keeps the whole curve available for the step-law fit without depending on W&B,
-    which is disabled here because 24 concurrent runs on a shared cluster should not
-    need an external service to be reachable.
+    keeps the whole curve available for the step-law fit. When a W&B run handle is
+    attached, the same points are mirrored under ``eval/bpb/<label>``.
     """
 
-    def __init__(self, progress_dir: Path, total_steps: int) -> None:
+    def __init__(
+        self,
+        progress_dir: Path,
+        total_steps: int,
+        *,
+        wb_run: Any = None,
+    ) -> None:
         super().__init__()
         self.progress_dir = progress_dir
         self.total_steps = total_steps
         self.curve_path = progress_dir / "task_loss.jsonl"
         self.progress_path = progress_dir / "progress.json"
+        self.wb_run = wb_run
 
     def emit(self, record: logging.LogRecord) -> None:
         try:
@@ -405,6 +527,14 @@ class TaskLossHandler(logging.Handler):
             if task_losses:
                 with self.curve_path.open("a", encoding="utf-8") as fh:
                     fh.write(json.dumps({"step": step, "task_loss_bpb": task_losses}) + "\n")
+                if self.wb_run is not None:
+                    wandb_log_eval(
+                        self.wb_run,
+                        {"task_loss_bpb": task_losses},
+                        step=step,
+                    )
+            if train_loss is not None and self.wb_run is not None:
+                wandb_log(self.wb_run, {"train/loss": train_loss}, step=step)
             self.progress_path.write_text(
                 json.dumps(
                     {
@@ -426,14 +556,54 @@ def main() -> None:
     patch_torch_load_for_olmo_checkpoints()
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--name", required=True, help="Run name, e.g. mix07")
-    ap.add_argument("--paths-file", required=True, help="paths_train.txt for this mixture")
-    ap.add_argument("--save-folder", required=True)
+    ap.add_argument(
+        "--mix-weights-json",
+        required=True,
+        help="Recipe sidecar from prepare_mixlaw_pilot_data.py (domain-stratified stream)",
+    )
+    ap.add_argument(
+        "--pool-dir",
+        required=True,
+        help=(
+            "Working pool root staged from edullm-data "
+            f"(must contain {POOL_PROVENANCE_NAME})"
+        ),
+    )
+    ap.add_argument(
+        "--dataset-id",
+        default=EDULLM_DATA_DATASET_ID,
+        help=f"Published edullm-data dataset id (default {EDULLM_DATA_DATASET_ID})",
+    )
+    ap.add_argument(
+        "--dataset-version",
+        default=None,
+        help="Pin edullm-data version; default uses pool provenance or resolve_latest",
+    )
+    ap.add_argument(
+        "--save-folder",
+        required=True,
+        help="Local/scratch checkpoint dir (ephemeral). Durable copy via --remote-save-folder.",
+    )
     ap.add_argument("--progress-dir", required=True)
+    ap.add_argument(
+        "--remote-save-folder",
+        default=None,
+        help=(
+            "S3 prefix for durable checkpoints (OLMo remote_save_folder). "
+            f"Default: $RESULTS_S3/<name>/checkpoints or {DEFAULT_RESULTS_S3}/<name>/checkpoints "
+            "when RESULTS_S3 is set by the launcher."
+        ),
+    )
+    ap.add_argument(
+        "--allow-local-only",
+        action="store_true",
+        help="Permit training without a durable S3 sink (smoke tests only)",
+    )
     ap.add_argument(
         "--length-tokens",
         type=int,
         default=None,
-        help="Defaults to the exact token count of the mixture slices (one epoch)",
+        help="Defaults to mix_weights.json budget_tokens (tpp=5 → ~285M / 1451 steps)",
     )
     ap.add_argument(
         "--device-batch-size",
@@ -487,7 +657,19 @@ def main() -> None:
     ap.add_argument("--seed", type=int, default=6198)
     ap.add_argument("--data-seed", type=int, default=None)
     ap.add_argument("--load-path", default=None)
+    add_wandb_args(ap)
     args = ap.parse_args()
+
+    # Clear hard-disable leftovers if a wrapper exported WANDB_DISABLED=1 by mistake
+    # while also requesting online mode via CLI.
+    if args.wandb_mode != "disabled":
+        os.environ.pop("WANDB_DISABLED", None)
+        os.environ.setdefault("WANDB_MODE", args.wandb_mode)
+
+    pool_dir = Path(args.pool_dir)
+    provenance = load_pool_provenance(pool_dir, args.dataset_id)
+    dataset_version = resolve_dataset_version(args.dataset_id, args.dataset_version, provenance)
+    remote_save_folder = resolve_remote_save_folder(args)
 
     try:
         mp.set_start_method("spawn", force=True)
@@ -499,7 +681,25 @@ def main() -> None:
     prepare_cli_environment()
     add_cached_path_clients()
 
-    cfg = build_config(args)
+    from recipe_data import load_mix_weights
+    from olmo_domain_stream_patch import apply_olmo_domain_stream_patch
+
+    weights, mix_meta = load_mix_weights(Path(args.mix_weights_json))
+    length_tokens = int(args.length_tokens or mix_meta.get("length_tokens") or mix_meta["budget_tokens"])
+    stream_seed = int(mix_meta.get("stream_seed", mix_meta.get("recipe_seed", args.seed)))
+    apply_olmo_domain_stream_patch(
+        args.pool_dir,
+        weights,
+        length_tokens=length_tokens,
+        seed=stream_seed,
+    )
+
+    cfg = build_config(
+        args,
+        provenance=provenance,
+        dataset_version=dataset_version,
+        remote_save_folder=remote_save_folder,
+    )
 
     # Inject the ladder WSD schedule before importing ladder's train.py, which
     # does `from olmo.optim import build_scheduler` at module scope.
@@ -510,7 +710,7 @@ def main() -> None:
     progress_dir = Path(args.progress_dir)
     total_steps = int((progress_dir / "total_steps.txt").read_text())
     log.info(
-        "DataDecide-60M %s | steps=%d lr=%.4g t_warmup=%d t_decay=%d labels=%d flash=%s",
+        "DataDecide-60M %s | steps=%d lr=%.4g t_warmup=%d t_decay=%d labels=%d flash=%s wandb=%s",
         args.name,
         total_steps,
         LEARNING_RATE,
@@ -518,10 +718,29 @@ def main() -> None:
         _LADDER_T_DECAY,
         len(cfg.evaluators),
         cfg.model.flash_attention,
+        args.wandb_mode,
     )
 
+    wb_run = None
     if get_global_rank() == 0:
-        handler = TaskLossHandler(progress_dir, total_steps)
+        meta = json.loads((progress_dir / "run_meta.json").read_text(encoding="utf-8"))
+        # Explicit SDK run (SmolLM-style); TrainConfig.wandb stays None to avoid a second init.
+        wb_run = init_wandb(
+            args,
+            meta,
+            id_dir=progress_dir,
+            is_main=True,
+            tags=["mixlaw", "datadecide-60m", args.name],
+            alert_title="mixlaw datadecide-60m started",
+        )
+        if wb_run is not None and args.wandb_upload_existing:
+            wandb_upload_existing(
+                wb_run,
+                checkpoints_root=Path(args.save_folder),
+                progress_dir=progress_dir,
+                tokens_per_step=TOKENS_PER_STEP,
+            )
+        handler = TaskLossHandler(progress_dir, total_steps, wb_run=wb_run)
         for name in ("", "trainer", "train", "olmo.train"):
             logging.getLogger(name).addHandler(handler)
 
@@ -531,7 +750,28 @@ def main() -> None:
     import train as ladder_train  # type: ignore
 
     ladder_train.build_scheduler = build_scheduler  # belt and suspenders
-    ladder_train.main(cfg)
+    try:
+        ladder_train.main(cfg)
+    finally:
+        if get_global_rank() == 0 and wb_run is not None:
+            # Upload final unsharded checkpoint + progress curve if present.
+            save_root = Path(args.save_folder)
+            latest = None
+            for cand in sorted(save_root.glob("step*-unsharded"), key=lambda p: p.name):
+                latest = cand
+            if latest is not None:
+                try:
+                    step = int(latest.name.split("-")[0].replace("step", ""))
+                except ValueError:
+                    step = total_steps
+                wandb_log_checkpoint(
+                    wb_run,
+                    latest,
+                    step=step,
+                    tokens_seen=step * TOKENS_PER_STEP,
+                )
+            wandb_upload_existing(wb_run, progress_dir=progress_dir)
+            finish_wandb(wb_run)
 
 
 if __name__ == "__main__":

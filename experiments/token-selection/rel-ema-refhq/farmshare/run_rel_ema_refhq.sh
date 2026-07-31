@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Thin FarmShare wrapper — same hardware-agnostic launcher, default scratch paths.
+# Ephemeral: RUN_DIR starts empty; stage edullm-data; durable export via spine.
 # Does not hardcode GPU indices or node names. Pass NUM_GPUS / CUDA_VISIBLE_DEVICES.
 # REF_PT optional: if unset, --launch auto-materializes reference.s3_uri from S3.
 set -euo pipefail

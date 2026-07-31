@@ -1,5 +1,6 @@
 # Attention top-60% (ssToken-adapted causal attention-received).
-# RegMix 10B / olmo2_370M / permanent ladder {0,125,…,2250,2384} (skip 2375).
+# RegMix one-epoch (~9.989B catalog / 9.9B budget → 2360 steps) / olmo2_370M /
+# permanent ladder {0,125,…,2125,2360} (skip 2250).
 # Selection from step 0 (t0_steps=0 / t0_frac=0); no reference model.
 # FA-safe: last-layer attention input hook + Q/K recompute (works with attn_backend=auto/flash_2).
 
@@ -19,12 +20,14 @@ alpha_start: 0.99
 alpha_end: 0.98
 
 data:
-  tokens_s3: s3://edullm-datasets/regmix/regmix-10b/tokenized
-  tokenizer: allenai/dolma2-tokenizer
+  # Published+validated corpus (edullm_data.read.resolve_latest / dataset_paths).
+  dataset_id: pretrain/regmix-10b
+  tokenizer: allenai/dolma2-tokenizer  # same vocab as tokenizer/dolma2-bpe v1
   sequence_length: 2048
 
 s3:
-  dataset_bucket: edullm-datasets
+  # Train inputs resolve via data.dataset_id → s3://edullm-data/ (not this field).
+  dataset_bucket: edullm-data
   checkpoint_bucket: edullm-checkpoints
   # Checkpoints + results → s3://edullm-checkpoints/token-sel/attention/
   prefix: token-sel/attention
@@ -42,7 +45,8 @@ olmo_core:
   revision: 99e0009ed67679c90da970ec5ba439c9459e3757
 
 train:
-  max_tokens: 10000000000
+  # One epoch under published train (~9.989B catalog rows); 9.9B → 2360 steps at GBS.
+  max_tokens: 9900000000
   global_batch_size: 4194304
   lr: 4.0e-4
   lr_alpha_f: 0.1
@@ -68,7 +72,7 @@ train:
   num_gpus: null
   num_workers: 8
   # Permanent ladder via shared checkpointer_kwargs_for_ladder (0 + 125-grid + final;
-  # omit last on-grid if within 125 of final → skip 2375 for 2384-step runs).
+  # omit last on-grid if within 125 of final → skip 2250 for 2360-step runs).
   checkpoint_every_steps: 125
   checkpoint_keep_last: null
   pre_train_checkpoint: true

@@ -101,7 +101,7 @@ class ShardWriter:
         if shard_bytes > MAX_SHARD_BYTES:
             raise ValueError(f"shard_bytes {shard_bytes} exceeds max {MAX_SHARD_BYTES}")
         self.shard_bytes = _align_shard_bytes(shard_bytes)
-        self.out_dir = out_dir
+        self.out_dir = out_di
         self.out_dir.mkdir(parents=True, exist_ok=True)
         self.shard_idx = 0
         self.current_path: Path | None = None
@@ -330,6 +330,112 @@ class RefreshingS3:
         return self._client
 
 
+class RefreshingBoto3S3:
+    """edullm_data S3 protocol wrapper that rotates STS from AWS_SESSION_ENV.
+
+    publish() uploads local stage → landing then streams hashes from S3; for ~255G that
+    outlasts a 1h broker token unless the client is rebuilt from the laptop-pushed env.
+    """
+
+    def __init__(
+        self,
+        session_env: Path | None = None,
+        *,
+        region: str = "us-east-1",
+        reload_seconds: float = SESSION_RELOAD_SECONDS,
+    ) -> None:
+        import threading
+
+        import boto3
+        from edullm_data.s3 import Boto3S3
+
+        self._boto3 = boto3
+        self._Boto3S3 = Boto3S3
+        self.session_env = session_env or Path(os.environ.get("AWS_SESSION_ENV") or "")
+        self.region = region
+        self.reload_seconds = reload_seconds
+        self._lock = threading.Lock()
+        self._inner: Boto3S3 | None = None
+        self._loaded_at = 0.0
+        self._mtime = 0.0
+        self._fingerprint = ""
+        self._rebuild(force=True)
+
+    def _rebuild(self, *, force: bool = False) -> None:
+        now = time.time()
+        mtime = 0.0
+        if self.session_env and self.session_env.is_file():
+            mtime = self.session_env.stat().st_mtime
+        stale = (now - self._loaded_at) >= self.reload_seconds
+        changed = mtime > self._mtime
+        if not force and self._inner is not None and not stale and not changed:
+            return
+        if self.session_env and self.session_env.is_file():
+            _apply_session_env_file(self.session_env)
+        key = os.environ.get("AWS_ACCESS_KEY_ID") or ""
+        secret = os.environ.get("AWS_SECRET_ACCESS_KEY") or ""
+        token = os.environ.get("AWS_SESSION_TOKEN") or ""
+        if not (key and secret and token):
+            raise RuntimeError("AWS session env missing access key / secret / token")
+        fingerprint = f"{key[-4:]}:{token[-8:]}:{mtime}"
+        client = self._boto3.client(
+            "s3",
+            aws_access_key_id=key,
+            aws_secret_access_key=secret,
+            aws_session_token=token,
+            region_name=self.region,
+        )
+        self._inner = self._Boto3S3(client)
+        if fingerprint != self._fingerprint:
+            print(f"publish S3 credentials rotated (...{key[-4:]})", flush=True)
+            self._fingerprint = fingerprint
+        self._loaded_at = now
+        self._mtime = mtime
+
+    def _call(self, method: str, *args, **kwargs):
+        with self._lock:
+            self._rebuild()
+            fn = getattr(self._inner, method)
+        try:
+            return fn(*args, **kwargs)
+        except Exception as exc:  # noqa: BLE001
+            msg = str(exc)
+            if "ExpiredToken" not in msg and "InvalidToken" not in msg and "expired" not in msg.lower():
+                raise
+            with self._lock:
+                self._rebuild(force=True)
+                fn = getattr(self._inner, method)
+            print(f"publish S3 retry after credential refresh ({method})", flush=True)
+            return fn(*args, **kwargs)
+
+    def get(self, bucket: str, key: str) -> bytes:
+        return self._call("get", bucket, key)
+
+    def get_range(self, bucket: str, key: str, start: int, length: int) -> bytes:
+        return self._call("get_range", bucket, key, start, length)
+
+    def head(self, bucket: str, key: str) -> dict:
+        return self._call("head", bucket, key)
+
+    def list(self, bucket: str, prefix: str) -> list:
+        return self._call("list", bucket, prefix)
+
+    def hash_object(self, bucket: str, key: str) -> tuple[str, int]:
+        return self._call("hash_object", bucket, key)
+
+    def put(self, bucket: str, key: str, body: bytes, *, content_type: str | None = None) -> None:
+        return self._call("put", bucket, key, body, content_type=content_type)
+
+    def put_file(self, bucket: str, key: str, local_path: str) -> None:
+        return self._call("put_file", bucket, key, local_path)
+
+    def copy(self, src_bucket: str, src_key: str, dst_bucket: str, dst_key: str) -> None:
+        return self._call("copy", src_bucket, src_key, dst_bucket, dst_key)
+
+    def delete(self, bucket: str, key: str) -> None:
+        return self._call("delete", bucket, key)
+
+
 def _open_shard_stream(
     *,
     rel: str,
@@ -536,7 +642,7 @@ def stage_publish_layout(
     for source in sorted(manifest["domains"]):
         meta = manifest["domains"][source]
         rel_dir = Path("tokens") / source
-        out_dir = out_root / rel_dir
+        out_dir = out_root / rel_di
         if resume and _source_complete(out_dir, int(meta["bytes"])):
             shards = sorted(out_dir.glob("train-*.u32le.bin"))
             staged[source] = [str(rel_dir / p.name) for p in shards]
@@ -703,7 +809,6 @@ def main() -> int:
     ensure_edullm_data()
     from edullm_data.contracts import validate_dataset_id
     from edullm_data.publish import publish
-    from edullm_data.s3 import Boto3S3
 
     try:
         validate_dataset_id(args.dataset_id)
@@ -740,14 +845,15 @@ def main() -> int:
             row["uri"] = tok_uri
 
     created_at = datetime.now(timezone.utc).isoformat()
-    # Force a fresh boto3 client after session reload (do not reuse stale default).
+    # Rotate STS from laptop-pushed aws-session.env across multi-hour upload+hash.
+    s3 = RefreshingBoto3S3(session_env if session_env.is_file() else None)
     plan = publish(
         args.stage_dir,
         dataset_id=args.dataset_id,
         purpose=args.purpose,
         profile="pretrain-tokens/v1",
         tokenizer=args.tokenizer,
-        s3=Boto3S3.default(),
+        s3=s3,
         created_at=created_at,
         hash_workers=args.hash_workers,
         copy_workers=args.copy_workers,

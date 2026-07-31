@@ -23,9 +23,6 @@ from mixlaw_common import DOMAINS, SEQ_LEN, allocate_sequences, load_mixtures
 
 def peak_tokens_from_mixtures(mixtures_json: Path, budget: int) -> dict[str, int]:
     mixes = load_mixtures(mixtures_json)
-    payload = json.loads(mixtures_json.read_text(encoding="utf-8"))
-    reuse = {int(r["id"]) for r in payload["mixtures"] if r.get("reuse_s3")}
-    mixes = [m for m in mixes if m.id not in reuse]
     total_seqs = budget // SEQ_LEN
     peak = {d: 0 for d in DOMAINS}
     for mix in mixes:
@@ -34,6 +31,19 @@ def peak_tokens_from_mixtures(mixtures_json: Path, budget: int) -> dict[str, int
             peak[d] = max(peak[d], counts[d] * SEQ_LEN)
     # Add 2% headroom for alignment / rounding.
     return {d: int(peak[d] * 1.02) for d in DOMAINS}
+
+
+def peak_tokens_from_recipe_files(
+    mixture_paths: list[Path],
+    budget: int,
+) -> dict[str, int]:
+    """Union peak demand across multiple mixture/recipe JSON files."""
+    peak = {d: 0 for d in DOMAINS}
+    for path in mixture_paths:
+        part = peak_tokens_from_mixtures(path, budget)
+        for d in DOMAINS:
+            peak[d] = max(peak[d], part[d])
+    return peak
 
 
 def select_shards(
@@ -117,6 +127,13 @@ def main() -> int:
                     help="e.g. s3://edullm-datasets/olmo100b/olmo-mix-1124-30b/tokenized")
     ap.add_argument("--out-dir", type=Path, required=True)
     ap.add_argument("--mixtures-json", type=Path, default=None)
+    ap.add_argument(
+        "--extra-mixtures-json",
+        type=Path,
+        nargs="*",
+        default=(),
+        help="Additional mixture JSON files for peak demand (union with --mixtures-json)",
+    )
     ap.add_argument("--budget-tokens", type=int, default=10_000_000_000)
     ap.add_argument("--peak-json", type=Path, default=None, help="Optional {domain: tokens}")
     ap.add_argument("--seed", type=int, default=6198)
@@ -128,7 +145,8 @@ def main() -> int:
     if args.peak_json:
         peak = {d: int(v) for d, v in json.loads(args.peak_json.read_text()).items()}
     elif args.mixtures_json:
-        peak = peak_tokens_from_mixtures(args.mixtures_json, args.budget_tokens)
+        paths = [args.mixtures_json, *list(args.extra_mixtures_json)]
+        peak = peak_tokens_from_recipe_files(paths, args.budget_tokens)
     else:
         raise SystemExit("provide --mixtures-json or --peak-json")
 
