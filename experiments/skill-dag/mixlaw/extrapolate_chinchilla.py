@@ -4,6 +4,11 @@
 Uses the step law L(s) = L_inf + A * s^(-alpha) from fit_mixing_law.py, fitted on
 the 6 in-run curve labels (ARC + MMLU). Chinchilla-optimal here means
 tokens/param = 20 on the published DataDecide non-embedding parameter count.
+
+Step-law fits use **in-run eval points only** (``task_loss.jsonl``, typically steps
+120–1440). The post-hoc ``task_loss_final.json`` at step 1451 is **not** appended:
+it uses a different eval protocol (full vs ``eval_subset_batches``) and often
+disagrees with the last in-run point (notably on ``mmlu_stem``).
 """
 from __future__ import annotations
 
@@ -21,19 +26,13 @@ DATA_NAME = "mixlaw_data.json"
 OUT_NAME = "mixlaw_chinchilla_extrapolated.json"
 
 
-def _curve_points(run: dict, pilot_steps: int) -> dict[str, list[tuple[int, float]]]:
+def _curve_points(run: dict) -> dict[str, list[tuple[int, float]]]:
+    """Per-family (step, loss) points from in-run ``task_loss.jsonl`` only."""
     per_label: dict[str, list[tuple[int, float]]] = {}
     for point in run["curve"]:
         step = int(point["step"])
         for label, value in point["task_loss_bpb"].items():
             per_label.setdefault(label, []).append((step, float(value)))
-
-    # Anchor the step law with the final pilot eval when available.
-    for label in CURVE_TASK_LOSS_LABELS:
-        if label in run["task_loss_labels"]:
-            per_label.setdefault(label, []).append(
-                (pilot_steps, float(run["task_loss_labels"][label]))
-            )
 
     per_family: dict[str, list[tuple[int, float]]] = {}
     for label, points in per_label.items():
@@ -58,16 +57,21 @@ def extrapolate_runs(data: dict, target_step: int, seed: int) -> dict:
     run_reports = []
 
     for run in data["runs"]:
-        per_family = _curve_points(run, pilot_steps)
+        per_family = _curve_points(run)
         families_out: dict[str, dict] = {}
         measured_curve = []
         chinchilla_curve = []
 
         for fam in curve_families:
             points = per_family.get(fam, [])
-            measured = float(run["task_loss_families"][fam])
+            if points:
+                measured = float(points[-1][1])
+                measured_step = int(points[-1][0])
+            else:
+                measured = float(run["task_loss_families"][fam])
+                measured_step = pilot_steps
             entry: dict = {
-                "measured_step": pilot_steps,
+                "measured_step": measured_step,
                 "measured": measured,
                 "curve_points": [{"step": s, "loss": v} for s, v in points],
             }

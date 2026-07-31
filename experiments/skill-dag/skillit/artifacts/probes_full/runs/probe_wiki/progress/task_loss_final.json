@@ -1,0 +1,25 @@
+{
+  "run_name": "probe_wiki",
+  "checkpoint": "/scratch/users/nzhao2/agent-runs/skillit-probes-20260729-112123/runs/probe_wiki/checkpoints/step1451-unsharded",
+  "metric": "task_loss_bpb",
+  "definition": "-log2 p(gold continuation | context) / utf8 bytes of continuation",
+  "max_batches": null,
+  "smoke": false,
+  "labels": {
+    "arc_challenge_val_rc_5shot_bpb": 1.7817987203598022,
+    "arc_easy_val_rc_5shot_bpb": 1.872114896774292,
+    "mmlu_stem_val_rc_5shot_bpb": 3.2642619609832764,
+    "mmlu_humanities_val_rc_5shot_bpb": 1.689490795135498,
+    "mmlu_social_sciences_val_rc_5shot_bpb": 1.7649062871932983,
+    "mmlu_other_val_rc_5shot_bpb": 2.537379026412964
+  },
+  "task_families": {
+    "arc_challenge": 1.7817987203598022,
+    "arc_easy": 1.872114896774292,
+    "mmlu_humanities": 1.689490795135498,
+    "mmlu_other": 2.537379026412964,
+    "mmlu_social_sciences": 1.7649062871932983,
+    "mmlu_stem": 3.2642619609832764
+  },
+  "macro_mean": 2.151658614476522
+}

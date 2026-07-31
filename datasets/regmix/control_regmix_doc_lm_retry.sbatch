@@ -22,9 +22,10 @@ set -Eeuo pipefail
 MAX_IN_FLIGHT="${MAX_IN_FLIGHT:-28}"
 ARRAY_BATCH_SIZE="${ARRAY_BATCH_SIZE:-28}"
 ARRAY_CONCURRENCY="${ARRAY_CONCURRENCY:-4}"
+GPU_CPUS_PER_TASK="${GPU_CPUS_PER_TASK:-4}"
 GPU_TIME_LIMIT="${GPU_TIME_LIMIT:-00:45:00}"
-GPU_MEM="${GPU_MEM:-80G}"
-BATCH_TOKENS="${BATCH_TOKENS:-8192}"
+GPU_MEM="${GPU_MEM:-64G}"
+BATCH_TOKENS="${BATCH_TOKENS:-4096}"
 POLL_SECS="${POLL_SECS:-30}"
 RUN_FINALIZE="${RUN_FINALIZE:-0}"
 GPU_JOB_NAME="${GPU_JOB_NAME:-regmix-lm-retry}"
@@ -39,7 +40,7 @@ FAILED_INDICES="${LM_ROOT}/failed_indices.txt"
 ACTIVE_DIR="${LM_ROOT}/active_batches"
 touch "${FAILED_INDICES}"
 
-record_array_failures() {
+record_array_outcomes() {
   local job_id="$1"
   local snapshot="$2"
   local -a chunks=()
@@ -51,15 +52,23 @@ record_array_failures() {
   while IFS='|' read -r task state _rest; do
     [[ "${task}" =~ ^${job_id}_([0-9]+)$ ]] || continue
     task_id="${BASH_REMATCH[1]}"
-    case "${state}" in
-      COMPLETED) continue ;;
-    esac
     chunk_idx="${chunks[${task_id}]:-}"
     [[ -n "${chunk_idx}" ]] || continue
-    if ! grep -qx "${chunk_idx}" "${FAILED_INDICES}" 2>/dev/null; then
-      printf '%s\n' "${chunk_idx}" >>"${FAILED_INDICES}"
-      echo "record failed chunk=${chunk_idx} task=${task} state=${state}"
-    fi
+    case "${state}" in
+      COMPLETED)
+        if grep -qx "${chunk_idx}" "${FAILED_INDICES}" 2>/dev/null; then
+          grep -vx "${chunk_idx}" "${FAILED_INDICES}" >"${FAILED_INDICES}.tmp" || true
+          mv "${FAILED_INDICES}.tmp" "${FAILED_INDICES}"
+          echo "clear failed deprioritize chunk=${chunk_idx} task=${task}"
+        fi
+        ;;
+      FAILED|TIMEOUT|OUT_OF_MEMORY*)
+        if ! grep -qx "${chunk_idx}" "${FAILED_INDICES}" 2>/dev/null; then
+          printf '%s\n' "${chunk_idx}" >>"${FAILED_INDICES}"
+          echo "deprioritize failed chunk=${chunk_idx} task=${task} state=${state}"
+        fi
+        ;;
+    esac
   done < <(sacct -j "${job_id}" --format=JobID,State -P -n 2>/dev/null)
 }
 
@@ -72,7 +81,7 @@ prune_arrays() {
       continue
     fi
     snapshot="$(cat "${f}")"
-    record_array_failures "${job_id}" "${snapshot}"
+    record_array_outcomes "${job_id}" "${snapshot}"
     echo "prune array job=${job_id}"
     rm -f "${f}" "${snapshot}"
   done
@@ -132,7 +141,7 @@ submit_array_batch() {
     --partition=gpu \
     --qos=gpu \
     --gpus-per-node=1 \
-    --cpus-per-task=8 \
+    --cpus-per-task="${GPU_CPUS_PER_TASK}" \
     --mem="${GPU_MEM}" \
     --time="${GPU_TIME_LIMIT}" \
     --array="0-${max_index}%${ARRAY_CONCURRENCY}" \
@@ -171,7 +180,7 @@ while true; do
   prune_arrays
   queued="$(gpu_tasks_queued)"
   n_active_arrays="$(active_array_count)"
-  echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) missing=${n_missing} failed_skipped=${n_failed} gpu_queued=${queued} active_arrays=${n_active_arrays}"
+  echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) missing=${n_missing} failed_deprioritized=${n_failed} gpu_queued=${queued} active_arrays=${n_active_arrays}"
 
   if [[ "${n_missing}" -eq 0 && "${queued}" -eq 0 && "${n_active_arrays}" -eq 0 ]]; then
     echo "pipeline complete"
@@ -208,7 +217,7 @@ cat >"${LM_ROOT}/retry_jobs.json" <<EOF
 {
   "pipeline_controller_job": "${SLURM_JOB_ID}",
   "n_missing_remaining": ${n_missing},
-  "n_failed_skipped": ${n_failed},
+  "n_failed_deprioritized": ${n_failed},
   "failed_indices": "${FAILED_INDICES}",
   "max_in_flight": ${MAX_IN_FLIGHT},
   "array_batch_size": ${ARRAY_BATCH_SIZE},

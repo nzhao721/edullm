@@ -15,6 +15,10 @@ FIT = json.loads((ROOT / "mixlaw_fit_chinchilla.json").read_text(encoding="utf-8
 LGB = json.loads((ROOT / "mixlaw_fit_lightgbm_chinchilla.json").read_text(encoding="utf-8"))
 MIX = json.loads((ROOT / "mixtures.json").read_text(encoding="utf-8"))
 
+# 370M validation surrogate picks (1-based near-opt index into fit JSON samples).
+ML_NEAR_OPT_INDEX = 3  # near-opt 4
+LGB_NEAR_OPT_INDEX = 7  # near-opt 8
+
 
 def wlist(d: dict[str, float]) -> list[float]:
     return [float(d[x]) for x in DOMAINS]
@@ -49,19 +53,19 @@ def main() -> None:
         rows.append(row)
 
     surrogates = [
-        (25, "ML-min1pct", "mixing-law", FIT["optimization"]["min1pct"]["weights"]),
+        (25, "ML-pilot_caps", "mixing-law", FIT["optimization"]["pilot_caps"]["weights"]),
         (
             26,
-            "ML-near-opt-3",
+            "ML-near-opt-4",
             "mixing-law",
-            FIT["near_optimal_balanced_samples"][2]["weights"],
+            FIT["near_optimal_balanced_samples"][ML_NEAR_OPT_INDEX]["weights"],
         ),
         (27, "LGB-min1pct", "lightgbm", LGB["optimization"]["min1pct"]["weights"]),
         (
             28,
-            "LGB-near-opt-5",
+            "LGB-near-opt-8",
             "lightgbm",
-            LGB["near_optimal_balanced_samples"][4]["weights"],
+            LGB["near_optimal_balanced_samples"][LGB_NEAR_OPT_INDEX]["weights"],
         ),
     ]
     for mid, name, source, weights in surrogates:

@@ -1,0 +1,1120 @@
+{
+  "domain_order": [
+    "dclm",
+    "arxiv",
+    "starcoder",
+    "pes2o",
+    "open-web-math",
+    "algebraic-stack",
+    "wiki"
+  ],
+  "curve_families": [
+    "arc_challenge",
+    "arc_easy",
+    "mmlu_humanities",
+    "mmlu_other",
+    "mmlu_social_sciences",
+    "mmlu_stem"
+  ],
+  "runs": [
+    {
+      "id": 0,
+      "tag": "dclm",
+      "run_name": "probe_dclm",
+      "weights": [],
+      "task_loss_labels": {
+        "arc_challenge_val_rc_5shot_bpb": 1.7216894626617432,
+        "arc_easy_val_rc_5shot_bpb": 1.9259731769561768,
+        "mmlu_stem_val_rc_5shot_bpb": 3.02428936958313,
+        "mmlu_humanities_val_rc_5shot_bpb": 1.5973093509674072,
+        "mmlu_social_sciences_val_rc_5shot_bpb": 1.6523553133010864,
+        "mmlu_other_val_rc_5shot_bpb": 2.3840558528900146
+      },
+      "task_loss_families": {
+        "arc_challenge": 1.7216894626617432,
+        "arc_easy": 1.9259731769561768,
+        "mmlu_humanities": 1.5973093509674072,
+        "mmlu_other": 2.3840558528900146,
+        "mmlu_social_sciences": 1.6523553133010864,
+        "mmlu_stem": 3.02428936958313
+      },
+      "macro_mean": 2.0509454210599265,
+      "curve": [
+        {
+          "step": 120,
+          "task_loss_bpb": {
+            "arc_challenge_val_rc_5shot_bpb": 1.933,
+            "arc_easy_val_rc_5shot_bpb": 2.873,
+            "mmlu_stem_val_rc_5shot_bpb": 2.739,
+            "mmlu_humanities_val_rc_5shot_bpb": 2.073,
+            "mmlu_social_sciences_val_rc_5shot_bpb": 2.093,
+            "mmlu_other_val_rc_5shot_bpb": 3.16
+          }
+        },
+        {
+          "step": 240,
+          "task_loss_bpb": {
+            "arc_challenge_val_rc_5shot_bpb": 1.77,
+            "arc_easy_val_rc_5shot_bpb": 2.658,
+            "mmlu_stem_val_rc_5shot_bpb": 2.467,
+            "mmlu_humanities_val_rc_5shot_bpb": 1.869,
+            "mmlu_social_sciences_val_rc_5shot_bpb": 1.94,
+            "mmlu_other_val_rc_5shot_bpb": 2.873
+          }
+        },
+        {
+          "step": 360,
+          "task_loss_bpb": {
+            "arc_challenge_val_rc_5shot_bpb": 1.721,
+            "arc_easy_val_rc_5shot_bpb": 2.401,
+            "mmlu_stem_val_rc_5shot_bpb": 2.323,
+            "mmlu_humanities_val_rc_5shot_bpb": 1.78,
+            "mmlu_social_sciences_val_rc_5shot_bpb": 1.816,
+            "mmlu_other_val_rc_5shot_bpb": 2.819
+          }
+        },
+        {
+          "step": 480,
+          "task_loss_bpb": {
+            "arc_challenge_val_rc_5shot_bpb": 1.576,
+            "arc_easy_val_rc_5shot_bpb": 2.341,
+            "mmlu_stem_val_rc_5shot_bpb": 2.261,
+            "mmlu_humanities_val_rc_5shot_bpb": 1.7,
+            "mmlu_social_sciences_val_rc_5shot_bpb": 1.704,
+            "mmlu_other_val_rc_5shot_bpb": 2.695
+          }
+        },
+        {
+          "step": 600,
+          "task_loss_bpb": {
+            "arc_challenge_val_rc_5shot_bpb": 1.569,
+            "arc_easy_val_rc_5shot_bpb": 2.386,
+            "mmlu_stem_val_rc_5shot_bpb": 2.156,
+            "mmlu_humanities_val_rc_5shot_bpb": 1.641,
+            "mmlu_social_sciences_val_rc_5shot_bpb": 1.637,
+            "mmlu_other_val_rc_5shot_bpb": 2.63
+          }
+        },
+        {
+          "step": 720,
+          "task_loss_bpb": {
+            "arc_challenge_val_rc_5shot_bpb": 1.508,
+            "arc_easy_val_rc_5shot_bpb": 2.321,
+            "mmlu_stem_val_rc_5shot_bpb": 2.104,
+            "mmlu_humanities_val_rc_5shot_bpb": 1.628,
+            "mmlu_social_sciences_val_rc_5shot_bpb": 1.566,
+            "mmlu_other_val_rc_5shot_bpb": 2.719
+          }
+        },
+        {
+          "step": 840,
+          "task_loss_bpb": {
+            "arc_challenge_val_rc_5shot_bpb": 1.451,
+            "arc_easy_val_rc_5shot_bpb": 2.283,
+            "mmlu_stem_val_rc_5shot_bpb": 2.027,
+            "mmlu_humanities_val_rc_5shot_bpb": 1.565,
+            "mmlu_social_sciences_val_rc_5shot_bpb": 1.582,
+            "mmlu_other_val_rc_5shot_bpb": 2.43
+          }
+        },
+        {
+          "step": 960,
+          "task_loss_bpb": {
+            "arc_challenge_val_rc_5shot_bpb": 1.509,
+            "arc_easy_val_rc_5shot_bpb": 2.261,
+            "mmlu_stem_val_rc_5shot_bpb": 2.079,
+            "mmlu_humanities_val_rc_5shot_bpb": 1.567,
+            "mmlu_social_sciences_val_rc_5shot_bpb": 1.58,
+            "mmlu_other_val_rc_5shot_bpb": 2.768
+          }
+        },
+        {
+          "step": 1080,
+          "task_loss_bpb": {
+            "arc_challenge_val_rc_5shot_bpb": 1.471,
+            "arc_easy_val_rc_5shot_bpb": 2.229,
+            "mmlu_stem_val_rc_5shot_bpb": 2.06,
+            "mmlu_humanities_val_rc_5shot_bpb": 1.603,
+            "mmlu_social_sciences_val_rc_5shot_bpb": 1.49,
+            "mmlu_other_val_rc_5shot_bpb": 2.991
+          }
+        },
+        {
+          "step": 1200,
+          "task_loss_bpb": {
+            "arc_challenge_val_rc_5shot_bpb": 1.428,
+            "arc_easy_val_rc_5shot_bpb": 2.189,
+            "mmlu_stem_val_rc_5shot_bpb": 2.038,
+            "mmlu_humanities_val_rc_5shot_bpb": 1.507,
+            "mmlu_social_sciences_val_rc_5shot_bpb": 1.51,
+            "mmlu_other_val_rc_5shot_bpb": 2.888
+          }
+        },
+        {
+          "step": 1320,
+          "task_loss_bpb": {
+            "arc_challenge_val_rc_5shot_bpb": 1.444,
+            "arc_easy_val_rc_5shot_bpb": 2.127,
+            "mmlu_stem_val_rc_5shot_bpb": 2.009,
+            "mmlu_humanities_val_rc_5shot_bpb": 1.561,
+            "mmlu_social_sciences_val_rc_5shot_bpb": 1.438,
+            "mmlu_other_val_rc_5shot_bpb": 2.865
+          }
+        },
+        {
+          "step": 1440,
+          "task_loss_bpb": {
+            "arc_challenge_val_rc_5shot_bpb": 1.356,
+            "arc_easy_val_rc_5shot_bpb": 2.041,
+            "mmlu_stem_val_rc_5shot_bpb": 2.004,
+            "mmlu_humanities_val_rc_5shot_bpb": 1.499,
+            "mmlu_social_sciences_val_rc_5shot_bpb": 1.42,
+            "mmlu_other_val_rc_5shot_bpb": 2.898
+          }
+        }
+      ]
+    },
+    {
+      "id": 1,
+      "tag": "arxiv",
+      "run_name": "probe_arxiv",
+      "weights": [],
+      "task_loss_labels": {
+        "arc_challenge_val_rc_5shot_bpb": 2.125091552734375,
+        "arc_easy_val_rc_5shot_bpb": 2.26350736618042,
+        "mmlu_stem_val_rc_5shot_bpb": 3.1950812339782715,
+        "mmlu_humanities_val_rc_5shot_bpb": 2.1953651905059814,
+        "mmlu_social_sciences_val_rc_5shot_bpb": 2.0737898349761963,
+        "mmlu_other_val_rc_5shot_bpb": 2.9636223316192627
+      },
+      "task_loss_families": {
+        "arc_challenge": 2.125091552734375,
+        "arc_easy": 2.26350736618042,
+        "mmlu_humanities": 2.1953651905059814,
+        "mmlu_other": 2.9636223316192627,
+        "mmlu_social_sciences": 2.0737898349761963,
+        "mmlu_stem": 3.1950812339782715
+      },
+      "macro_mean": 2.4694095849990845,
+      "curve": [
+        {
+          "step": 120,
+          "task_loss_bpb": {
+            "arc_challenge_val_rc_5shot_bpb": 2.126,
+            "arc_easy_val_rc_5shot_bpb": 3.145,
+            "mmlu_stem_val_rc_5shot_bpb": 2.949,
+            "mmlu_humanities_val_rc_5shot_bpb": 2.54,
+            "mmlu_social_sciences_val_rc_5shot_bpb": 2.54,
+            "mmlu_other_val_rc_5shot_bpb": 4.319
+          }
+        },
+        {
+          "step": 240,
+          "task_loss_bpb": {
+            "arc_challenge_val_rc_5shot_bpb": 2.105,
+            "arc_easy_val_rc_5shot_bpb": 3.123,
+            "mmlu_stem_val_rc_5shot_bpb": 2.808,
+            "mmlu_humanities_val_rc_5shot_bpb": 2.459,
+            "mmlu_social_sciences_val_rc_5shot_bpb": 2.503,
+            "mmlu_other_val_rc_5shot_bpb": 4.787
+          }
+        },
+        {
+          "step": 360,
+          "task_loss_bpb": {
+            "arc_challenge_val_rc_5shot_bpb": 2.061,
+            "arc_easy_val_rc_5shot_bpb": 3.058,
+            "mmlu_stem_val_rc_5shot_bpb": 2.602,
+            "mmlu_humanities_val_rc_5shot_bpb": 2.426,
+            "mmlu_social_sciences_val_rc_5shot_bpb": 2.474,
+            "mmlu_other_val_rc_5shot_bpb": 4.531
+          }
+        },
+        {
+          "step": 480,
+          "task_loss_bpb": {
+            "arc_challenge_val_rc_5shot_bpb": 1.854,
+            "arc_easy_val_rc_5shot_bpb": 2.712,
+            "mmlu_stem_val_rc_5shot_bpb": 2.439,
+            "mmlu_humanities_val_rc_5shot_bpb": 2.218,
+            "mmlu_social_sciences_val_rc_5shot_bpb": 2.288,
+            "mmlu_other_val_rc_5shot_bpb": 4.09
+          }
+        },
+        {
+          "step": 600,
+          "task_loss_bpb": {
+            "arc_challenge_val_rc_5shot_bpb": 1.861,
+            "arc_easy_val_rc_5shot_bpb": 2.715,
+            "mmlu_stem_val_rc_5shot_bpb": 2.362,
+            "mmlu_humanities_val_rc_5shot_bpb": 2.19,
+            "mmlu_social_sciences_val_rc_5shot_bpb": 2.22,
+            "mmlu_other_val_rc_5shot_bpb": 3.921
+          }
+        },
+        {
+          "step": 720,
+          "task_loss_bpb": {
+            "arc_challenge_val_rc_5shot_bpb": 1.778,
+            "arc_easy_val_rc_5shot_bpb": 2.623,
+            "mmlu_stem_val_rc_5shot_bpb": 2.373,
+            "mmlu_humanities_val_rc_5shot_bpb": 2.146,
+            "mmlu_social_sciences_val_rc_5shot_bpb": 2.182,
+            "mmlu_other_val_rc_5shot_bpb": 4.1
+          }
+        },
+        {
+          "step": 840,
+          "task_loss_bpb": {
+            "arc_challenge_val_rc_5shot_bpb": 1.717,
+            "arc_easy_val_rc_5shot_bpb": 2.46,
+            "mmlu_stem_val_rc_5shot_bpb": 2.288,
+            "mmlu_humanities_val_rc_5shot_bpb": 2.102,
+            "mmlu_social_sciences_val_rc_5shot_bpb": 2.183,
+            "mmlu_other_val_rc_5shot_bpb": 3.944
+          }
+        },
+        {
+          "step": 960,
+          "task_loss_bpb": {
+            "arc_challenge_val_rc_5shot_bpb": 1.814,
+            "arc_easy_val_rc_5shot_bpb": 2.573,
+            "mmlu_stem_val_rc_5shot_bpb": 2.286,
+            "mmlu_humanities_val_rc_5shot_bpb": 2.021,
+            "mmlu_social_sciences_val_rc_5shot_bpb": 2.138,
+            "mmlu_other_val_rc_5shot_bpb": 3.862
+          }
+        },
+        {
+          "step": 1080,
+          "task_loss_bpb": {
+            "arc_challenge_val_rc_5shot_bpb": 1.797,
+            "arc_easy_val_rc_5shot_bpb": 2.541,
+            "mmlu_stem_val_rc_5shot_bpb": 2.29,
+            "mmlu_humanities_val_rc_5shot_bpb": 2.095,
+            "mmlu_social_sciences_val_rc_5shot_bpb": 2.126,
+            "mmlu_other_val_rc_5shot_bpb": 3.637
+          }
+        },
+        {
+          "step": 1200,
+          "task_loss_bpb": {
+            "arc_challenge_val_rc_5shot_bpb": 1.781,
+            "arc_easy_val_rc_5shot_bpb": 2.556,
+            "mmlu_stem_val_rc_5shot_bpb": 2.202,
+            "mmlu_humanities_val_rc_5shot_bpb": 1.956,
+            "mmlu_social_sciences_val_rc_5shot_bpb": 2.234,
+            "mmlu_other_val_rc_5shot_bpb": 3.881
+          }
+        },
+        {
+          "step": 1320,
+          "task_loss_bpb": {
+            "arc_challenge_val_rc_5shot_bpb": 1.759,
+            "arc_easy_val_rc_5shot_bpb": 2.465,
+            "mmlu_stem_val_rc_5shot_bpb": 2.295,
+            "mmlu_humanities_val_rc_5shot_bpb": 2.041,
+            "mmlu_social_sciences_val_rc_5shot_bpb": 2.078,
+            "mmlu_other_val_rc_5shot_bpb": 3.885
+          }
+        },
+        {
+          "step": 1440,
+          "task_loss_bpb": {
+            "arc_challenge_val_rc_5shot_bpb": 1.697,
+            "arc_easy_val_rc_5shot_bpb": 2.442,
+            "mmlu_stem_val_rc_5shot_bpb": 2.225,
+            "mmlu_humanities_val_rc_5shot_bpb": 1.983,
+            "mmlu_social_sciences_val_rc_5shot_bpb": 2.061,
+            "mmlu_other_val_rc_5shot_bpb": 3.515
+          }
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "tag": "starcoder",
+      "run_name": "probe_starcoder",
+      "weights": [],
+      "task_loss_labels": {
+        "arc_challenge_val_rc_5shot_bpb": 2.245858669281006,
+        "arc_easy_val_rc_5shot_bpb": 2.464007616043091,
+        "mmlu_stem_val_rc_5shot_bpb": 3.358351945877075,
+        "mmlu_humanities_val_rc_5shot_bpb": 1.9358636140823364,
+        "mmlu_social_sciences_val_rc_5shot_bpb": 2.1453657150268555,
+        "mmlu_other_val_rc_5shot_bpb": 2.9888644218444824
+      },
+      "task_loss_families": {
+        "arc_challenge": 2.245858669281006,
+        "arc_easy": 2.464007616043091,
+        "mmlu_humanities": 1.9358636140823364,
+        "mmlu_other": 2.9888644218444824,
+        "mmlu_social_sciences": 2.1453657150268555,
+        "mmlu_stem": 3.358351945877075
+      },
+      "macro_mean": 2.523051997025808,
+      "curve": [
+        {
+          "step": 120,
+          "task_loss_bpb": {
+            "arc_challenge_val_rc_5shot_bpb": 2.25,
+            "arc_easy_val_rc_5shot_bpb": 3.255,
+            "mmlu_stem_val_rc_5shot_bpb": 3.069,
+            "mmlu_humanities_val_rc_5shot_bpb": 2.749,
+            "mmlu_social_sciences_val_rc_5shot_bpb": 2.594,
+            "mmlu_other_val_rc_5shot_bpb": 4.484
+          }
+        },
+        {
+          "step": 240,
+          "task_loss_bpb": {
+            "arc_challenge_val_rc_5shot_bpb": 2.183,
+            "arc_easy_val_rc_5shot_bpb": 3.29,
+            "mmlu_stem_val_rc_5shot_bpb": 2.938,
+            "mmlu_humanities_val_rc_5shot_bpb": 2.578,
+            "mmlu_social_sciences_val_rc_5shot_bpb": 2.503,
+            "mmlu_other_val_rc_5shot_bpb": 3.838
+          }
+        },
+        {
+          "step": 360,
+          "task_loss_bpb": {
+            "arc_challenge_val_rc_5shot_bpb": 2.029,
+            "arc_easy_val_rc_5shot_bpb": 3.166,
+            "mmlu_stem_val_rc_5shot_bpb": 2.801,
+            "mmlu_humanities_val_rc_5shot_bpb": 2.481,
+            "mmlu_social_sciences_val_rc_5shot_bpb": 2.344,
+            "mmlu_other_val_rc_5shot_bpb": 3.539
+          }
+        },
+        {
+          "step": 480,
+          "task_loss_bpb": {
+            "arc_challenge_val_rc_5shot_bpb": 2.053,
+            "arc_easy_val_rc_5shot_bpb": 3.131,
+            "mmlu_stem_val_rc_5shot_bpb": 2.696,
+            "mmlu_humanities_val_rc_5shot_bpb": 2.382,
+            "mmlu_social_sciences_val_rc_5shot_bpb": 2.312,
+            "mmlu_other_val_rc_5shot_bpb": 3.377
+          }
+        },
+        {
+          "step": 600,
+          "task_loss_bpb": {
+            "arc_challenge_val_rc_5shot_bpb": 2.041,
+            "arc_easy_val_rc_5shot_bpb": 3.1,
+            "mmlu_stem_val_rc_5shot_bpb": 2.658,
+            "mmlu_humanities_val_rc_5shot_bpb": 2.333,
+            "mmlu_social_sciences_val_rc_5shot_bpb": 2.248,
+            "mmlu_other_val_rc_5shot_bpb": 3.454
+          }
+        },
+        {
+          "step": 720,
+          "task_loss_bpb": {
+            "arc_challenge_val_rc_5shot_bpb": 1.987,
+            "arc_easy_val_rc_5shot_bpb": 3.047,
+            "mmlu_stem_val_rc_5shot_bpb": 2.618,
+            "mmlu_humanities_val_rc_5shot_bpb": 2.165,
+            "mmlu_social_sciences_val_rc_5shot_bpb": 2.154,
+            "mmlu_other_val_rc_5shot_bpb": 3.634
+          }
+        },
+        {
+          "step": 840,
+          "task_loss_bpb": {
+            "arc_challenge_val_rc_5shot_bpb": 2.019,
+            "arc_easy_val_rc_5shot_bpb": 3.071,
+            "mmlu_stem_val_rc_5shot_bpb": 2.545,
+            "mmlu_humanities_val_rc_5shot_bpb": 2.242,
+            "mmlu_social_sciences_val_rc_5shot_bpb": 2.197,
+            "mmlu_other_val_rc_5shot_bpb": 3.314
+          }
+        },
+        {
+          "step": 960,
+          "task_loss_bpb": {
+            "arc_challenge_val_rc_5shot_bpb": 1.934,
+            "arc_easy_val_rc_5shot_bpb": 2.945,
+            "mmlu_stem_val_rc_5shot_bpb": 2.549,
+            "mmlu_humanities_val_rc_5shot_bpb": 2.249,
+            "mmlu_social_sciences_val_rc_5shot_bpb": 2.195,
+            "mmlu_other_val_rc_5shot_bpb": 3.588
+          }
+        },
+        {
+          "step": 1080,
+          "task_loss_bpb": {
+            "arc_challenge_val_rc_5shot_bpb": 1.889,
+            "arc_easy_val_rc_5shot_bpb": 2.911,
+            "mmlu_stem_val_rc_5shot_bpb": 2.522,
+            "mmlu_humanities_val_rc_5shot_bpb": 2.155,
+            "mmlu_social_sciences_val_rc_5shot_bpb": 2.123,
+            "mmlu_other_val_rc_5shot_bpb": 3.221
+          }
+        },
+        {
+          "step": 1200,
+          "task_loss_bpb": {
+            "arc_challenge_val_rc_5shot_bpb": 1.828,
+            "arc_easy_val_rc_5shot_bpb": 2.958,
+            "mmlu_stem_val_rc_5shot_bpb": 2.505,
+            "mmlu_humanities_val_rc_5shot_bpb": 2.146,
+            "mmlu_social_sciences_val_rc_5shot_bpb": 2.085,
+            "mmlu_other_val_rc_5shot_bpb": 3.441
+          }
+        },
+        {
+          "step": 1320,
+          "task_loss_bpb": {
+            "arc_challenge_val_rc_5shot_bpb": 1.879,
+            "arc_easy_val_rc_5shot_bpb": 3.017,
+            "mmlu_stem_val_rc_5shot_bpb": 2.56,
+            "mmlu_humanities_val_rc_5shot_bpb": 2.171,
+            "mmlu_social_sciences_val_rc_5shot_bpb": 2.09,
+            "mmlu_other_val_rc_5shot_bpb": 3.179
+          }
+        },
+        {
+          "step": 1440,
+          "task_loss_bpb": {
+            "arc_challenge_val_rc_5shot_bpb": 1.847,
+            "arc_easy_val_rc_5shot_bpb": 2.841,
+            "mmlu_stem_val_rc_5shot_bpb": 2.559,
+            "mmlu_humanities_val_rc_5shot_bpb": 2.105,
+            "mmlu_social_sciences_val_rc_5shot_bpb": 2.08,
+            "mmlu_other_val_rc_5shot_bpb": 3.136
+          }
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "tag": "pes2o",
+      "run_name": "probe_pes2o",
+      "weights": [],
+      "task_loss_labels": {
+        "arc_challenge_val_rc_5shot_bpb": 1.7925506830215454,
+        "arc_easy_val_rc_5shot_bpb": 1.9426740407943726,
+        "mmlu_stem_val_rc_5shot_bpb": 3.0034377574920654,
+        "mmlu_humanities_val_rc_5shot_bpb": 1.8408693075180054,
+        "mmlu_social_sciences_val_rc_5shot_bpb": 1.7726956605911255,
+        "mmlu_other_val_rc_5shot_bpb": 2.388127088546753
+      },
+      "task_loss_families": {
+        "arc_challenge": 1.7925506830215454,
+        "arc_easy": 1.9426740407943726,
+        "mmlu_humanities": 1.8408693075180054,
+        "mmlu_other": 2.388127088546753,
+        "mmlu_social_sciences": 1.7726956605911255,
+        "mmlu_stem": 3.0034377574920654
+      },
+      "macro_mean": 2.123392422993978,
+      "curve": [
+        {
+          "step": 120,
+          "task_loss_bpb": {
+            "arc_challenge_val_rc_5shot_bpb": 1.753,
+            "arc_easy_val_rc_5shot_bpb": 2.619,
+            "mmlu_stem_val_rc_5shot_bpb": 2.606,
+            "mmlu_humanities_val_rc_5shot_bpb": 2.372,
+            "mmlu_social_sciences_val_rc_5shot_bpb": 2.365,
+            "mmlu_other_val_rc_5shot_bpb": 3.343
+          }
+        },
+        {
+          "step": 240,
+          "task_loss_bpb": {
+            "arc_challenge_val_rc_5shot_bpb": 1.853,
+            "arc_easy_val_rc_5shot_bpb": 2.641,
+            "mmlu_stem_val_rc_5shot_bpb": 2.457,
+            "mmlu_humanities_val_rc_5shot_bpb": 2.128,
+            "mmlu_social_sciences_val_rc_5shot_bpb": 2.127,
+            "mmlu_other_val_rc_5shot_bpb": 2.933
+          }
+        },
+        {
+          "step": 360,
+          "task_loss_bpb": {
+            "arc_challenge_val_rc_5shot_bpb": 1.636,
+            "arc_easy_val_rc_5shot_bpb": 2.395,
+            "mmlu_stem_val_rc_5shot_bpb": 2.334,
+            "mmlu_humanities_val_rc_5shot_bpb": 1.941,
+            "mmlu_social_sciences_val_rc_5shot_bpb": 2.049,
+            "mmlu_other_val_rc_5shot_bpb": 2.919
+          }
+        },
+        {
+          "step": 480,
+          "task_loss_bpb": {
+            "arc_challenge_val_rc_5shot_bpb": 1.571,
+            "arc_easy_val_rc_5shot_bpb": 2.252,
+            "mmlu_stem_val_rc_5shot_bpb": 2.127,
+            "mmlu_humanities_val_rc_5shot_bpb": 1.903,
+            "mmlu_social_sciences_val_rc_5shot_bpb": 2.003,
+            "mmlu_other_val_rc_5shot_bpb": 2.627
+          }
+        },
+        {
+          "step": 600,
+          "task_loss_bpb": {
+            "arc_challenge_val_rc_5shot_bpb": 1.538,
+            "arc_easy_val_rc_5shot_bpb": 2.136,
+            "mmlu_stem_val_rc_5shot_bpb": 2.142,
+            "mmlu_humanities_val_rc_5shot_bpb": 1.886,
+            "mmlu_social_sciences_val_rc_5shot_bpb": 1.981,
+            "mmlu_other_val_rc_5shot_bpb": 3.159
+          }
+        },
+        {
+          "step": 720,
+          "task_loss_bpb": {
+            "arc_challenge_val_rc_5shot_bpb": 1.528,
+            "arc_easy_val_rc_5shot_bpb": 2.153,
+            "mmlu_stem_val_rc_5shot_bpb": 2.095,
+            "mmlu_humanities_val_rc_5shot_bpb": 1.92,
+            "mmlu_social_sciences_val_rc_5shot_bpb": 1.97,
+            "mmlu_other_val_rc_5shot_bpb": 3.061
+          }
+        },
+        {
+          "step": 840,
+          "task_loss_bpb": {
+            "arc_challenge_val_rc_5shot_bpb": 1.55,
+            "arc_easy_val_rc_5shot_bpb": 2.194,
+            "mmlu_stem_val_rc_5shot_bpb": 2.076,
+            "mmlu_humanities_val_rc_5shot_bpb": 1.854,
+            "mmlu_social_sciences_val_rc_5shot_bpb": 1.947,
+            "mmlu_other_val_rc_5shot_bpb": 3.265
+          }
+        },
+        {
+          "step": 960,
+          "task_loss_bpb": {
+            "arc_challenge_val_rc_5shot_bpb": 1.456,
+            "arc_easy_val_rc_5shot_bpb": 2.141,
+            "mmlu_stem_val_rc_5shot_bpb": 2.087,
+            "mmlu_humanities_val_rc_5shot_bpb": 1.877,
+            "mmlu_social_sciences_val_rc_5shot_bpb": 1.911,
+            "mmlu_other_val_rc_5shot_bpb": 2.899
+          }
+        },
+        {
+          "step": 1080,
+          "task_loss_bpb": {
+            "arc_challenge_val_rc_5shot_bpb": 1.521,
+            "arc_easy_val_rc_5shot_bpb": 2.174,
+            "mmlu_stem_val_rc_5shot_bpb": 2.111,
+            "mmlu_humanities_val_rc_5shot_bpb": 1.852,
+            "mmlu_social_sciences_val_rc_5shot_bpb": 1.875,
+            "mmlu_other_val_rc_5shot_bpb": 2.942
+          }
+        },
+        {
+          "step": 1200,
+          "task_loss_bpb": {
+            "arc_challenge_val_rc_5shot_bpb": 1.506,
+            "arc_easy_val_rc_5shot_bpb": 2.21,
+            "mmlu_stem_val_rc_5shot_bpb": 2.067,
+            "mmlu_humanities_val_rc_5shot_bpb": 1.829,
+            "mmlu_social_sciences_val_rc_5shot_bpb": 1.939,
+            "mmlu_other_val_rc_5shot_bpb": 2.738
+          }
+        },
+        {
+          "step": 1320,
+          "task_loss_bpb": {
+            "arc_challenge_val_rc_5shot_bpb": 1.447,
+            "arc_easy_val_rc_5shot_bpb": 2.174,
+            "mmlu_stem_val_rc_5shot_bpb": 2.033,
+            "mmlu_humanities_val_rc_5shot_bpb": 1.915,
+            "mmlu_social_sciences_val_rc_5shot_bpb": 1.926,
+            "mmlu_other_val_rc_5shot_bpb": 2.94
+          }
+        },
+        {
+          "step": 1440,
+          "task_loss_bpb": {
+            "arc_challenge_val_rc_5shot_bpb": 1.401,
+            "arc_easy_val_rc_5shot_bpb": 2.055,
+            "mmlu_stem_val_rc_5shot_bpb": 1.982,
+            "mmlu_humanities_val_rc_5shot_bpb": 1.807,
+            "mmlu_social_sciences_val_rc_5shot_bpb": 1.857,
+            "mmlu_other_val_rc_5shot_bpb": 2.493
+          }
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "tag": "open-web-math",
+      "run_name": "probe_open-web-math",
+      "weights": [],
+      "task_loss_labels": {
+        "arc_challenge_val_rc_5shot_bpb": 2.0623955726623535,
+        "arc_easy_val_rc_5shot_bpb": 2.2669477462768555,
+        "mmlu_stem_val_rc_5shot_bpb": 3.1540839672088623,
+        "mmlu_humanities_val_rc_5shot_bpb": 2.0737361907958984,
+        "mmlu_social_sciences_val_rc_5shot_bpb": 2.082935333251953,
+        "mmlu_other_val_rc_5shot_bpb": 2.9355854988098145
+      },
+      "task_loss_families": {
+        "arc_challenge": 2.0623955726623535,
+        "arc_easy": 2.2669477462768555,
+        "mmlu_humanities": 2.0737361907958984,
+        "mmlu_other": 2.9355854988098145,
+        "mmlu_social_sciences": 2.082935333251953,
+        "mmlu_stem": 3.1540839672088623
+      },
+      "macro_mean": 2.429280718167623,
+      "curve": [
+        {
+          "step": 120,
+          "task_loss_bpb": {
+            "arc_challenge_val_rc_5shot_bpb": 2.09,
+            "arc_easy_val_rc_5shot_bpb": 3.286,
+            "mmlu_stem_val_rc_5shot_bpb": 2.836,
+            "mmlu_humanities_val_rc_5shot_bpb": 2.528,
+            "mmlu_social_sciences_val_rc_5shot_bpb": 2.6,
+            "mmlu_other_val_rc_5shot_bpb": 4.101
+          }
+        },
+        {
+          "step": 240,
+          "task_loss_bpb": {
+            "arc_challenge_val_rc_5shot_bpb": 2.026,
+            "arc_easy_val_rc_5shot_bpb": 3.104,
+            "mmlu_stem_val_rc_5shot_bpb": 2.541,
+            "mmlu_humanities_val_rc_5shot_bpb": 2.44,
+            "mmlu_social_sciences_val_rc_5shot_bpb": 2.5,
+            "mmlu_other_val_rc_5shot_bpb": 4.06
+          }
+        },
+        {
+          "step": 360,
+          "task_loss_bpb": {
+            "arc_challenge_val_rc_5shot_bpb": 2.049,
+            "arc_easy_val_rc_5shot_bpb": 2.866,
+            "mmlu_stem_val_rc_5shot_bpb": 2.538,
+            "mmlu_humanities_val_rc_5shot_bpb": 2.315,
+            "mmlu_social_sciences_val_rc_5shot_bpb": 2.438,
+            "mmlu_other_val_rc_5shot_bpb": 3.912
+          }
+        },
+        {
+          "step": 480,
+          "task_loss_bpb": {
+            "arc_challenge_val_rc_5shot_bpb": 1.926,
+            "arc_easy_val_rc_5shot_bpb": 2.864,
+            "mmlu_stem_val_rc_5shot_bpb": 2.619,
+            "mmlu_humanities_val_rc_5shot_bpb": 2.349,
+            "mmlu_social_sciences_val_rc_5shot_bpb": 2.469,
+            "mmlu_other_val_rc_5shot_bpb": 4.318
+          }
+        },
+        {
+          "step": 600,
+          "task_loss_bpb": {
+            "arc_challenge_val_rc_5shot_bpb": 1.846,
+            "arc_easy_val_rc_5shot_bpb": 2.798,
+            "mmlu_stem_val_rc_5shot_bpb": 2.517,
+            "mmlu_humanities_val_rc_5shot_bpb": 2.246,
+            "mmlu_social_sciences_val_rc_5shot_bpb": 2.314,
+            "mmlu_other_val_rc_5shot_bpb": 4.049
+          }
+        },
+        {
+          "step": 720,
+          "task_loss_bpb": {
+            "arc_challenge_val_rc_5shot_bpb": 1.86,
+            "arc_easy_val_rc_5shot_bpb": 2.74,
+            "mmlu_stem_val_rc_5shot_bpb": 2.417,
+            "mmlu_humanities_val_rc_5shot_bpb": 2.226,
+            "mmlu_social_sciences_val_rc_5shot_bpb": 2.349,
+            "mmlu_other_val_rc_5shot_bpb": 3.773
+          }
+        },
+        {
+          "step": 840,
+          "task_loss_bpb": {
+            "arc_challenge_val_rc_5shot_bpb": 1.883,
+            "arc_easy_val_rc_5shot_bpb": 2.7,
+            "mmlu_stem_val_rc_5shot_bpb": 2.417,
+            "mmlu_humanities_val_rc_5shot_bpb": 2.208,
+            "mmlu_social_sciences_val_rc_5shot_bpb": 2.267,
+            "mmlu_other_val_rc_5shot_bpb": 3.743
+          }
+        },
+        {
+          "step": 960,
+          "task_loss_bpb": {
+            "arc_challenge_val_rc_5shot_bpb": 1.766,
+            "arc_easy_val_rc_5shot_bpb": 2.692,
+            "mmlu_stem_val_rc_5shot_bpb": 2.365,
+            "mmlu_humanities_val_rc_5shot_bpb": 2.159,
+            "mmlu_social_sciences_val_rc_5shot_bpb": 2.208,
+            "mmlu_other_val_rc_5shot_bpb": 3.66
+          }
+        },
+        {
+          "step": 1080,
+          "task_loss_bpb": {
+            "arc_challenge_val_rc_5shot_bpb": 1.803,
+            "arc_easy_val_rc_5shot_bpb": 2.724,
+            "mmlu_stem_val_rc_5shot_bpb": 2.366,
+            "mmlu_humanities_val_rc_5shot_bpb": 2.085,
+            "mmlu_social_sciences_val_rc_5shot_bpb": 2.165,
+            "mmlu_other_val_rc_5shot_bpb": 3.61
+          }
+        },
+        {
+          "step": 1200,
+          "task_loss_bpb": {
+            "arc_challenge_val_rc_5shot_bpb": 1.721,
+            "arc_easy_val_rc_5shot_bpb": 2.52,
+            "mmlu_stem_val_rc_5shot_bpb": 2.325,
+            "mmlu_humanities_val_rc_5shot_bpb": 2.125,
+            "mmlu_social_sciences_val_rc_5shot_bpb": 2.12,
+            "mmlu_other_val_rc_5shot_bpb": 3.606
+          }
+        },
+        {
+          "step": 1320,
+          "task_loss_bpb": {
+            "arc_challenge_val_rc_5shot_bpb": 1.709,
+            "arc_easy_val_rc_5shot_bpb": 2.56,
+            "mmlu_stem_val_rc_5shot_bpb": 2.287,
+            "mmlu_humanities_val_rc_5shot_bpb": 2.123,
+            "mmlu_social_sciences_val_rc_5shot_bpb": 2.151,
+            "mmlu_other_val_rc_5shot_bpb": 3.51
+          }
+        },
+        {
+          "step": 1440,
+          "task_loss_bpb": {
+            "arc_challenge_val_rc_5shot_bpb": 1.713,
+            "arc_easy_val_rc_5shot_bpb": 2.493,
+            "mmlu_stem_val_rc_5shot_bpb": 2.179,
+            "mmlu_humanities_val_rc_5shot_bpb": 2.107,
+            "mmlu_social_sciences_val_rc_5shot_bpb": 2.038,
+            "mmlu_other_val_rc_5shot_bpb": 3.412
+          }
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "tag": "algebraic-stack",
+      "run_name": "probe_algebraic-stack",
+      "weights": [],
+      "task_loss_labels": {
+        "arc_challenge_val_rc_5shot_bpb": 2.129324197769165,
+        "arc_easy_val_rc_5shot_bpb": 2.3036458492279053,
+        "mmlu_stem_val_rc_5shot_bpb": 3.282235622406006,
+        "mmlu_humanities_val_rc_5shot_bpb": 2.2284703254699707,
+        "mmlu_social_sciences_val_rc_5shot_bpb": 2.0504915714263916,
+        "mmlu_other_val_rc_5shot_bpb": 2.9986796379089355
+      },
+      "task_loss_families": {
+        "arc_challenge": 2.129324197769165,
+        "arc_easy": 2.3036458492279053,
+        "mmlu_humanities": 2.2284703254699707,
+        "mmlu_other": 2.9986796379089355,
+        "mmlu_social_sciences": 2.0504915714263916,
+        "mmlu_stem": 3.282235622406006
+      },
+      "macro_mean": 2.4988078673680625,
+      "curve": [
+        {
+          "step": 120,
+          "task_loss_bpb": {
+            "arc_challenge_val_rc_5shot_bpb": 2.039,
+            "arc_easy_val_rc_5shot_bpb": 3.02,
+            "mmlu_stem_val_rc_5shot_bpb": 2.935,
+            "mmlu_humanities_val_rc_5shot_bpb": 2.508,
+            "mmlu_social_sciences_val_rc_5shot_bpb": 2.542,
+            "mmlu_other_val_rc_5shot_bpb": 4.672
+          }
+        },
+        {
+          "step": 240,
+          "task_loss_bpb": {
+            "arc_challenge_val_rc_5shot_bpb": 2.038,
+            "arc_easy_val_rc_5shot_bpb": 3.042,
+            "mmlu_stem_val_rc_5shot_bpb": 2.759,
+            "mmlu_humanities_val_rc_5shot_bpb": 2.503,
+            "mmlu_social_sciences_val_rc_5shot_bpb": 2.538,
+            "mmlu_other_val_rc_5shot_bpb": 4.437
+          }
+        },
+        {
+          "step": 360,
+          "task_loss_bpb": {
+            "arc_challenge_val_rc_5shot_bpb": 1.913,
+            "arc_easy_val_rc_5shot_bpb": 2.919,
+            "mmlu_stem_val_rc_5shot_bpb": 2.458,
+            "mmlu_humanities_val_rc_5shot_bpb": 2.382,
+            "mmlu_social_sciences_val_rc_5shot_bpb": 2.362,
+            "mmlu_other_val_rc_5shot_bpb": 4.112
+          }
+        },
+        {
+          "step": 480,
+          "task_loss_bpb": {
+            "arc_challenge_val_rc_5shot_bpb": 1.898,
+            "arc_easy_val_rc_5shot_bpb": 2.68,
+            "mmlu_stem_val_rc_5shot_bpb": 2.494,
+            "mmlu_humanities_val_rc_5shot_bpb": 2.32,
+            "mmlu_social_sciences_val_rc_5shot_bpb": 2.337,
+            "mmlu_other_val_rc_5shot_bpb": 4.042
+          }
+        },
+        {
+          "step": 600,
+          "task_loss_bpb": {
+            "arc_challenge_val_rc_5shot_bpb": 1.819,
+            "arc_easy_val_rc_5shot_bpb": 2.565,
+            "mmlu_stem_val_rc_5shot_bpb": 2.349,
+            "mmlu_humanities_val_rc_5shot_bpb": 2.204,
+            "mmlu_social_sciences_val_rc_5shot_bpb": 2.26,
+            "mmlu_other_val_rc_5shot_bpb": 4.005
+          }
+        },
+        {
+          "step": 720,
+          "task_loss_bpb": {
+            "arc_challenge_val_rc_5shot_bpb": 1.833,
+            "arc_easy_val_rc_5shot_bpb": 2.55,
+            "mmlu_stem_val_rc_5shot_bpb": 2.349,
+            "mmlu_humanities_val_rc_5shot_bpb": 2.233,
+            "mmlu_social_sciences_val_rc_5shot_bpb": 2.135,
+            "mmlu_other_val_rc_5shot_bpb": 4.251
+          }
+        },
+        {
+          "step": 840,
+          "task_loss_bpb": {
+            "arc_challenge_val_rc_5shot_bpb": 1.737,
+            "arc_easy_val_rc_5shot_bpb": 2.46,
+            "mmlu_stem_val_rc_5shot_bpb": 2.315,
+            "mmlu_humanities_val_rc_5shot_bpb": 2.13,
+            "mmlu_social_sciences_val_rc_5shot_bpb": 2.172,
+            "mmlu_other_val_rc_5shot_bpb": 4.247
+          }
+        },
+        {
+          "step": 960,
+          "task_loss_bpb": {
+            "arc_challenge_val_rc_5shot_bpb": 1.694,
+            "arc_easy_val_rc_5shot_bpb": 2.564,
+            "mmlu_stem_val_rc_5shot_bpb": 2.208,
+            "mmlu_humanities_val_rc_5shot_bpb": 2.109,
+            "mmlu_social_sciences_val_rc_5shot_bpb": 2.146,
+            "mmlu_other_val_rc_5shot_bpb": 3.948
+          }
+        },
+        {
+          "step": 1080,
+          "task_loss_bpb": {
+            "arc_challenge_val_rc_5shot_bpb": 1.713,
+            "arc_easy_val_rc_5shot_bpb": 2.553,
+            "mmlu_stem_val_rc_5shot_bpb": 2.361,
+            "mmlu_humanities_val_rc_5shot_bpb": 2.117,
+            "mmlu_social_sciences_val_rc_5shot_bpb": 2.174,
+            "mmlu_other_val_rc_5shot_bpb": 4.138
+          }
+        },
+        {
+          "step": 1200,
+          "task_loss_bpb": {
+            "arc_challenge_val_rc_5shot_bpb": 1.746,
+            "arc_easy_val_rc_5shot_bpb": 2.448,
+            "mmlu_stem_val_rc_5shot_bpb": 2.272,
+            "mmlu_humanities_val_rc_5shot_bpb": 2.106,
+            "mmlu_social_sciences_val_rc_5shot_bpb": 2.16,
+            "mmlu_other_val_rc_5shot_bpb": 3.895
+          }
+        },
+        {
+          "step": 1320,
+          "task_loss_bpb": {
+            "arc_challenge_val_rc_5shot_bpb": 1.704,
+            "arc_easy_val_rc_5shot_bpb": 2.442,
+            "mmlu_stem_val_rc_5shot_bpb": 2.249,
+            "mmlu_humanities_val_rc_5shot_bpb": 2.016,
+            "mmlu_social_sciences_val_rc_5shot_bpb": 2.149,
+            "mmlu_other_val_rc_5shot_bpb": 3.779
+          }
+        },
+        {
+          "step": 1440,
+          "task_loss_bpb": {
+            "arc_challenge_val_rc_5shot_bpb": 1.682,
+            "arc_easy_val_rc_5shot_bpb": 2.416,
+            "mmlu_stem_val_rc_5shot_bpb": 2.214,
+            "mmlu_humanities_val_rc_5shot_bpb": 2.033,
+            "mmlu_social_sciences_val_rc_5shot_bpb": 2.095,
+            "mmlu_other_val_rc_5shot_bpb": 3.767
+          }
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "tag": "wiki",
+      "run_name": "probe_wiki",
+      "weights": [],
+      "task_loss_labels": {
+        "arc_challenge_val_rc_5shot_bpb": 1.7817987203598022,
+        "arc_easy_val_rc_5shot_bpb": 1.872114896774292,
+        "mmlu_stem_val_rc_5shot_bpb": 3.2642619609832764,
+        "mmlu_humanities_val_rc_5shot_bpb": 1.689490795135498,
+        "mmlu_social_sciences_val_rc_5shot_bpb": 1.7649062871932983,
+        "mmlu_other_val_rc_5shot_bpb": 2.537379026412964
+      },
+      "task_loss_families": {
+        "arc_challenge": 1.7817987203598022,
+        "arc_easy": 1.872114896774292,
+        "mmlu_humanities": 1.689490795135498,
+        "mmlu_other": 2.537379026412964,
+        "mmlu_social_sciences": 1.7649062871932983,
+        "mmlu_stem": 3.2642619609832764
+      },
+      "macro_mean": 2.151658614476522,
+      "curve": [
+        {
+          "step": 120,
+          "task_loss_bpb": {
+            "arc_challenge_val_rc_5shot_bpb": 1.891,
+            "arc_easy_val_rc_5shot_bpb": 2.927,
+            "mmlu_stem_val_rc_5shot_bpb": 2.65,
+            "mmlu_humanities_val_rc_5shot_bpb": 2.005,
+            "mmlu_social_sciences_val_rc_5shot_bpb": 2.139,
+            "mmlu_other_val_rc_5shot_bpb": 3.224
+          }
+        },
+        {
+          "step": 240,
+          "task_loss_bpb": {
+            "arc_challenge_val_rc_5shot_bpb": 1.775,
+            "arc_easy_val_rc_5shot_bpb": 2.613,
+            "mmlu_stem_val_rc_5shot_bpb": 2.347,
+            "mmlu_humanities_val_rc_5shot_bpb": 1.839,
+            "mmlu_social_sciences_val_rc_5shot_bpb": 1.966,
+            "mmlu_other_val_rc_5shot_bpb": 2.807
+          }
+        },
+        {
+          "step": 360,
+          "task_loss_bpb": {
+            "arc_challenge_val_rc_5shot_bpb": 1.71,
+            "arc_easy_val_rc_5shot_bpb": 2.543,
+            "mmlu_stem_val_rc_5shot_bpb": 2.256,
+            "mmlu_humanities_val_rc_5shot_bpb": 1.71,
+            "mmlu_social_sciences_val_rc_5shot_bpb": 1.768,
+            "mmlu_other_val_rc_5shot_bpb": 2.654
+          }
+        },
+        {
+          "step": 480,
+          "task_loss_bpb": {
+            "arc_challenge_val_rc_5shot_bpb": 1.627,
+            "arc_easy_val_rc_5shot_bpb": 2.394,
+            "mmlu_stem_val_rc_5shot_bpb": 2.145,
+            "mmlu_humanities_val_rc_5shot_bpb": 1.619,
+            "mmlu_social_sciences_val_rc_5shot_bpb": 1.712,
+            "mmlu_other_val_rc_5shot_bpb": 2.404
+          }
+        },
+        {
+          "step": 600,
+          "task_loss_bpb": {
+            "arc_challenge_val_rc_5shot_bpb": 1.665,
+            "arc_easy_val_rc_5shot_bpb": 2.373,
+            "mmlu_stem_val_rc_5shot_bpb": 2.097,
+            "mmlu_humanities_val_rc_5shot_bpb": 1.626,
+            "mmlu_social_sciences_val_rc_5shot_bpb": 1.682,
+            "mmlu_other_val_rc_5shot_bpb": 2.491
+          }
+        },
+        {
+          "step": 720,
+          "task_loss_bpb": {
+            "arc_challenge_val_rc_5shot_bpb": 1.636,
+            "arc_easy_val_rc_5shot_bpb": 2.322,
+            "mmlu_stem_val_rc_5shot_bpb": 2.055,
+            "mmlu_humanities_val_rc_5shot_bpb": 1.623,
+            "mmlu_social_sciences_val_rc_5shot_bpb": 1.667,
+            "mmlu_other_val_rc_5shot_bpb": 2.695
+          }
+        },
+        {
+          "step": 840,
+          "task_loss_bpb": {
+            "arc_challenge_val_rc_5shot_bpb": 1.591,
+            "arc_easy_val_rc_5shot_bpb": 2.245,
+            "mmlu_stem_val_rc_5shot_bpb": 2.038,
+            "mmlu_humanities_val_rc_5shot_bpb": 1.526,
+            "mmlu_social_sciences_val_rc_5shot_bpb": 1.602,
+            "mmlu_other_val_rc_5shot_bpb": 2.662
+          }
+        },
+        {
+          "step": 960,
+          "task_loss_bpb": {
+            "arc_challenge_val_rc_5shot_bpb": 1.527,
+            "arc_easy_val_rc_5shot_bpb": 2.308,
+            "mmlu_stem_val_rc_5shot_bpb": 2.046,
+            "mmlu_humanities_val_rc_5shot_bpb": 1.515,
+            "mmlu_social_sciences_val_rc_5shot_bpb": 1.602,
+            "mmlu_other_val_rc_5shot_bpb": 2.665
+          }
+        },
+        {
+          "step": 1080,
+          "task_loss_bpb": {
+            "arc_challenge_val_rc_5shot_bpb": 1.488,
+            "arc_easy_val_rc_5shot_bpb": 2.279,
+            "mmlu_stem_val_rc_5shot_bpb": 2.118,
+            "mmlu_humanities_val_rc_5shot_bpb": 1.515,
+            "mmlu_social_sciences_val_rc_5shot_bpb": 1.614,
+            "mmlu_other_val_rc_5shot_bpb": 2.795
+          }
+        },
+        {
+          "step": 1200,
+          "task_loss_bpb": {
+            "arc_challenge_val_rc_5shot_bpb": 1.484,
+            "arc_easy_val_rc_5shot_bpb": 2.345,
+            "mmlu_stem_val_rc_5shot_bpb": 2.028,
+            "mmlu_humanities_val_rc_5shot_bpb": 1.495,
+            "mmlu_social_sciences_val_rc_5shot_bpb": 1.565,
+            "mmlu_other_val_rc_5shot_bpb": 2.722
+          }
+        },
+        {
+          "step": 1320,
+          "task_loss_bpb": {
+            "arc_challenge_val_rc_5shot_bpb": 1.51,
+            "arc_easy_val_rc_5shot_bpb": 2.266,
+            "mmlu_stem_val_rc_5shot_bpb": 2.044,
+            "mmlu_humanities_val_rc_5shot_bpb": 1.459,
+            "mmlu_social_sciences_val_rc_5shot_bpb": 1.544,
+            "mmlu_other_val_rc_5shot_bpb": 2.491
+          }
+        },
+        {
+          "step": 1440,
+          "task_loss_bpb": {
+            "arc_challenge_val_rc_5shot_bpb": 1.459,
+            "arc_easy_val_rc_5shot_bpb": 2.272,
+            "mmlu_stem_val_rc_5shot_bpb": 1.995,
+            "mmlu_humanities_val_rc_5shot_bpb": 1.448,
+            "mmlu_social_sciences_val_rc_5shot_bpb": 1.511,
+            "mmlu_other_val_rc_5shot_bpb": 2.551
+          }
+        }
+      ]
+    }
+  ]
+}

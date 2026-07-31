@@ -104,7 +104,7 @@ def main() -> int:
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
 
-    run = args.run_dir
+    run = args.run_di
     plan_dir = run / "plan"
     local_root = run / "data"
     summary = json.loads((plan_dir / "summary.json").read_text(encoding="utf-8"))

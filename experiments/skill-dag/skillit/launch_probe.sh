@@ -2,7 +2,7 @@
 # Platform-agnostic Skill-It DataDecide-60M probe launcher.
 #
 # Required:
-#   PROBE_ID       e.g. probe_uni | probe_dclm | ...
+#   PROBE_ID       e.g. probe_dclm | probe_arxiv | ...
 #   SAVE_FOLDER    checkpoint directory
 #   PATHS_FILE     paths_train.txt for this probe (from build_mixture_data)
 #
@@ -18,9 +18,9 @@
 #   eval_interval=120, eval_subset_batches=4, device_eval_batch_size=32
 #
 # Example:
-#   PROBE_ID=probe_uni PATHS_FILE=$WORK/slices/probe_uni/paths_train.txt \
-#     SAVE_FOLDER=$WORK/runs/probe_uni/checkpoints \
-#     PROGRESS_DIR=$WORK/runs/probe_uni/progress \
+#   PROBE_ID=probe_dclm PATHS_FILE=$WORK/slices/probe_dclm/paths_train.txt \
+#     SAVE_FOLDER=$WORK/runs/probe_dclm/checkpoints \
+#     PROGRESS_DIR=$WORK/runs/probe_dclm/progress \
 #     NPROC=1 bash launch_probe.sh
 
 set -euo pipefail

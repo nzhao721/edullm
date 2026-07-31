@@ -5,7 +5,7 @@
 #SBATCH --ntasks-per-node=1
 #SBATCH --gpus-per-node=1
 #SBATCH --cpus-per-task=8
-#SBATCH --mem=80G
+#SBATCH --mem=64G
 #SBATCH --time=00:45:00
 #SBATCH --exclude=wheat-01
 #SBATCH --job-name=regmix-lm-retry
@@ -40,4 +40,4 @@ python "${RUN_DIR}/scripts/label_regmix_doc_lm.py" \
   --late-avg-checkpoint "${LATE_AVG_CHECKPOINT}" \
   --base-config "${BASE_CONFIG}" \
   --seq-len "${SEQ_LEN:-2048}" \
-  --batch-tokens "${BATCH_TOKENS:-8192}"
+  --batch-tokens "${BATCH_TOKENS:-4096}"

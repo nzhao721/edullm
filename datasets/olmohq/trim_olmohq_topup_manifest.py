@@ -32,7 +32,7 @@ def main() -> int:
     ap.add_argument("--run-dir", type=Path, required=True)
     ap.add_argument("--tolerance", type=float, default=0.10)
     args = ap.parse_args()
-    run = args.run_dir
+    run = args.run_di
     pre = json.loads((run / "plan/tokenized_manifest.json").read_text(encoding="utf-8"))
     # Prefer merged if present (post-upload local); else use current S3 copy already
     # overwritten — fall back to pre + topup reports.

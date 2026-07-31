@@ -1,0 +1,32 @@
+{
+  "sources": [
+    {
+      "name": "EleutherAI/proof-pile-2 open-web-math (P3 filtered)",
+      "license": "ODC-By-1.0",
+      "uri": "https://huggingface.co/datasets/EleutherAI/proof-pile-2",
+      "scope": "measured-in-this-dataset",
+      "notes": "math_score>=0.72, native TeX>=2, legacy share<=50%"
+    },
+    {
+      "name": "EleutherAI/proof-pile-2 algebraic-stack (P3 filtered)",
+      "license": "ODC-By-1.0",
+      "uri": "https://huggingface.co/datasets/EleutherAI/proof-pile-2",
+      "scope": "measured-in-this-dataset",
+      "notes": "RefHQ import-shell drop; formal langs + TeX only"
+    },
+    {
+      "name": "EleutherAI/proof-pile-2 arxiv math-pure (P3 filtered)",
+      "license": "ODC-By-1.0",
+      "uri": "https://huggingface.co/datasets/EleutherAI/proof-pile-2",
+      "scope": "measured-in-this-dataset",
+      "notes": "primary math.* + EN/proof/length refine + all-math cross-list + pure subcategory allowlist"
+    },
+    {
+      "name": "phanerozoic/Lean4-Mathlib",
+      "license": "Apache-2.0",
+      "uri": "https://huggingface.co/datasets/phanerozoic/Lean4-Mathlib",
+      "scope": "measured-in-this-dataset",
+      "notes": "All Lean train bytes except 0.15% held-out val carve (val is Lean-only)"
+    }
+  ]
+}

@@ -34,7 +34,8 @@ fi
 "${PY}" "${SCRIPT_DIR}/write_aws_session_env.py" \
   --output "${AWS_SESSION_ENV}" \
   --profile "${credential_profile}" \
-  --region "${AWS_DEFAULT_REGION}"
+  --region "${AWS_DEFAULT_REGION}" \
+  --force-new
 chmod 600 "${AWS_SESSION_ENV}"
 export AWS_SESSION_ENV
 

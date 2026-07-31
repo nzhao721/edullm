@@ -240,7 +240,7 @@ def main() -> int:
     parser.add_argument("--late-avg-checkpoint", type=Path, required=True)
     parser.add_argument("--base-config", type=Path, required=True)
     parser.add_argument("--seq-len", type=int, default=2048)
-    parser.add_argument("--batch-tokens", type=int, default=8192)
+    parser.add_argument("--batch-tokens", type=int, default=4096)
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")

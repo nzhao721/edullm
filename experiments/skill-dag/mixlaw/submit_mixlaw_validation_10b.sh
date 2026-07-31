@@ -20,6 +20,7 @@ cd "${RUN_DIR}"
 SKILL="${EDULLM_ROOT}/experiments/skill-dag/mixlaw"
 for f in mixlaw_common.py build_mixture_data.py build_working_pool_from_shards.py \
   finalize_mixlaw_upload.py write_validation_mixtures.py \
+  validation_mixtures_10b.json \
   mixlaw_fit_chinchilla.json mixlaw_fit_lightgbm_chinchilla.json mixtures.json; do
   cp -a "${SKILL}/${f}" "${RUN_DIR}/scripts/"
 done
@@ -43,8 +44,23 @@ source "${RUN_DIR}/scripts/prepare_aws_session_light.sh"
 source "${AWS_SESSION_ENV}"
 
 cd "${RUN_DIR}/scripts"
-python write_validation_mixtures.py
+# Prefer the checked-in recipe (canonical domain weights / mix names). Regenerate
+# only if missing — write_validation_mixtures.py must match the same picks.
+if [[ ! -f validation_mixtures_10b.json ]]; then
+  python write_validation_mixtures.py
+fi
 cp -a validation_mixtures_10b.json "${RUN_DIR}/plan/"
+python - <<'PY'
+import json
+from pathlib import Path
+p = Path("validation_mixtures_10b.json")
+recipe = json.loads(p.read_text(encoding="utf-8"))
+names = [m["run_name"] for m in recipe["mixtures"]]
+print("validation recipe mixes:", ", ".join(names))
+assert len(names) == 8, names
+assert "ML-pilot_caps" in names and "ML-near-opt-4" in names, names
+assert "LGB-min1pct" in names and "LGB-near-opt-8" in names, names
+PY
 
 aws s3 cp "s3://${SRC_BUCKET}/${SRC_PREFIX}/plan/tokenized_manifest.json" \
   "${RUN_DIR}/plan/tokenized_manifest.json"

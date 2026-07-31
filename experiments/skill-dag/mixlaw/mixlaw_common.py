@@ -136,6 +136,30 @@ DOMAIN_BASE_WEIGHTS: dict[str, float] = {
     "wiki": 0.0156,
 }
 
+# OlmoHQ has ~3.66B wiki tokens; cap optimization / near-opt sampling so recipes stay feasible.
+WIKI_MAX_WEIGHT = 0.3
+
+
+def mixture_optimization_caps(*, pilot_grid: bool = False) -> list[float]:
+    """Per-domain upper bounds in ``DOMAINS`` order."""
+    wiki = WIKI_MAX_WEIGHT
+    if pilot_grid:
+        return [0.6, 0.7, 0.7, 0.7, 0.7, 0.7, wiki]
+    return [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, wiki]
+
+
+MIXTURE_OPT_CONSTRAINTS: list[tuple[str, list[float], list[float]]] = [
+    ("uncapped", mixture_optimization_caps(), [0.0] * len(DOMAINS)),
+    (
+        "pilot_caps",
+        mixture_optimization_caps(pilot_grid=True),
+        [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.005],
+    ),
+    ("min1pct", mixture_optimization_caps(), [0.01] * len(DOMAINS)),
+]
+NEAR_OPT_DOMAIN_CAPS = mixture_optimization_caps()
+NEAR_OPT_DOMAIN_FLOORS = [0.01] * len(DOMAINS)
+
 # Natural token fractions in allenai/olmo-mix-1124 (HF card / tech report).
 _OLMO_MIX_1124_DOMAIN_TOKENS: dict[str, float] = {
     "dclm": 3.70e12,

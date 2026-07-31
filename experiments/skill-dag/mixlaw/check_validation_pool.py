@@ -1,16 +1,17 @@
-#!/usr/bin/env python3
-"""Check validation-mix peak domain demand vs olmohq pool at 10B budget."""
+﻿#!/usr/bin/env python3
+"""Check validation-mix peak domain demand vs olmohq pool at 10B budget.
+
+Domain weights come solely from ``validation_mixtures_10b.json``.
+"""
 from __future__ import annotations
 
 import json
 from pathlib import Path
 
-from mixlaw_common import DOMAINS, OLMO_MIX_1124_WEIGHTS
+from mixlaw_common import DOMAINS
 
 ROOT = Path(__file__).parent
-MIX = json.loads((ROOT / "mixtures.json").read_text(encoding="utf-8"))
-FIT = json.loads((ROOT / "mixlaw_fit_chinchilla.json").read_text(encoding="utf-8"))
-LGB = json.loads((ROOT / "mixlaw_fit_lightgbm_chinchilla.json").read_text(encoding="utf-8"))
+PLAN = json.loads((ROOT / "validation_mixtures_10b.json").read_text(encoding="utf-8"))
 
 PLAN_AVAIL = {
     "dclm": 28_600_000_000,
@@ -21,7 +22,6 @@ PLAN_AVAIL = {
     "algebraic-stack": 11_800_000_000,
     "wiki": 3_660_000_000,
 }
-# S3_DATASETS.md §2 measured dolma2 totals (plan/tokenized_manifest.json).
 MEASURED_AVAIL = {
     "dclm": 29_691_000_000,
     "arxiv": 22_148_000_000,
@@ -32,24 +32,14 @@ MEASURED_AVAIL = {
     "wiki": 3_752_000_000,
 }
 
-BUDGET = 10_000_000_000
+BUDGET = int(PLAN.get("budget_tokens", 10_000_000_000))
 
 
 def main() -> None:
-    rows: list[tuple[str, dict[str, float]]] = []
-    for pid in (1, 7, 18):
-        m = next(x for x in MIX["mixtures"] if x["id"] == pid)
-        w = dict(zip(MIX["domain_order"], m["weights"]))
-        rows.append((f"mix{pid:02d}", w))
-    rows.extend(
-        [
-            ("olmo-mix-1124", OLMO_MIX_1124_WEIGHTS),
-            ("ML-min1pct", FIT["optimization"]["min1pct"]["weights"]),
-            ("ML-near-opt-3", FIT["near_optimal_balanced_samples"][2]["weights"]),
-            ("LGB-min1pct", LGB["optimization"]["min1pct"]["weights"]),
-            ("LGB-near-opt-5", LGB["near_optimal_balanced_samples"][4]["weights"]),
-        ]
-    )
+    rows = [
+        (m["run_name"], dict(zip(DOMAINS, m["weights"])))
+        for m in PLAN["mixtures"]
+    ]
 
     peak = {d: 0.0 for d in DOMAINS}
     binding_mix = {d: "" for d in DOMAINS}
@@ -102,7 +92,7 @@ def main() -> None:
             for d, need, av in fails:
                 print(f"  {d}: need {need:.3f}B, avail {av:.3f}B, short {need - av:.3f}B")
     if not any_fail:
-        print("All eight mixtures fit measured per-domain availability.")
+        print(f"All {len(rows)} mixtures fit measured per-domain availability.")
 
 
 if __name__ == "__main__":

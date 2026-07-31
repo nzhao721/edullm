@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Submit 8 Skill-It DataDecide-60M probes as one Slurm array (1 GPU per task).
+# Submit 7 Skill-It DataDecide-60M one-hot probes as one Slurm array (1 GPU per task).
 #
 # Prereq: CPU prep finished (prepare_probes.sh) with slices under RUN_DIR/slices/.
 #
@@ -10,7 +10,7 @@
 # Optional:
 #   MAX_PARALLEL=4   cap concurrent running tasks (default: unset = no cap;
 #                    each task starts independently when any GPU is free)
-#   ARRAY_TASKS=0-7  override task range
+#   ARRAY_TASKS=0-6  override task range
 set -Eeuo pipefail
 
 SUNET="${SUNET:-nzhao2}"
@@ -21,7 +21,7 @@ SKILLIT_ROOT="${SKILLIT_ROOT:-${EDULLM_ROOT}/experiments/skill-dag/skillit}"
 MIXLAW_ROOT="${MIXLAW_ROOT:-${EDULLM_ROOT}/experiments/skill-dag/mixlaw}"
 VENV="${VENV:-${LADDER_RUN}/venv}"
 MAX_PARALLEL="${MAX_PARALLEL:-}"
-ARRAY_TASKS="${ARRAY_TASKS:-0-7}"
+ARRAY_TASKS="${ARRAY_TASKS:-0-6}"
 RESULTS_S3="${RESULTS_S3:-s3://edullm-checkpoints/skillit/probes}"
 
 if [[ ! -d "${RUN_DIR}/slices" ]]; then
@@ -41,7 +41,6 @@ mkdir -p "${RUN_DIR}/logs" "${RUN_DIR}/runs"
 
 # Stable probe order (matches probes.json mixtures[].run_name).
 cat > "${RUN_DIR}/probe_ids.txt" <<'EOF'
-probe_uni
 probe_dclm
 probe_arxiv
 probe_starcoder
@@ -53,7 +52,7 @@ EOF
 
 N_PROBES="$(wc -l < "${RUN_DIR}/probe_ids.txt" | tr -d ' ')"
 LAST_IDX=$((N_PROBES - 1))
-if [[ "${ARRAY_TASKS}" == "0-7" && "${N_PROBES}" -ne 8 ]]; then
+if [[ "${ARRAY_TASKS}" == "0-6" && "${N_PROBES}" -ne 7 ]]; then
   ARRAY_TASKS="0-${LAST_IDX}"
 fi
 

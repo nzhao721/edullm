@@ -13,7 +13,7 @@ import numpy as np
 
 from fit_chinchilla import SEED, build_targets
 from fit_mixing_law import sample_feasible_mixtures
-from mixlaw_common import macro_curve
+from mixlaw_common import MIXTURE_OPT_CONSTRAINTS, NEAR_OPT_DOMAIN_CAPS, NEAR_OPT_DOMAIN_FLOORS, macro_curve
 
 DATA = Path("mixlaw_data.json")
 CHIN = Path("mixlaw_chinchilla_extrapolated.json")
@@ -27,6 +27,8 @@ DOMAINS = (
     "algebraic-stack",
     "wiki",
 )
+
+OPT_CONSTRAINTS = MIXTURE_OPT_CONSTRAINTS
 
 BASE_LGB_PARAMS = {
     "objective": "regression",
@@ -57,11 +59,6 @@ HYPERPARAM_GRID = {
     "num_boost_round": [100, 200],
 }
 
-OPT_CONSTRAINTS: list[tuple[str, list[float], list[float]]] = [
-    ("uncapped", [1.0] * 7, [0.0] * 7),
-    ("pilot_caps", [0.6, 0.7, 0.7, 0.7, 0.7, 0.7, 0.7], [0, 0, 0, 0, 0, 0, 0.005]),
-    ("min1pct", [1.0] * 7, [0.01] * 7),
-]
 OPT_SEED_OFFSET = {"uncapped": 0, "pilot_caps": 1, "min1pct": 2}
 
 GLOBAL_OPT = {
@@ -485,8 +482,8 @@ def main() -> None:
 
     rng = np.random.default_rng(SEED + 99)
     best_pred = optima["uncapped"]["predicted_macro"]
-    floor_v = np.asarray([0.01] * 7, dtype=float)
-    cap_v = np.asarray([1.0] * 7, dtype=float)
+    floor_v = np.asarray(NEAR_OPT_DOMAIN_FLOORS, dtype=float)
+    cap_v = np.asarray(NEAR_OPT_DOMAIN_CAPS, dtype=float)
     samples = []
     for _ in range(80_000):
         r = sample_feasible_mixtures(rng, floor_v, cap_v, 1)[0]

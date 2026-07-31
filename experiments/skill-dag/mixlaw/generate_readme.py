@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from mixlaw_common import WIKI_MAX_WEIGHT
+
 ROOT = Path(__file__).parent
 FIT = json.loads((ROOT / "mixlaw_fit_chinchilla.json").read_text(encoding="utf-8"))
 LOO = json.loads((ROOT / "mixlaw_fit_chinchilla_loo.json").read_text(encoding="utf-8"))
@@ -60,8 +62,8 @@ def validation_table_lines() -> list[str]:
         "",
         "Eight mixtures selected for OLMo-370M scale-up: the natural "
         "**olmo-mix-1124** corpus mix (~95% DCLM), three pilot anchors "
-        "(mix01, mix07, mix18), plus min1pct and one near-opt per surrogate "
-        "(ML near-opt 3, LGB near-opt 5).",
+        "(mix01, mix07, mix18), plus mixing-law pilot_caps + near-opt 4; "
+        "LightGBM min1pct + near-opt 8).",
         "",
         f"| run | source | {domain_hdr} |",
         "|-----|--------|" + "|".join(["---:"] * len(VALIDATION_DOMAIN_COLS)) + "|",
@@ -78,16 +80,7 @@ def validation_table_lines() -> list[str]:
 
 def validation_corpora_lines() -> list[str]:
     """Published 370M validation corpora (materialized on S3)."""
-    runs = (
-        "olmo-mix-1124",
-        "mix01",
-        "mix07",
-        "mix18",
-        "ML-min1pct",
-        "ML-near-opt-3",
-        "LGB-min1pct",
-        "LGB-near-opt-5",
-    )
+    runs = [m["run_name"] for m in VALIDATION_PLAN["mixtures"]]
     mix_rows = "\n".join(f"| `{name}` | `mixlaw/mixes/{name}/` |" for name in runs)
     return [
         "---",
@@ -96,8 +89,9 @@ def validation_corpora_lines() -> list[str]:
         "",
         "Materialized **10B dolma2 tokens per mixture** for OLMo-370M scale-up. Recipe: "
         "`validation_mixtures_10b.json` (canonical copy on S3 at "
-        "`mixlaw/validation_mixtures_10b.json`). Published **2026-07-29** — "
-        "`s3://edullm-datasets/mixlaw/READY`.",
+        "`mixlaw/validation_mixtures_10b.json`). **Rebuild required** after the "
+        "2026-07-30 recipe change (`ML-pilot_caps`, `ML-near-opt-4`, `LGB-near-opt-8`); "
+        "prior S3 `READY` (2026-07-29) still has the old surrogate mix names.",
         "",
         "| Mixture | S3 prefix |",
         "|---------|-----------|",
@@ -127,6 +121,9 @@ def validation_corpora_lines() -> list[str]:
         "| Script | Role |",
         "|--------|------|",
         "| `write_validation_mixtures.py` | Emit `validation_mixtures_10b.json` from fit JSON + pilot mixtures |",
+        "| `prepare_validation_370m_data.py` | Build `paths_train.txt` + weight sidecars from the recipe |",
+        "| `launch_validation_370m.sh` | Train one OLMo2-370M CE arm on a recipe mix |",
+        "| `submit_mixlaw_validation_370m.sh` | Slurm array over all recipe mixes |",
         "| `build_working_pool_from_shards.py` | Peak pool from olmohq `tokenized_manifest.json` |",
         "| `build_mixture_data.py` | Plan + materialize per-mixture slices from the working pool |",
         "| `finalize_mixlaw_upload.py` | Upload to `mixlaw/`; mix01 = regmix server-side copy |",
@@ -137,6 +134,7 @@ def validation_corpora_lines() -> list[str]:
         "```bash",
         "cd experiments/skill-dag/mixlaw",
         "py -3 write_validation_mixtures.py",
+        "bash submit_mixlaw_validation_10b.sh   # rematerialize + upload new weights",
         "```",
     ]
 
@@ -211,6 +209,12 @@ lines: list[str] = [
     "**Evaluation:** OLMo-ladder task loss — bits-per-byte on six in-run **ARC + MMLU**",
     "curve families (val splits). Final eval and mixing-law fits use only these six.",
     "",
+    "**Chinchilla step-law fitting:** fits use **in-run** `task_loss.jsonl` points only (steps 120–1440,",
+    "`eval_subset_batches=4`). The post-hoc `task_loss_final.json` at step 1451 is retained for",
+    "reporting but **not** appended to the step law — it uses full eval and often disagrees with the",
+    "last in-run point (see `plot_mixlaw_spike_examples.py`). `extrapolate_chinchilla.py` extrapolates",
+    "from the jsonl curve to Chinchilla step **5806** (tpp = 20).",
+    "",
     "---",
     "",
     "## Mixture sampling (probe domain weights)",
@@ -274,7 +278,7 @@ lines += [
     "| `run_mixture.sh` | Single-GPU worker: train + full eval for one `mixNN` |",
     "| `eval_task_loss.py` | Task-loss eval on the six curve labels (or `--full-suite` for all 20) |",
     "| `run_task_loss_eval.py` | Batch re-eval helper for finished checkpoints |",
-    "| `extrapolate_chinchilla.py` | Extrapolate in-run curves to Chinchilla step (tpp = 20) |",
+    "| `extrapolate_chinchilla.py` | Extrapolate in-run jsonl curves to Chinchilla step (tpp = 20); excludes step-1451 final anchor |",
     "| `fit_mixing_law.py` | Baseline mixing-law fit + simplex optimization |",
     "| `fit_chinchilla.py` | Regularized fit on Chinchilla targets + near-optimal sampling |",
     "| `fit_lightgbm_chinchilla.py` | LightGBM fit on Chinchilla targets + near-optimal sampling |",
@@ -285,6 +289,9 @@ lines += [
     "| `mixtures.json` | 24 probe mixtures (Algorithm 2 grid + injected points) |",
     "| `reoptimize_constraints.py` | Re-run optima / near-optimal sampling on saved fits |",
     "| `write_validation_mixtures.py` | Emit 370M validation recipe (`validation_mixtures_10b.json`) |",
+    "| `prepare_validation_370m_data.py` | Local `paths_train.txt` + weight sidecars from recipe |",
+    "| `launch_validation_370m.sh` | One OLMo2-370M CE arm on a recipe mix |",
+    "| `submit_mixlaw_validation_370m.sh` | Slurm array over all recipe mixes |",
     "| `build_working_pool_from_shards.py` | Peak olmohq pool for 370M validation slices |",
     "| `finalize_mixlaw_upload.py` | Publish validation corpora to `s3://edullm-datasets/mixlaw/` |",
     "| `validation_mixtures_10b.json` | Eight 10B-mix recipe for 370M scale-up |",
@@ -316,7 +323,8 @@ lines += [
     "## Surrogate fits on Chinchilla targets",
     "",
     "Two surrogates map 7-domain mixture weights → six Chinchilla-extrapolated curve losses",
-    "(step 5806, tpp = 20) from 24 pilot mixtures:",
+    f"(step 5806, tpp = 20) from 24 pilot mixtures. Mixture optima cap **wiki ≤ {WIKI_MAX_WEIGHT:.0%}**",
+    "(olmohq inventory binds below unconstrained optima):",
     "",
     "| | Mixing law | LightGBM |",
     "|---|---|---|",
@@ -511,14 +519,25 @@ for i, row in enumerate(FIT["pilot_ranked"][:12], 1):
 lines += [""]
 lines += validation_table_lines()
 
+best_measured = min(FIT["pilot_ranked"], key=lambda r: r["measured_curve_6"])
+ml_top = FIT["pilot_ranked"][0]
+lgb_top = LGB["pilot_ranked"][0]
+ml_uncapped = FIT["optimization"]["uncapped"]
+lgb_uncapped = LGB["optimization"]["uncapped"]
+
 lines += [
     "",
     "### Key takeaways",
     "",
-    "1. **mix07** is the best measured pilot point; both models rank it first or near-first.",
-    "2. Mixing-law optima favor **dclm + pes2o**; LightGBM optima favor **dclm + arxiv**.",
-    "3. Claimed gains over mix07 (~0.03 bpb for mixing law) are **not distinguishable** from LOO error.",
-    "4. Mean LOO RMSE is similar across models; mixing law has slightly lower macro LOO.",
+    f"1. **{best_measured['run_name']}** has the lowest measured 6-family macro at the last in-run "
+    f"eval ({fmt(best_measured['measured_curve_6'])} bpb); mixing-law top pilot by prediction is "
+    f"**{ml_top['run_name']}** ({fmt(ml_top['predicted_macro'])} bpb @ Chinchilla).",
+    f"2. Mixing-law uncapped optimum is **{fmt(ml_uncapped['predicted_macro'])}** bpb "
+    f"(max_w={fmt(ml_uncapped['max_w'], 3)}); LightGBM uncapped is "
+    f"**{fmt(lgb_uncapped['predicted_macro'])}** (max_w={fmt(lgb_uncapped['max_w'], 3)}).",
+    "3. Claimed gains over the best measured pilot are **not distinguishable** from LOO error.",
+    f"4. Mean LOO RMSE: mixing law {fmt(LOO['summary']['mean_loo_rmse'])}, "
+    f"LightGBM {fmt(LGB['summary']['mean_loo_rmse'])}.",
     "5. Off-hull random mixtures stay bounded under both surrogates.",
     "",
     "### Reproduce",

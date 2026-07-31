@@ -14,6 +14,16 @@ def shard_stem(index: int, path: str) -> str:
     return f"lm-{index:05d}-{digest}"
 
 
+def load_index_set(path: Path | None) -> set[int]:
+    if path is None or not path.exists():
+        return set()
+    return {
+        int(line.strip())
+        for line in path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--work-manifest", type=Path, required=True)
@@ -23,17 +33,11 @@ def main() -> int:
         "--failed-indices",
         type=Path,
         default=None,
-        help="Optional file listing chunk indices to skip (one per line).",
+        help="Chunk indices to deprioritize (retried at end of queue, not skipped).",
     )
     args = parser.parse_args()
 
-    failed: set[int] = set()
-    if args.failed_indices is not None and args.failed_indices.exists():
-        failed = {
-            int(line.strip())
-            for line in args.failed_indices.read_text(encoding="utf-8").splitlines()
-            if line.strip()
-        }
+    deprioritized = load_index_set(args.failed_indices)
 
     rows = [
         json.loads(line)
@@ -46,20 +50,25 @@ def main() -> int:
         domain = item["domain"]
         stem = shard_stem(index, item["path"])
         done = args.labels_root / "docs" / domain / f"{stem}.done"
-        if not done.exists() and index not in failed:
+        if not done.exists():
             missing.append(index)
 
+    priority = [index for index in missing if index not in deprioritized]
+    retry_tail = [index for index in missing if index in deprioritized]
+    ordered = priority + retry_tail
+
     args.out.parent.mkdir(parents=True, exist_ok=True)
-    args.out.write_text("\n".join(str(i) for i in missing) + ("\n" if missing else ""), encoding="utf-8")
+    args.out.write_text("\n".join(str(i) for i in ordered) + ("\n" if ordered else ""), encoding="utf-8")
     print(
         json.dumps(
             {
                 "event": "retry_indices_ready",
-                "n_missing": len(missing),
-                "n_failed_skipped": len(failed),
+                "n_missing": len(ordered),
+                "n_priority": len(priority),
+                "n_failed_deprioritized": len(retry_tail),
                 "n_total": len(rows),
                 "out": str(args.out),
-                "sample": missing[:20],
+                "sample": ordered[:20],
             },
             sort_keys=True,
         )

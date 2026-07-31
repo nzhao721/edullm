@@ -6,7 +6,7 @@ from __future__ import annotations
 import argparse
 
 import boto3
-from botocore.exceptions import ClientError
+from botocore.exceptions import ClientErro
 
 
 def main() -> int:

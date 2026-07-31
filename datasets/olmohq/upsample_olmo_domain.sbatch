@@ -8,7 +8,7 @@
 #SBATCH --exclude=wheat-01
 #SBATCH --job-name=olmo-up
 #SBATCH --output=logs/upsample-%A_%a.out
-#SBATCH --error=logs/upsample-%A_%a.err
+#SBATCH --error=logs/upsample-%A_%a.er
 
 set -Eeuo pipefail
 

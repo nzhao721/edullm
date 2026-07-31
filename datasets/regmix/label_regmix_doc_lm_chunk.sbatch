@@ -34,4 +34,4 @@ python "${RUN_DIR}/scripts/label_regmix_doc_lm.py" \
   --late-avg-checkpoint "${LATE_AVG_CHECKPOINT}" \
   --base-config "${BASE_CONFIG}" \
   --seq-len "${SEQ_LEN:-2048}" \
-  --batch-tokens "${BATCH_TOKENS:-8192}"
+  --batch-tokens "${BATCH_TOKENS:-4096}"

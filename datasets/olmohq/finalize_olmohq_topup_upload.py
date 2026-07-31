@@ -85,7 +85,7 @@ def main() -> int:
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
 
-    run_dir = args.run_dir
+    run_dir = args.run_di
     prefix = args.prefix.strip("/")
     root = f"s3://{args.bucket}/{prefix}"
 
@@ -210,7 +210,7 @@ def main() -> int:
     for d, planned in availability["planned_available"].items():
         meas = by_domain.get(d, 0)
         err = abs(planned - meas) / meas if meas else None
-        availability.setdefault("rel_err", {})[d] = err
+        availability.setdefault("rel_err", {})[d] = er
         availability.setdefault("within_10pct", {})[d] = bool(err is not None and err <= 0.10)
     (run_dir / "plan/availability_after_topup.json").write_text(
         json.dumps(availability, indent=2) + "\n", encoding="utf-8"

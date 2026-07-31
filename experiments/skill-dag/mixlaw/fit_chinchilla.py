@@ -15,7 +15,13 @@ import numpy as np
 from scipy.optimize import least_squares, minimize
 
 from fit_mixing_law import DOMAINS, _predict, optimize_simplex, sample_feasible_mixtures
-from mixlaw_common import CURVE_FAMILIES, macro_curve
+from mixlaw_common import (
+    CURVE_FAMILIES,
+    MIXTURE_OPT_CONSTRAINTS,
+    NEAR_OPT_DOMAIN_CAPS,
+    NEAR_OPT_DOMAIN_FLOORS,
+    macro_curve,
+)
 
 DATA = Path("mixlaw_data.json")
 CHIN = Path("mixlaw_chinchilla_extrapolated.json")
@@ -233,11 +239,7 @@ def main() -> None:
 
     # Uncapped optimum + capped / balanced optima.
     optima = {}
-    for name, caps, floors in [
-        ("uncapped", [1.0] * 7, [0.0] * 7),
-        ("pilot_caps", [0.6, 0.7, 0.7, 0.7, 0.7, 0.7, 0.7], [0, 0, 0, 0, 0, 0, 0.005]),
-        ("min1pct", [1.0] * 7, [0.01] * 7),
-    ]:
+    for name, caps, floors in MIXTURE_OPT_CONSTRAINTS:
         r_star, val = optimize_simplex(
             objective, 7, caps, floors, n_starts=512, seed=SEED
         )
@@ -267,10 +269,8 @@ def main() -> None:
     # Near-optimal samples: all domains >= 1%, within +0.04 bpb of uncapped optimum.
     rng = np.random.default_rng(SEED + 99)
     best_pred = optima["uncapped"]["predicted_macro"]
-    near_floors = [0.01] * 7
-    near_caps = [1.0] * 7
-    floor_v = np.asarray(near_floors, dtype=float)
-    cap_v = np.asarray(near_caps, dtype=float)
+    floor_v = np.asarray(NEAR_OPT_DOMAIN_FLOORS, dtype=float)
+    cap_v = np.asarray(NEAR_OPT_DOMAIN_CAPS, dtype=float)
     samples = []
     for _ in range(80_000):
         r = sample_feasible_mixtures(rng, floor_v, cap_v, 1)[0]

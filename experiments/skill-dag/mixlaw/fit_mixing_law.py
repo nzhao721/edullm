@@ -279,6 +279,26 @@ def extrapolate(step_law: dict, step: int) -> float:
 # --------------------------------------------------------------------------- #
 # simplex optimization
 # --------------------------------------------------------------------------- #
+def project_to_box_simplex(
+    r: np.ndarray,
+    floors: np.ndarray,
+    caps: np.ndarray,
+    max_iter: int = 40,
+) -> np.ndarray | None:
+    """Clip-renormalize iterate until weights lie in the box and sum to 1."""
+    r = np.clip(np.asarray(r, dtype=float), floors, caps)
+    for _ in range(max_iter):
+        total = float(r.sum())
+        if total <= 0:
+            return None
+        r = r / total
+        clipped = np.clip(r, floors, caps)
+        if np.allclose(clipped, r, rtol=0, atol=1e-10):
+            return clipped
+        r = clipped
+    return None
+
+
 def sample_feasible_mixtures(
     rng: np.random.Generator,
     floors: Sequence[float],
@@ -292,20 +312,22 @@ def sample_feasible_mixtures(
     if np.all(floor_v <= 1e-12) and np.all(cap_v >= 1.0 - 1e-12):
         return rng.dirichlet(np.ones(n_domains), size=n)
 
-    base = float(floor_v.sum())
-    if base > 1.0 + 1e-9:
-        raise RuntimeError(f"infeasible mixture box: floor sum={base}")
-    budget = 1.0 - base
-    slack = cap_v - floor_v
+    if float(floor_v.sum()) > 1.0 + 1e-9:
+        raise RuntimeError(f"infeasible mixture box: floor sum={floor_v.sum()}")
+
     samples = np.zeros((n, n_domains), dtype=float)
     for i in range(n):
-        s = rng.dirichlet(np.ones(n_domains))
-        w = slack * s
-        w_sum = float(w.sum())
-        if w_sum <= 0:
-            samples[i] = floor_v
+        for _ in range(10_000):
+            r0 = rng.dirichlet(np.ones(n_domains))
+            r = project_to_box_simplex(r0, floor_v, cap_v)
+            if r is not None:
+                samples[i] = r
+                break
         else:
-            samples[i] = floor_v + budget * (w / w_sum)
+            raise RuntimeError(
+                "failed to sample feasible mixture after 10000 tries "
+                f"(floors={list(floors)}, caps={list(caps)})"
+            )
     return samples
 
 

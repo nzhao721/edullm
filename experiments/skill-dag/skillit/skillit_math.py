@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Skill-It weight update and adjacency construction helpers.
 
-Offline A (probe arm): loaded from ``artifacts/A_offline.npy``.
+Offline A (probe arm): Chinchilla-extrapolated one-hot probes vs RegMix reference
+``L_j(r_RegMix)`` from ``mixlaw_fit_chinchilla.json``; loaded from ``artifacts/A_offline.npy``.
 Online A (derivative arm): from the parametric mixing law
 
     L_j(r) = c_j + k_j * exp( sum_i t_ij * r_i )
@@ -166,6 +167,128 @@ def regmix_weight_vector(
     }
     w = np.array([base[d] for d in domains], dtype=np.float64)
     return w / w.sum()
+
+
+def default_mixlaw_fit_path() -> Path:
+    """Default sibling ``mixlaw_fit_chinchilla.json`` path."""
+    mixlaw = optional_mixlaw_paths()
+    if mixlaw is None:
+        raise FileNotFoundError("mixlaw sibling directory not found next to skillit/")
+    path = mixlaw / "mixlaw_fit_chinchilla.json"
+    if not path.is_file():
+        raise FileNotFoundError(path)
+    return path
+
+
+def regmix_family_losses_from_fit(
+    fit: Mapping[str, object],
+    *,
+    domains: Sequence[str] = DEFAULT_DOMAINS,
+    families: Sequence[str] = DEFAULT_FAMILIES,
+) -> dict[str, float]:
+    """``L_j(r_RegMix)`` from the parametric mixing law (Chinchilla-scale fit)."""
+    r_map = {d: float(regmix_weight_vector(domains)[i]) for i, d in enumerate(domains)}
+    targets = fit["targets"]
+    assert isinstance(targets, Mapping)
+    return {
+        fam: predict_family_loss(targets[fam], r_map, domains=domains) for fam in families
+    }
+
+
+def regmix_family_losses_measured(
+    *,
+    pilot_final: Path | None = None,
+    families: Sequence[str] = DEFAULT_FAMILIES,
+) -> dict[str, float]:
+    """Measured ``L_j(r_RegMix)`` from mixlaw pilot ``mix01`` @ probe step 1451."""
+    path = pilot_final
+    if path is None:
+        mixlaw = optional_mixlaw_paths()
+        if mixlaw is None:
+            raise FileNotFoundError("mixlaw sibling directory not found next to skillit/")
+        path = mixlaw / "pilot_runs/mix01/progress/task_loss_final.json"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    fam_src = payload.get("task_loss_families") or payload.get("task_families") or {}
+    return {fam: float(fam_src[fam]) for fam in families}
+
+
+def offline_A_from_extrapolated(
+    report: Mapping[str, object],
+    L_ref: Mapping[str, float],
+    *,
+    domains: Sequence[str] = DEFAULT_DOMAINS,
+    families: Sequence[str] = DEFAULT_FAMILIES,
+    reference_label: str = "regmix",
+    chinchilla_step: int | None = None,
+) -> tuple[np.ndarray, dict]:
+    """Build offline A_ij = max(0, L_j(ref) - L_j(i)) from Chinchilla extrapolation."""
+    runs = report["runs"]
+    assert isinstance(runs, list)
+    by_name = {str(r["run_name"]): r for r in runs}
+    A = np.zeros((len(domains), len(families)), dtype=np.float64)
+    chin_losses: dict[str, dict[str, float]] = {reference_label: dict(L_ref)}
+    for i, dom in enumerate(domains):
+        run_name = f"probe_{dom}"
+        if run_name not in by_name:
+            raise KeyError(f"missing one-hot probe {run_name!r}")
+        run = by_name[run_name]
+        fam_block = run["families"]
+        assert isinstance(fam_block, Mapping)
+        chin_losses[run_name] = {}
+        for j, fam in enumerate(families):
+            entry = fam_block[fam]
+            assert isinstance(entry, Mapping)
+            if entry.get("chinchilla") is None:
+                note = entry.get("note")
+                raise ValueError(f"{run_name}::{fam}: Chinchilla loss is None ({note})")
+            L_i = float(entry["chinchilla"])
+            chin_losses[run_name][fam] = L_i
+            A[i, j] = max(0.0, float(L_ref[fam]) - L_i)
+    step = chinchilla_step
+    if step is None:
+        step = report.get("chinchilla_steps")
+    detail = {
+        "formula": f"A_ij = max(0, L_j({reference_label}) - L_i_j) at Chinchilla step",
+        "reference": reference_label,
+        "reference_losses": {fam: float(L_ref[fam]) for fam in families},
+        "chinchilla_step": int(step) if step is not None else None,
+        "chinchilla_losses": chin_losses,
+        **A_to_named_dict(A, domains=domains, families=families),
+    }
+    return A, detail
+
+
+def offline_A_partial(
+    probe_losses: Mapping[str, Mapping[str, float]],
+    L_ref: Mapping[str, float],
+    *,
+    domains: Sequence[str] = DEFAULT_DOMAINS,
+    families: Sequence[str] = DEFAULT_FAMILIES,
+    reference_label: str = "regmix",
+    formula: str,
+) -> tuple[np.ndarray, dict]:
+    """Partial offline A when only some one-hot probes are available (NaN rows pending)."""
+    A = np.full((len(domains), len(families)), np.nan, dtype=np.float64)
+    rows: dict[str, object] = {}
+    for i, dom in enumerate(domains):
+        run_name = f"probe_{dom}"
+        if run_name not in probe_losses:
+            rows[dom] = "pending"
+            continue
+        fam_losses = probe_losses[run_name]
+        row: dict[str, float] = {}
+        for j, fam in enumerate(families):
+            delta = max(0.0, float(L_ref[fam]) - float(fam_losses[fam]))
+            A[i, j] = delta
+            row[fam] = delta
+        rows[dom] = row
+    detail = {
+        "formula": formula,
+        "reference": reference_label,
+        "reference_losses": {fam: float(L_ref[fam]) for fam in families},
+        "rows": rows,
+    }
+    return A, detail
 
 
 def A_to_named_dict(

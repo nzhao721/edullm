@@ -1,0 +1,25 @@
+{
+  "run_name": "probe_pes2o",
+  "checkpoint": "/scratch/users/nzhao2/agent-runs/skillit-probes-20260729-112123/runs/probe_pes2o/checkpoints/step1451-unsharded",
+  "metric": "task_loss_bpb",
+  "definition": "-log2 p(gold continuation | context) / utf8 bytes of continuation",
+  "max_batches": null,
+  "smoke": false,
+  "labels": {
+    "arc_challenge_val_rc_5shot_bpb": 1.7925506830215454,
+    "arc_easy_val_rc_5shot_bpb": 1.9426740407943726,
+    "mmlu_stem_val_rc_5shot_bpb": 3.0034377574920654,
+    "mmlu_humanities_val_rc_5shot_bpb": 1.8408693075180054,
+    "mmlu_social_sciences_val_rc_5shot_bpb": 1.7726956605911255,
+    "mmlu_other_val_rc_5shot_bpb": 2.388127088546753
+  },
+  "task_families": {
+    "arc_challenge": 1.7925506830215454,
+    "arc_easy": 1.9426740407943726,
+    "mmlu_humanities": 1.8408693075180054,
+    "mmlu_other": 2.388127088546753,
+    "mmlu_social_sciences": 1.7726956605911255,
+    "mmlu_stem": 3.0034377574920654
+  },
+  "macro_mean": 2.123392422993978
+}

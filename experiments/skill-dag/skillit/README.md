@@ -1,15 +1,15 @@
 ---
 name: Skill-It Probe and Train
-overview: Run 8 DataDecide-60M Skill-It probes (7 one-hot domains + uniform 1/7) at 5 tpp, build a Chinchilla-extrapolated 7x6 A matrix vs uniform, then train two OLMo2-370M x 10B arms that start at RegMix weights and apply the same Skill-It update (eta=0.2, w=1) at five checkpoints—differing only in whether A is the offline probe matrix or online mixing-law derivatives.
+overview: Run 7 DataDecide-60M one-hot Skill-It probes at 5 tpp, build a Chinchilla-extrapolated 7x6 A matrix vs RegMix (mixlaw fit), then train two OLMo2-370M x 10B arms that start at RegMix weights and apply the same Skill-It update (eta=0.2, w=1) at five checkpoints—differing only in whether A is the offline probe matrix or online mixing-law derivatives.
 todos:
   - id: probes-json
-    content: Add skillit/probes.json (7 one-hot + uniform) and wire mixlaw/build_mixture_data materialization from olmohq
+    content: Add skillit/probes.json (7 one-hot domains) and wire mixlaw/build_mixture_data materialization from olmohq
     status: completed
   - id: run-probes
-    content: Add launch_probe.sh; run 8 DataDecide-60M @ 5 tpp with same 6-curve eval cadence as mixlaw pilots
+    content: Add launch_probe.sh; run 7 one-hot DataDecide-60M @ 5 tpp with same 6-curve eval cadence as mixlaw pilots
     status: completed
   - id: build-A
-    content: "build_adjacency.py: Chinchilla extrapolate to step 5806; A_ij=max(0,L_uni-L_i); publish artifacts"
+    content: "build_adjacency.py: Chinchilla extrapolate to step 5806; A_ij=max(0,L_regmix-L_i); publish artifacts"
     status: completed
   - id: skillit-math
     content: "skillit_math.py: eta=0.2 w=1 softmax update; online A from mixlaw/mixlaw_fit_chinchilla.json as max(0,-dL/dr)"
@@ -31,8 +31,9 @@ isProject: false
 ## Locked decisions
 
 - **Probe model:** DataDecide-60M (same as mixlaw pilots)
-- **Probe budget:** 5 tpp → **1451 steps / 285,278,208 tokens**
-- **A offline:** `A_ij = max(0, L_j(uni,chin) - L_j(i,chin))` using Chinchilla-extrapolated (tpp=20, step **5806**) family losses
+- **Probe budget:** 5 tpp → **1451 steps / 285,278,208 tokens** (training ends at 1451; step-law fits use in-run evals through **1440** only)
+- **Step-law / Chinchilla:** `extrapolate_chinchilla.py` fits on `task_loss.jsonl` only; `task_loss_final.json` @ 1451 is **not** used (different eval protocol; see mixlaw README)
+- **A offline:** `A_ij = max(0, L_j(r_RegMix,chin) - L_j(i,chin))` using Chinchilla-extrapolated (tpp=20, step **5806**) family losses; `L_j(r_RegMix)` from `mixlaw_fit_chinchilla.json` at RegMix base weights (same as mixlaw mix01 / `DOMAIN_BASE_WEIGHTS`)
 - **A online:** recompute `A(r)` from `[mixlaw/mixlaw_fit_chinchilla.json](experiments/skill-dag/mixlaw/mixlaw_fit_chinchilla.json)` via the mixing-law derivative (see **Mixing-law derivative** below; not LightGBM)
 - **Skill-It:** eta=0.2, w=1; start at RegMix weights; updates at steps **500, 875, 1250, 1625, 2000**
 - **Full runs:** OLMo2-370M, 10B tokens, curriculum-matching hparams; stream from **olmohq** with time-varying domain weights
@@ -72,7 +73,7 @@ evaluated at the **current** domain weights `r` for the online (`skillit-deriv`)
 
 New code under `[experiments/skill-dag/skillit/](experiments/skill-dag/skillit/)`:
 
-- `skillit/probes.json` — 8 mixture definitions (7 one-hot + uniform)
+- `skillit/probes.json` — 7 one-hot mixture definitions
 - `skillit/build_adjacency.py` — Chinchilla-extrapolate probes → write `A_offline.npy` + JSON
 - `skillit/skillit_math.py` — Shared: softmax update, offline A load, online derivative A from mixlaw fit
 - `skillit/domain_stream.py` — Domain-stratified chunk sampler with time-varying `p`
@@ -95,7 +96,7 @@ Update `[experiments/skill-dag/README.md](experiments/skill-dag/README.md)` to l
 
 ---
 
-## Phase 1 — Probe runs (8x DataDecide-60M)
+## Phase 1 — Probe runs (7× DataDecide-60M one-hot)
 
 ### Architecture (exact pilot match)
 
@@ -114,8 +115,9 @@ From `[mixlaw/mixlaw_common.py](experiments/skill-dag/mixlaw/mixlaw_common.py)`:
 
 Domain order: `dclm, arxiv, starcoder, pes2o, open-web-math, algebraic-stack, wiki` (same as `mixlaw/DOMAINS`).
 
-- `probe_uni` — weights `[1/7] x 7`
 - `probe_dclm` … `probe_wiki` — one-hot per domain
+
+No uniform 1/7 probe: offline **A** compares each one-hot domain to **RegMix** via the mixing-law reference `L_j(r_RegMix)` (not `probe_uni`).
 
 ### Data
 
@@ -135,17 +137,17 @@ Skill-It probes call [`mixlaw/train_datadecide_60m.py`](experiments/skill-dag/mi
 - **`eval_interval`:** **120** training steps
 - **`eval_subset_batches`:** **4** (max batches per label per eval; keeps in-run eval cheap)
 - **`device_eval_batch_size`:** **32**
-- **Points per 1451-step run:** **~12** curve points (steps 120, 240, …, 1440)
+- **Points per 1451-step run:** **~12** curve points (steps 120, 240, …, **1440**)
 - **Output:** `progress/task_loss.jsonl` (one row per eval step; scraped by `TaskLossHandler`)
 
 Do **not** pass `--full-task-suite-in-run` or `--skip-eval` on probe runs.
 
-**Post-training eval (anchor for step-law fit):**
+**Post-training eval (reporting only — not used for step-law fit):**
 
-- Once at end of training via [`mixlaw/eval_task_loss.py`](experiments/skill-dag/mixlaw/eval_task_loss.py) on the final checkpoint
+- Once at end of training via [`mixlaw/eval_task_loss.py`](experiments/skill-dag/mixlaw/eval_task_loss.py) on the final checkpoint (step **1451**)
 - Same 6 curve labels (default; not `--full-suite`)
 - Output: `progress/task_loss_final.json`
-- `extrapolate_chinchilla.py` anchors the step law to this final point at step 1451, then extrapolates each family to step **5806** (tpp=20)
+- **Not** appended to the Chinchilla step-law fit: it uses a different eval protocol (full eval vs `eval_subset_batches=4` in-run) and often disagrees with the last in-run point at step 1440 (notably `mmlu_stem`). Step laws use **jsonl points only**, then extrapolate to step **5806** (tpp=20) via [`mixlaw/extrapolate_chinchilla.py`](experiments/skill-dag/mixlaw/extrapolate_chinchilla.py).
 
 **Not run on probes:** the full 20-label ladder suite (that is reserved for 370M arms at checkpoint saves).
 
@@ -159,19 +161,54 @@ Do **not** pass `--full-task-suite-in-run` or `--skip-eval` on probe runs.
 
 ```mermaid
 flowchart LR
-  probes[8 probe curves] --> stepLaw["Fit L(s)=L_inf+A*s^(-alpha)"]
+  probes[7 one-hot probe curves] --> stepLaw["Fit L(s)=L_inf+A*s^(-alpha) on jsonl only"]
   stepLaw --> chin["Extrapolate to step 5806"]
-  chin --> delta["A_ij = max(0, L_uni_j - L_i_j)"]
+  fit["mixlaw_fit_chinchilla.json L_j(r_RegMix)"] --> delta["A_ij = max(0, L_regmix_j - L_i_j)"]
+  chin --> delta
   delta --> Aout["A_offline.npy + adjacency.json"]
 ```
 
-
-
 1. Reuse `[mixlaw/extrapolate_chinchilla.py](experiments/skill-dag/mixlaw/extrapolate_chinchilla.py)` logic per probe / per `CURVE_FAMILIES` member → losses at step **5806** (tpp=20).
-2. `skillit/build_adjacency.py`:
-  - `A_ij = max(0, L_j(uni) - L_j(i))` for domains i, families j
-  - Write `skillit/artifacts/A_offline.npy` (shape 7x6), `adjacency.json` (named rows/cols + raw chin losses)
-3. Publish: `s3://edullm-checkpoints/skillit/artifacts/A_offline.json` (+ npy)
+2. Evaluate `L_j(r_RegMix)` from `[mixlaw/mixlaw_fit_chinchilla.json](experiments/skill-dag/mixlaw/mixlaw_fit_chinchilla.json)` at RegMix base weights (`base_weights` in `probes.json`).
+3. `skillit/build_adjacency.py`:
+  - `A_ij = max(0, L_j(r_RegMix) - L_j(i))` for domains i, families j
+  - Write `skillit/artifacts/A_offline.npy` (shape 7x6), `adjacency.json` (named rows/cols + reference losses)
+4. Publish: `s3://edullm-checkpoints/skillit/artifacts/A_offline.json` (+ npy)
+
+### Measured A matrices (7 one-hot probes, Chinchilla step 5806)
+
+From the July 2026 FarmShare probe array (`skillit-probes-20260729-112123`). Rows = source domain **i** (one-hot probe); columns = task family **j**. Positive **A_ij** means domain **i** is projected to beat the reference on family **j** at Chinchilla scale (tpp=20, step **5806**).
+
+**RegMix reference losses** `L_j(r_RegMix)` from `mixlaw_fit_chinchilla.json` at `base_weights`:
+
+| Family | L_j(RegMix) |
+|--------|-------------|
+| arc_challenge | 1.546 |
+| arc_easy | 2.001 |
+| mmlu_humanities | 1.731 |
+| mmlu_other | 2.467 |
+| mmlu_social_sciences | 1.305 |
+| mmlu_stem | 2.297 |
+
+#### Offline A (`skillit-probe` arm)
+
+One-hot probes extrapolated to step 5806; reference = RegMix mixing-law losses.
+
+```text
+A_ij = max(0, L_j(r_RegMix) - L_j(i,chin))
+```
+
+| domain ↓ / family → | arc_ch | arc_easy | mmlu_hum | mmlu_oth | mmlu_soc | mmlu_stem |
+|---------------------|--------|----------|----------|----------|----------|-----------|
+| dclm | 0.341 | 0.149 | 0.368 | 0 | 0.079 | 0.486 |
+| arxiv | 0.006 | 0 | 0 | 0 | 0 | 0.340 |
+| starcoder | 0 | 0 | 0 | 0 | 0 | 0 |
+| pes2o | 0.252 | 0.084 | 0 | 0 | 0 | 0.450 |
+| open-web-math | 0 | 0 | 0 | 0 | 0 | 0.232 |
+| algebraic-stack | 0.017 | 0 | 0 | 0 | 0 | 0.242 |
+| wiki | 0.227 | 0 | 0.470 | 0.013 | 0 | 0.352 |
+
+Artifacts: `skillit/artifacts/probes_full/A_offline.npy`, `A_offline.json`. Curves: `task_loss_chinchilla_by_family.png`. Recompute: `python skillit/build_adjacency.py` or `python skillit/plot_probe_chinchilla_results.py`.
 
 ---
 
@@ -274,8 +311,8 @@ No Slurm/AWS submit baked in. Optional post-save S3 sync follows the token-selec
 
 ## Implementation order
 
-1. `skillit/probes.json` + materialize 8 slices via `mixlaw/build_mixture_data.py`
-2. Run 8 probes via `mixlaw/train_datadecide_60m.py`; extrapolate via `mixlaw/extrapolate_chinchilla.py`; `skillit/build_adjacency.py` → offline A
+1. `skillit/probes.json` + materialize 7 slices via `mixlaw/build_mixture_data.py`
+2. Run 7 one-hot probes via `mixlaw/train_datadecide_60m.py`; extrapolate via `mixlaw/extrapolate_chinchilla.py`; `skillit/build_adjacency.py` → offline A vs RegMix
 3. `skillit/skillit_math.py` (update + derivative A from `mixlaw/mixlaw_fit_chinchilla.json`) unit-tested against toy numbers
 4. `skillit/domain_stream.py` + `skillit/train_skillit_370m.py` + launch scripts
 5. Update `experiments/skill-dag/README.md`; launch two 370M arms; sync artifacts to S3 prefixes above

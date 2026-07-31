@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
-"""Build offline Skill-It adjacency A from 8 DataDecide-60M probe runs.
+"""Build offline Skill-It adjacency A from 7 DataDecide-60M one-hot probe runs.
 
 Pipeline:
   1. Collect per-probe ``task_loss.jsonl`` + ``task_loss_final.json`` (same schema
-     as mixlaw ``fit_mixing_law.py collect``).
+     as mixlaw ``fit_mixing_law.py collect``). Step-law fits use **jsonl only** (steps
+     120–1440); ``task_loss_final.json`` at 1451 is not appended (see mixlaw README).
   2. Chinchilla-extrapolate each curve family to step 5806 (tpp=20) via
      ``mixlaw/extrapolate_chinchilla.py`` logic.
-  3. ``A_ij = max(0, L_uni_j - L_i_j)`` for domains i and families j.
+  3. ``A_ij = max(0, L_j(r_RegMix) - L_i_j)`` for domains i and families j,
+     with ``L_j(r_RegMix)`` from ``mixlaw_fit_chinchilla.json``.
   4. Write ``artifacts/A_offline.npy`` plus named JSON, then publish them.
 """
 from __future__ import annotations
@@ -35,23 +37,35 @@ from mixlaw_common import (  # noqa: E402
     task_family,
     token_budget,
 )
-from skillit_math import A_to_named_dict  # noqa: E402
+from skillit_math import (  # noqa: E402
+    default_mixlaw_fit_path,
+    load_fit_json,
+    offline_A_from_extrapolated,
+    regmix_family_losses_from_fit,
+)
 
-UNI_RUN = "probe_uni"
 CHINCHILLA_STEP = 5806  # token_budget(20) → 5806
 ARTIFACTS_S3_URI = "s3://edullm-checkpoints/skillit/artifacts"
+LEGACY_UNI_RUN = "probe_uni"
+
+
+def _is_onehot_probe(run_name: str, tag: str) -> bool:
+    if run_name == LEGACY_UNI_RUN or tag == "uniform":
+        return False
+    return run_name.startswith("probe_")
 
 
 def collect_probe_runs(runs_dir: Path, mixtures_json: Path) -> dict:
-    """Gather probe progress into a mixlaw_data-compatible payload."""
+    """Gather one-hot probe progress into a mixlaw_data-compatible payload."""
     mixtures = {m.id: m for m in load_mixtures(mixtures_json)}
     runs = []
     missing = []
     for mix_id, mix in sorted(mixtures.items()):
+        if not _is_onehot_probe(mix.run_name, mix.tag):
+            continue
         progress = runs_dir / mix.run_name / "progress"
         final = progress / "task_loss_final.json"
         if not final.is_file():
-            # Also accept flat layout: runs_dir/<run>/task_loss_final.json
             alt = runs_dir / mix.run_name / "task_loss_final.json"
             if alt.is_file():
                 final = alt
@@ -117,45 +131,21 @@ def collect_probe_runs(runs_dir: Path, mixtures_json: Path) -> dict:
     }
 
 
-def build_A_from_extrapolated(report: dict) -> tuple[np.ndarray, dict]:
-    """Construct A (7×6) and a detail dict from Chinchilla-extrapolated report."""
-    by_name = {r["run_name"]: r for r in report["runs"]}
-    if UNI_RUN not in by_name:
-        raise SystemExit(f"missing uniform probe run {UNI_RUN!r}")
-    uni = by_name[UNI_RUN]
-    L_uni = {}
-    for fam in CURVE_FAMILIES:
-        entry = uni["families"][fam]
-        if entry.get("chinchilla") is None:
-            raise SystemExit(f"{UNI_RUN}::{fam}: Chinchilla loss is None ({entry.get('note')})")
-        L_uni[fam] = float(entry["chinchilla"])
-
-    A = np.zeros((len(DOMAINS), len(CURVE_FAMILIES)), dtype=np.float64)
-    chin_losses: dict[str, dict[str, float]] = {UNI_RUN: dict(L_uni)}
-    for i, dom in enumerate(DOMAINS):
-        run_name = f"probe_{dom}"
-        if run_name not in by_name:
-            raise SystemExit(f"missing one-hot probe {run_name!r}")
-        run = by_name[run_name]
-        chin_losses[run_name] = {}
-        for j, fam in enumerate(CURVE_FAMILIES):
-            entry = run["families"][fam]
-            if entry.get("chinchilla") is None:
-                raise SystemExit(
-                    f"{run_name}::{fam}: Chinchilla loss is None ({entry.get('note')})"
-                )
-            L_i = float(entry["chinchilla"])
-            chin_losses[run_name][fam] = L_i
-            A[i, j] = max(0.0, L_uni[fam] - L_i)
-
-    detail = {
-        "formula": "A_ij = max(0, L_uni_j - L_i_j) at Chinchilla step",
-        "chinchilla_step": int(report.get("chinchilla_steps", CHINCHILLA_STEP)),
-        "uniform_run": UNI_RUN,
-        "chinchilla_losses": chin_losses,
-        **A_to_named_dict(A, domains=DOMAINS, families=CURVE_FAMILIES),
-    }
-    return A, detail
+def build_A_from_extrapolated(
+    report: dict,
+    L_reg: dict[str, float],
+    *,
+    chinchilla_step: int | None = None,
+) -> tuple[np.ndarray, dict]:
+    """Construct A (7×6) vs RegMix reference losses."""
+    return offline_A_from_extrapolated(
+        report,
+        L_reg,
+        domains=DOMAINS,
+        families=CURVE_FAMILIES,
+        reference_label="regmix",
+        chinchilla_step=chinchilla_step or report.get("chinchilla_steps", CHINCHILLA_STEP),
+    )
 
 
 def main() -> None:
@@ -177,6 +167,12 @@ def main() -> None:
         type=Path,
         default=None,
         help="Optional pre-collected mixlaw_data.json (skips collect)",
+    )
+    ap.add_argument(
+        "--fit-json",
+        type=Path,
+        default=None,
+        help="Mixlaw fit for L_j(r_RegMix) (default: mixlaw/mixlaw_fit_chinchilla.json)",
     )
     ap.add_argument(
         "--out-dir",
@@ -203,6 +199,10 @@ def main() -> None:
     )
     args = ap.parse_args()
 
+    fit_path = args.fit_json or default_mixlaw_fit_path()
+    fit = load_fit_json(fit_path)
+    L_reg = regmix_family_losses_from_fit(fit, domains=DOMAINS, families=CURVE_FAMILIES)
+
     if args.data is not None:
         data = json.loads(args.data.read_text(encoding="utf-8"))
     else:
@@ -213,7 +213,8 @@ def main() -> None:
     _, default_chin_step, _ = token_budget(20.0)
     target_step = int(args.step) if args.step is not None else default_chin_step
     report = extrapolate_runs(data, target_step, seed=args.seed)
-    A, detail = build_A_from_extrapolated(report)
+    A, detail = build_A_from_extrapolated(report, L_reg, chinchilla_step=target_step)
+    detail["fit_json"] = str(fit_path)
 
     args.out_dir.mkdir(parents=True, exist_ok=True)
     npy_path = args.out_dir / "A_offline.npy"
@@ -250,8 +251,7 @@ def main() -> None:
 
         sync_to_s3(args.out_dir, args.s3_uri)
 
-    # Quick summary: which domains help which families.
-    print("\nA (rows=domains, cols=families); positive = domain beats uniform:")
+    print("\nA (rows=domains, cols=families); positive = domain beats RegMix @ Chinchilla:")
     hdr = " ".join(f"{f[:8]:>8}" for f in CURVE_FAMILIES)
     print(f"{'domain':<18} {hdr}")
     for i, d in enumerate(DOMAINS):

@@ -24,7 +24,7 @@ from fit_lightgbm_chinchilla import (
     optimize_simplex_global,
 )
 from fit_mixing_law import optimize_simplex, sample_feasible_mixtures
-from mixlaw_common import macro_curve
+from mixlaw_common import NEAR_OPT_DOMAIN_CAPS, NEAR_OPT_DOMAIN_FLOORS, macro_curve
 
 ROOT = Path(__file__).parent
 DATA = ROOT / "mixlaw_data.json"
@@ -139,7 +139,7 @@ def resample_near_optimal_mixing_law(fit: dict) -> list[dict]:
         fit["optimization"]["uncapped"]["predicted_macro"],
         np.random.default_rng(SEED + 99),
         [MIN_DOMAIN_WEIGHT] * 7,
-        [1.0] * 7,
+        NEAR_OPT_DOMAIN_CAPS,
         opt_vectors=optima_weight_vectors(fit["optimization"]),
     )
 
@@ -163,7 +163,7 @@ def resample_near_optimal_lightgbm(
         fit["optimization"]["uncapped"]["predicted_macro"],
         np.random.default_rng(SEED + 199),
         [MIN_DOMAIN_WEIGHT] * 7,
-        [1.0] * 7,
+        NEAR_OPT_DOMAIN_CAPS,
         opt_vectors=optima_weight_vectors(fit["optimization"]),
     )
 
@@ -200,7 +200,7 @@ def optimize_mixing_law(fit: dict, runs: list[dict]) -> tuple[dict, list[dict], 
         optima["uncapped"]["predicted_macro"],
         np.random.default_rng(SEED + 99),
         [MIN_DOMAIN_WEIGHT] * 7,
-        [1.0] * 7,
+        NEAR_OPT_DOMAIN_CAPS,
         opt_vectors=optima_weight_vectors(optima),
     )
     return optima, pilot_rows, near
@@ -272,7 +272,7 @@ def optimize_lightgbm(
         optima["uncapped"]["predicted_macro"],
         np.random.default_rng(SEED + 199),
         [MIN_DOMAIN_WEIGHT] * 7,
-        [1.0] * 7,
+        NEAR_OPT_DOMAIN_CAPS,
         opt_vectors=optima_weight_vectors(optima),
     )
     return optima, pilot_rows, near, optimization_meta

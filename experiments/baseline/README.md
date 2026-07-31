@@ -12,7 +12,6 @@ Checkpoints are published under `s3://edullm-checkpoints/olmo2-370m-cpt/edullm-3
 | Path | Purpose |
 |------|---------|
 | [`farmshare/train_olmo_ladder_370m.py`](farmshare/train_olmo_ladder_370m.py) | Main training entrypoint (FarmShare Slurm / multi-GPU DDP) |
-| [`farmshare/install_flash_attn.sbatch`](farmshare/install_flash_attn.sbatch) | One-off flash-attn build job for a ladder run directory |
 | [`farmshare/upload_ckpts_to_s3.sbatch`](farmshare/upload_ckpts_to_s3.sbatch) | Sync unsharded checkpoints (steps 5000/10000/15000) to S3 |
 | [`aws/train_olmo_ladder_370m.py`](aws/train_olmo_ladder_370m.py) | AWS variant (single B200, no W&B, no evals; also used for RefHQ probes) |
 | [`aws/setup_venv.sh`](aws/setup_venv.sh) | EC2 venv bootstrap (ai2-olmo 0.6, torch, flash-attn, OLMo-ladder clone) |
@@ -25,8 +24,8 @@ Shared FarmShare platform helpers (`bootstrap.sh`, `prepare_aws_session*.sh`, â€
 
 1. Stage a run directory under `/scratch/users/$USER/agent-runs/` with `env.sh`, venv,
    tokenized memmap path lists, and `OLMO_LADDER_ROOT` pointing at a clone of OLMo-ladder.
-2. (Optional) Submit `install_flash_attn.sbatch` if flash-attn is not already in the venv.
-3. Launch training with `torchrun`, e.g.:
+   FlashAttention does not work on FarmShare â€” leave `OLMO_FLASH_ATTENTION=0` and use SDPA.
+2. Launch training with `torchrun`, e.g.:
 
 ```bash
 source "${RUN_DIR}/env.sh"
@@ -45,7 +44,7 @@ torchrun --nproc_per_node=4 \
   --save-interval 500
 ```
 
-4. After training, upload selected unsharded checkpoints:
+3. After training, upload selected unsharded checkpoints:
 
 ```bash
 export RUN_DIR=... AWS_SESSION_ENV=... BUCKET=edullm-checkpoints

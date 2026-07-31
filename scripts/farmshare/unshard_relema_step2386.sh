@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Unshard REL-EMA final distcp checkpoint (step2386) to a flat model.pt for inference.
 #
-# Uses the already-synced FarmShare copy under
+# Uses the already-synced FarmShare copy unde
 #   /scratch/users/nzhao2/checkpoints/token-selection-370m/rel-ema/step2386
 # (no S3 sync required).
 set -Eeuo pipefail

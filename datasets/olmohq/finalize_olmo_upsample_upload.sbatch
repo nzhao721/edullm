@@ -8,7 +8,7 @@
 #SBATCH --exclude=wheat-01
 #SBATCH --job-name=olmo-s3
 #SBATCH --output=logs/finalize-%j.out
-#SBATCH --error=logs/finalize-%j.err
+#SBATCH --error=logs/finalize-%j.er
 
 set -Eeuo pipefail
 
