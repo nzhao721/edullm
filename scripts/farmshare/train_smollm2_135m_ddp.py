@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Multi-GPU DDP pretraining for SmolLM2-135M on published edullm-data token shards.
+"""Multi-GPU DDP pretraining for SmolLM2-135M on token memmaps.
 
-Resolves a validated ``s3://edullm-data/<dataset_id>/<version>/`` corpus via
-``edullm_data.read.dataset_paths`` / ``resolve_latest``, stages ``.u32le.bin``
-shards into ``--stage-dir`` (job-scoped scratch; default ``<output-dir>/staged-data``),
-then memmaps them for training.
+Two data paths:
+  - ``--data-dir``: local FineWeb-style dir (``train_tokens.bin`` + ``meta.json``).
+  - ``--dataset-id``: validated ``s3://edullm-data/<id>/<version>/`` via
+    ``edullm_data.read``, staged into ``--stage-dir`` then memmapped.
 
 Ephemeral-runtime contract:
   - Does not assume FarmShare scratch, laptop memmaps, or prior slice dirs exist.
@@ -267,6 +267,33 @@ def load_staged_corpus(stage_meta: dict, seq_len: int) -> tuple[MemmapChunkDatas
     return dataset, meta
 
 
+def load_local_data_dir(data_dir: Path, seq_len: int) -> tuple[MemmapChunkDataset, dict]:
+    """Load a local FineWeb-style memmap corpus (train_tokens.bin + meta.json)."""
+    meta_path = data_dir / "meta.json"
+    bin_path = data_dir / "train_tokens.bin"
+    if not meta_path.is_file():
+        raise FileNotFoundError(f"missing {meta_path}")
+    if not bin_path.is_file():
+        raise FileNotFoundError(f"missing {bin_path}")
+    meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    num_tokens = int(meta["num_tokens"])
+    dataset = MemmapChunkDataset(
+        [bin_path],
+        dtype=np.dtype(np.uint32),
+        seq_len=seq_len,
+        num_tokens=num_tokens,
+    )
+    out = {
+        **meta,
+        "num_tokens": dataset.total_tokens,
+        "seq_len": seq_len,
+        "n_shards": 1,
+        "data_dir": str(data_dir),
+        "source": "local_data_dir",
+    }
+    return dataset, out
+
+
 def _parse_checkpoint_s3_uri(uri: str) -> tuple[str, str]:
     parsed = urlparse(uri)
     if parsed.scheme != "s3" or not parsed.netloc:
@@ -387,9 +414,15 @@ def clear_sync_flag(output_dir: Path, tag: str) -> None:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="SmolLM2-135M multi-GPU pretrain.")
     parser.add_argument(
+        "--data-dir",
+        type=Path,
+        default=None,
+        help="Local memmap dir with train_tokens.bin + meta.json (skips edullm-data staging).",
+    )
+    parser.add_argument(
         "--dataset-id",
-        default=DEFAULT_DATASET_ID,
-        help=f"Published edullm-data id (default: {DEFAULT_DATASET_ID}).",
+        default=None,
+        help=f"Published edullm-data id (default when --data-dir unset: {DEFAULT_DATASET_ID}).",
     )
     parser.add_argument(
         "--dataset-version",
@@ -446,6 +479,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--log-every", type=int, default=20)
     parser.add_argument(
+        "--wandb-alert-every",
+        type=int,
+        default=None,
+        help="Send a brief wandb.alert every N steps (default: same as --log-every). Set 0 to disable.",
+    )
+    parser.add_argument(
         "--resume-from",
         type=Path,
         default=None,
@@ -481,7 +520,23 @@ def wandb_enabled(args: argparse.Namespace) -> bool:
     )
 
 
-def init_wandb(args: argparse.Namespace, run_meta: dict) -> object | None:
+def peek_resume_step(resume_from: Path | None) -> int | None:
+    """Read trainer step from a checkpoint without loading model weights."""
+    if resume_from is None:
+        return None
+    state_path = resume_from / "trainer_state.pt"
+    if not state_path.is_file():
+        return None
+    state = torch.load(state_path, map_location="cpu", weights_only=False)
+    return int(state["step"])
+
+
+def init_wandb(
+    args: argparse.Namespace,
+    run_meta: dict,
+    *,
+    rewind_step: int | None = None,
+) -> object | None:
     if not wandb_enabled(args):
         if is_main_process() and args.wandb_mode != "disabled" and wandb is None:
             print("wandb package missing; continuing without W&B", flush=True)
@@ -492,6 +547,14 @@ def init_wandb(args: argparse.Namespace, run_meta: dict) -> object | None:
     os.environ.setdefault("WANDB_MODE", args.wandb_mode)
     id_path = args.output_dir / "wandb_run_id.txt"
     run_id = id_path.read_text(encoding="utf-8").strip() if id_path.exists() else None
+    # rewind_step is informational only here: native W&B rewind/fork are private-preview
+    # on this account. Rebuild the run offline (rebuild_wandb_run_clean.py) before resume.
+    if rewind_step is not None and is_main_process():
+        print(
+            f"wandb resume id={run_id} checkpoint_step={rewind_step} "
+            "(history must already be clean through this step)",
+            flush=True,
+        )
     run = wandb.init(
         project=args.wandb_project,
         entity=args.wandb_entity or None,
@@ -506,13 +569,13 @@ def init_wandb(args: argparse.Namespace, run_meta: dict) -> object | None:
     )
     id_path.write_text(str(run.id), encoding="utf-8")
     print(f"wandb run={run.id} url={run.url}", flush=True)
-    # Smoke-test alerts as soon as the run is live.
     run.alert(
         title="smollm2 train job started",
         text=(
             f"run={run.name} id={run.id} "
             f"slurm_job={os.environ.get('SLURM_JOB_ID', 'n/a')} "
             f"host={os.environ.get('SLURMD_NODENAME', os.environ.get('HOSTNAME', 'n/a'))}"
+            + (f" checkpoint_step={rewind_step}" if rewind_step is not None else "")
         ),
         level=wandb.AlertLevel.INFO,
     )
@@ -525,20 +588,40 @@ def wandb_log(run: object | None, metrics: dict, *, step: int) -> None:
     run.log(metrics, step=step)
 
 
+def _is_kept_eval_metric(key: str) -> bool:
+    """Drop ARC metrics so W&B only charts HellaSwag / PIQA / OpenBookQA."""
+    k = key.lower()
+    if "arc_easy" in k or "arc_challenge" in k or "/arc_" in k:
+        return False
+    return True
+
+
 def wandb_log_eval(run: object | None, payload: dict, *, step: int, eval_path: Path) -> None:
     if run is None:
         return
-    metrics: dict[str, float] = {"eval/macro_bpb": float(payload["macro_mean"])}
-    if "macro_mean_accuracy" in payload:
-        metrics["eval/macro_acc"] = float(payload["macro_mean_accuracy"])
+    metrics: dict[str, float] = {}
     for k, v in (payload.get("labels") or {}).items():
-        metrics[f"eval/bpb/{k}"] = float(v)
+        mk = f"eval/bpb/{k}"
+        if _is_kept_eval_metric(mk):
+            metrics[mk] = float(v)
     for k, v in (payload.get("accuracy_labels") or {}).items():
-        metrics[f"eval/acc/{k}"] = float(v)
+        mk = f"eval/acc/{k}"
+        if _is_kept_eval_metric(mk):
+            metrics[mk] = float(v)
     for k, v in (payload.get("task_families") or {}).items():
-        metrics[f"eval/family_bpb/{k}"] = float(v)
+        mk = f"eval/family_bpb/{k}"
+        if _is_kept_eval_metric(mk):
+            metrics[mk] = float(v)
     for k, v in (payload.get("accuracy_families") or {}).items():
-        metrics[f"eval/family_acc/{k}"] = float(v)
+        mk = f"eval/family_acc/{k}"
+        if _is_kept_eval_metric(mk):
+            metrics[mk] = float(v)
+    fam_bpb = [v for k, v in metrics.items() if k.startswith("eval/family_bpb/")]
+    fam_acc = [v for k, v in metrics.items() if k.startswith("eval/family_acc/")]
+    if fam_bpb:
+        metrics["eval/macro_bpb"] = sum(fam_bpb) / len(fam_bpb)
+    if fam_acc:
+        metrics["eval/macro_acc"] = sum(fam_acc) / len(fam_acc)
     wandb_log(run, metrics, step=step)
     art = wandb.Artifact(name=f"eval-step{step:07d}", type="eval")
     art.add_file(str(eval_path), name=eval_path.name)
@@ -646,7 +729,12 @@ def persist_eval_artifact(args: argparse.Namespace, eval_path: Path) -> None:
     print(f"uploaded eval to s3://{bucket}/{key}", flush=True)
 
 
-EVAL_TASKS = ("ARC-Easy", "ARC-Challenge", "HellaSwag")
+EVAL_TASKS = ("HellaSwag", "PIQA", "OpenBookQA")
+REQUIRED_EVAL_BPB_LABELS = (
+    "hellaswag_val_rc_5shot_bpb",
+    "piqa_val_rc_5shot_bpb",
+    "openbookqa_val_rc_5shot_bpb",
+)
 
 
 def run_task_eval(
@@ -658,7 +746,7 @@ def run_task_eval(
     *,
     checkpoint: str | None = None,
 ) -> dict | None:
-    """Run ARC+HellaSwag eval on all ranks (sharded); rank 0 writes JSON."""
+    """Run HellaSwag+PIQA+OpenBookQA eval on all ranks (sharded); rank 0 writes JSON."""
     model.eval()
     rank = dist.get_rank() if dist.is_initialized() else 0
     world_size = dist.get_world_size() if dist.is_initialized() else 1
@@ -681,7 +769,8 @@ def run_task_eval(
     return payload if is_main_process() else None
 
 
-def eval_payload_has_hellaswag(path: Path) -> bool:
+def eval_payload_complete(path: Path) -> bool:
+    """True when the on-disk eval JSON already has the full non-ARC suite."""
     if not path.exists():
         return False
     try:
@@ -689,7 +778,12 @@ def eval_payload_has_hellaswag(path: Path) -> bool:
     except (OSError, json.JSONDecodeError):
         return False
     labels = payload.get("labels") or {}
-    return "hellaswag_val_rc_5shot_bpb" in labels
+    return all(lbl in labels for lbl in REQUIRED_EVAL_BPB_LABELS)
+
+
+def eval_payload_has_hellaswag(path: Path) -> bool:
+    # Back-compat alias; prefer eval_payload_complete for resume gating.
+    return eval_payload_complete(path)
 
 
 def append_task_loss_curve(progress_dir: Path, step: int, payload_path: Path) -> None:
@@ -716,7 +810,9 @@ def append_task_loss_curve(progress_dir: Path, step: int, payload_path: Path) ->
 
 def main() -> None:
     args = parse_args()
-    if re.search(r"edullm-datasets", args.dataset_id):
+    if args.data_dir is None and not args.dataset_id:
+        args.dataset_id = DEFAULT_DATASET_ID
+    if args.dataset_id and re.search(r"edullm-datasets", args.dataset_id):
         raise SystemExit("refusing legacy edullm-datasets paths; pass an edullm-data dataset id")
     if args.checkpoint_s3_uri:
         _parse_checkpoint_s3_uri(args.checkpoint_s3_uri)
@@ -727,11 +823,11 @@ def main() -> None:
     if torch.cuda.is_available():
         torch.cuda.set_device(local_rank)
     if world_size > 1:
-        # Default NCCL timeout is 10m; ARC+HellaSwag eval on rank 0 exceeds that.
+        # Default NCCL timeout is 10m; HellaSwag+PIQA+OpenBookQA eval can exceed that.
         dist.init_process_group(backend="nccl", timeout=timedelta(hours=2))
     device = torch.device(f"cuda:{local_rank}" if torch.cuda.is_available() else "cpu")
 
-    if args.stage_dir is None:
+    if args.stage_dir is None and args.data_dir is None:
         args.stage_dir = args.output_dir / "staged-data"
 
     ok, detail = durable_backend_ok(args)
@@ -742,7 +838,8 @@ def main() -> None:
         print(f"durable backend: {detail}", flush=True)
         args.output_dir.mkdir(parents=True, exist_ok=True)
         (args.output_dir / "progress").mkdir(parents=True, exist_ok=True)
-        args.stage_dir.mkdir(parents=True, exist_ok=True)
+        if args.stage_dir is not None:
+            args.stage_dir.mkdir(parents=True, exist_ok=True)
 
     if args.resume_from_s3:
         if is_main_process():
@@ -755,26 +852,29 @@ def main() -> None:
             args.resume_from = args.output_dir / "resume_ckpt"
 
     seq_len = int(args.seq_len)
-    # Resolve + stage from edullm-data on rank 0; all ranks open the shared stage dir.
-    stage_meta: dict | None = None
-    if is_main_process():
-        resolved = resolve_edullm_split(
-            args.dataset_id,
-            version=args.dataset_version,
-            split=args.split,
-        )
-        stage_meta = stage_edullm_shards(resolved, args.stage_dir, force=args.restage)
-    if world_size > 1:
-        dist.barrier()
-    if stage_meta is None:
-        marker = args.stage_dir / STAGE_MARKER
-        if not marker.exists():
-            raise FileNotFoundError(
-                f"rank {dist.get_rank() if dist.is_initialized() else 0} missing stage marker {marker}; "
-                "ensure --stage-dir is on a shared filesystem for multi-node jobs"
+    if args.data_dir is not None:
+        dataset, meta = load_local_data_dir(args.data_dir, seq_len=seq_len)
+    else:
+        # Resolve + stage from edullm-data on rank 0; all ranks open the shared stage dir.
+        stage_meta: dict | None = None
+        if is_main_process():
+            resolved = resolve_edullm_split(
+                args.dataset_id,
+                version=args.dataset_version,
+                split=args.split,
             )
-        stage_meta = json.loads(marker.read_text(encoding="utf-8"))
-    dataset, meta = load_staged_corpus(stage_meta, seq_len=seq_len)
+            stage_meta = stage_edullm_shards(resolved, args.stage_dir, force=args.restage)
+        if world_size > 1:
+            dist.barrier()
+        if stage_meta is None:
+            marker = args.stage_dir / STAGE_MARKER
+            if not marker.exists():
+                raise FileNotFoundError(
+                    f"rank {dist.get_rank() if dist.is_initialized() else 0} missing stage marker {marker}; "
+                    "ensure --stage-dir is on a shared filesystem for multi-node jobs"
+                )
+            stage_meta = json.loads(marker.read_text(encoding="utf-8"))
+        dataset, meta = load_staged_corpus(stage_meta, seq_len=seq_len)
 
     corpus_tokens = int(meta["num_tokens"])
 
@@ -808,7 +908,8 @@ def main() -> None:
             "dataset_id": args.dataset_id,
             "dataset_version": meta.get("version"),
             "split": args.split,
-            "stage_dir": str(args.stage_dir),
+            "stage_dir": str(args.stage_dir) if args.stage_dir is not None else None,
+            "data_dir": str(args.data_dir) if args.data_dir is not None else None,
             "checkpoint_s3_uri": args.checkpoint_s3_uri,
             "data_meta": meta,
             "slurm_job_id": os.environ.get("SLURM_JOB_ID"),
@@ -818,10 +919,15 @@ def main() -> None:
     else:
         run_meta = {}
 
-    wb_run = init_wandb(args, run_meta)
-    if wb_run is not None and args.wandb_upload_existing:
-        print("uploading existing checkpoints/evals to wandb...", flush=True)
-        wandb_upload_existing(wb_run, args.output_dir)
+    # Only rank 0 talks to W&B. On resume, rewind history to the checkpoint step so
+    # a broken later segment (e.g. wrong world-size) is truncated and overwritten.
+    wb_run = None
+    if is_main_process():
+        rewind_step = peek_resume_step(args.resume_from)
+        wb_run = init_wandb(args, run_meta, rewind_step=rewind_step)
+        if wb_run is not None and args.wandb_upload_existing:
+            print("uploading existing checkpoints/evals to wandb...", flush=True)
+            wandb_upload_existing(wb_run, args.output_dir)
 
     sampler = DistributedSampler(dataset, shuffle=True, seed=args.seed) if world_size > 1 else None
     loader = DataLoader(
@@ -867,23 +973,44 @@ def main() -> None:
         loaded = AutoModelForCausalLM.from_pretrained(args.resume_from, torch_dtype=torch.bfloat16)
         model_to_load.load_state_dict(loaded.state_dict())
         optimizer.load_state_dict(state["optimizer"])
-        scheduler.load_state_dict(state["scheduler"])
         start_step = int(state["step"])
         tokens_seen = int(state.get("tokens_seen", start_step * global_batch_tokens))
+        # Cosine schedule lambdas close over num_training_steps at construction time.
+        # Refusing a batch/world-size change avoids the "1.2M steps / reset LR" failure mode.
+        if start_step > 0:
+            implied_gbt = tokens_seen // start_step
+            if implied_gbt != global_batch_tokens:
+                raise SystemExit(
+                    "refuse resume with changed global batch: "
+                    f"checkpoint implies global_batch_tokens={implied_gbt} "
+                    f"(tokens_seen={tokens_seen} / step={start_step}) but this job has "
+                    f"{global_batch_tokens} (world_size={world_size}, "
+                    f"per_device_batch={args.per_device_batch_size}, seq_len={seq_len}). "
+                    "Restore the original multi-GPU layout before resuming."
+                )
+        scheduler.load_state_dict(state["scheduler"])
+        if is_main_process():
+            print(
+                f"resumed step={start_step} tokens_seen={tokens_seen:,} "
+                f"global_batch_tokens={global_batch_tokens} total_steps={total_steps} "
+                f"lr={scheduler.get_last_lr()[0]:.2e}",
+                flush=True,
+            )
 
     step = start_step
+    tokens_seen_at_resume = tokens_seen
     running_loss = 0.0
     train_start = time.perf_counter()
     data_iter = iter(loader)
     next_checkpoint = ((start_step // checkpoint_every) + 1) * checkpoint_every
     next_eval = ((start_step // eval_every) + 1) * eval_every
 
-    # On resume, re-run eval at the checkpoint step if HellaSwag (or any suite) is missing.
+    # On resume, re-run eval at the checkpoint step if the full suite is missing.
     if args.resume_from is not None:
         eval_out = args.output_dir / "task_loss" / f"step{start_step:07d}_task_loss.json"
         need_eval = False
         if is_main_process():
-            need_eval = not eval_payload_has_hellaswag(eval_out)
+            need_eval = not eval_payload_complete(eval_out)
         if world_size > 1:
             flag = torch.tensor([1 if need_eval else 0], device=device, dtype=torch.int32)
             dist.broadcast(flag, src=0)
@@ -936,7 +1063,9 @@ def main() -> None:
 
         if step % args.log_every == 0 and is_main_process():
             elapsed = time.perf_counter() - train_start
-            avg_tps = (tokens_seen - start_step * global_batch_tokens) / max(elapsed, 1e-9)
+            # Baseline must be checkpoint tokens_seen (not start_step * live batch), or a
+            # world-size change spuriously reports ~1M tok/s.
+            avg_tps = (tokens_seen - tokens_seen_at_resume) / max(elapsed, 1e-9)
             epoch = step / steps_per_epoch
             loss_avg = running_loss / args.log_every
             lr = scheduler.get_last_lr()[0]
@@ -957,6 +1086,16 @@ def main() -> None:
                 },
                 step=step,
             )
+            alert_every = args.log_every if args.wandb_alert_every is None else args.wandb_alert_every
+            if wb_run is not None and alert_every > 0 and step % alert_every == 0:
+                wb_run.alert(
+                    title=f"step {step}/{total_steps}",
+                    text=(
+                        f"loss={loss_avg:.4f} epoch={epoch:.3f} "
+                        f"tps={avg_tps:,.0f} tokens={tokens_seen:,} lr={lr:.2e}"
+                    ),
+                    level=wandb.AlertLevel.INFO,
+                )
             running_loss = 0.0
 
         if step >= next_checkpoint:

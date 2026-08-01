@@ -262,8 +262,8 @@ def main() -> int:
         "expected_steps": length // 4_194_304,
         "note": (
             "Control arm: uniform random 60% token keep (method=random). Staging under "
-            "--work is ephemeral; durable checkpoints publish to "
-            "s3://edullm-checkpoints/token-sel/control/ via the trainer."
+            "--work is ephemeral; durable checkpoints remain on scratch and upload "
+            "to W&B via the trainer."
         ),
     }
     (work / "control_data_summary.json").write_text(

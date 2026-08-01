@@ -1,0 +1,24 @@
+{
+  "prefix": "runpod/colmlm-annotate/output/",
+  "objects": [
+    {"worker": 0, "key": "runpod/colmlm-annotate/output/worker-0/train-00000.annotations.jsonl.zst", "bytes": 90790694, "etag": "ca6c94d38bb1b21a6c920a5bd162ca21-11"},
+    {"worker": 1, "key": "runpod/colmlm-annotate/output/worker-1/train-00001.annotations.jsonl.zst", "bytes": 86596141, "etag": "77b67367b39c9d70905c729f1101c1a1-11"},
+    {"worker": 2, "key": "runpod/colmlm-annotate/output/worker-2/train-00002.annotations.jsonl.zst", "bytes": 85154241, "etag": "e452c522014c8ece4d72e69e832e9ef7-11"},
+    {"worker": 3, "key": "runpod/colmlm-annotate/output/worker-3/train-00003.annotations.jsonl.zst", "bytes": 88293852, "etag": "1912a4af2956ca7942d10d471cc07122-11"},
+    {"worker": 4, "key": "runpod/colmlm-annotate/output/worker-4/train-00004.annotations.jsonl.zst", "bytes": 92250395, "etag": "36cd3a3540e8acc7b00c46d51d206944-11"},
+    {"worker": 5, "key": "runpod/colmlm-annotate/output/worker-5/train-00005.annotations.jsonl.zst", "bytes": 86440306, "etag": "b5f1152c0a5c40d52df452e2d96092d7-11"},
+    {"worker": 6, "key": "runpod/colmlm-annotate/output/worker-6/train-00006.annotations.jsonl.zst", "bytes": 81795770, "etag": "a448b0cb7909206bea37614109244fab-10"},
+    {"worker": 7, "key": "runpod/colmlm-annotate/output/worker-7/train-00007.annotations.jsonl.zst", "bytes": 84548289, "etag": "9c02773a169866da356fa6d4fef9c667-11"},
+    {"worker": 8, "key": "runpod/colmlm-annotate/output/worker-8/train-00008.annotations.jsonl.zst", "bytes": 89662301, "etag": "1d4ffae3a09955d19ca511c0ab2d48c1-11"},
+    {"worker": 9, "key": "runpod/colmlm-annotate/output/worker-9/train-00009.annotations.jsonl.zst", "bytes": 90083028, "etag": "fdf09cb625c6f06ee73f0bf77a91fc96-11"},
+    {"worker": 10, "key": "runpod/colmlm-annotate/output/worker-10/train-00010.annotations.jsonl.zst", "bytes": 87168065, "etag": "bd0c12a7b9fcfa9791406d152351a2c3-11"},
+    {"worker": 11, "key": "runpod/colmlm-annotate/output/worker-11/train-00011.annotations.jsonl.zst", "bytes": 85837465, "etag": "731722bb3dd57d253ead8ed7c25bdea9-11"},
+    {"worker": 12, "key": "runpod/colmlm-annotate/output/worker-12/train-00012.annotations.jsonl.zst", "bytes": 85830447, "etag": "fe43b5fd4fc676e015ad1b05203429d2-11"},
+    {"worker": 13, "key": "runpod/colmlm-annotate/output/worker-13/train-00013.annotations.jsonl.zst", "bytes": 90770440, "etag": "2b83e60617adc370d837eee81674e795-11"},
+    {"worker": 14, "key": "runpod/colmlm-annotate/output/worker-14/train-00014.annotations.jsonl.zst", "bytes": 91615746, "etag": "a6dc31d13f94bf5a9a5f9ed2d46dc668-11"},
+    {"worker": 15, "key": "runpod/colmlm-annotate/output/worker-15/train-00015.annotations.jsonl.zst", "bytes": 88865830, "etag": "964c55f04b569cb1408a275afdd21300-11"},
+    {"worker": 16, "key": "runpod/colmlm-annotate/output/worker-16/train-00016.annotations.jsonl.zst", "bytes": 83329877, "etag": "e6ce05a252c07b6bcf9a68292bae5e39-10"},
+    {"worker": 17, "key": "runpod/colmlm-annotate/output/worker-17/train-00017.annotations.jsonl.zst", "bytes": 84961878, "etag": "81fbae3d201e2ce9b2719f6e081f2649-11"},
+    {"worker": 18, "key": "runpod/colmlm-annotate/output/worker-18/train-00018.annotations.jsonl.zst", "bytes": 89498754, "etag": "2a629128be4bc3658ff86c04f27ef46a-11"}
+  ]
+}

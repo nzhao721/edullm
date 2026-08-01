@@ -22,19 +22,7 @@ from typing import Any, Dict, Mapping, MutableMapping, Optional, Sequence, Union
 
 log = logging.getLogger("token_selection.refhq_materialize")
 
-# Durable layout written by ``reference/train_olmo3_370m_refhq.py`` (NAME default).
-DEFAULT_REFERENCE_ARM_RUN = "refhq-regmix-5p5b-v1"
-DEFAULT_REFERENCE_ARM_BASE = (
-    f"s3://edullm-checkpoints/token-sel/reference/checkpoints/{DEFAULT_REFERENCE_ARM_RUN}"
-)
-# Final ladder step for published RefHQ rows 5_509_020_202 // GBS 4_194_304.
-DEFAULT_REFERENCE_ARM_FINAL_STEP = 1313
-DEFAULT_REFERENCE_ARM_FINAL = (
-    f"{DEFAULT_REFERENCE_ARM_BASE}/step{DEFAULT_REFERENCE_ARM_FINAL_STEP}/"
-)
-
-# Pre-token-sel layout still used by rho / REL / learnability YAML fallbacks until
-# those configs are retargeted to token-sel/reference/.
+# Published pre-token-selection reference checkpoints are allowed bootstrap inputs.
 LEGACY_REFHQ_BASE = (
     "s3://edullm-checkpoints/olmo-370m/edullm-370M-refhq-5p5b/checkpoints"
 )

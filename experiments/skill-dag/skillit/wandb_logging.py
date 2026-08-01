@@ -2,8 +2,8 @@
 
 Mirrors ``scripts/farmshare/train_smollm2_135m_ddp.py`` enablement:
   - online/offline/disabled via ``--wandb-mode`` / ``WANDB_MODE``
-  - requires ``WANDB_API_KEY`` (typically from ``wandb-session.env`` on FarmShare)
-  - soft-skip when package or key is missing
+  - online production runs require ``WANDB_API_KEY`` and fail closed
+  - artifact uploads wait for W&B acknowledgement before training advances
 """
 from __future__ import annotations
 
@@ -25,11 +25,12 @@ DEFAULT_WANDB_PROJECT = "skillit"
 
 
 def wandb_enabled(args: argparse.Namespace, *, is_main: bool) -> bool:
+    mode = getattr(args, "wandb_mode", "disabled")
     return (
         is_main
-        and getattr(args, "wandb_mode", "disabled") != "disabled"
+        and mode != "disabled"
         and wandb is not None
-        and bool(os.environ.get("WANDB_API_KEY"))
+        and (mode != "online" or bool(os.environ.get("WANDB_API_KEY")))
     )
 
 
@@ -47,7 +48,7 @@ def init_wandb(
             log.warning("wandb package missing; continuing without W&B")
         elif (
             is_main
-            and getattr(args, "wandb_mode", "disabled") != "disabled"
+            and getattr(args, "wandb_mode", "disabled") == "online"
             and not os.environ.get("WANDB_API_KEY")
         ):
             log.warning("WANDB_API_KEY unset; continuing without W&B")
@@ -92,6 +93,14 @@ def wandb_log(run: object | None, metrics: Mapping[str, Any], *, step: int) -> N
     run.log(dict(metrics), step=int(step))
 
 
+def _log_artifact_and_wait(run: object, artifact: object) -> None:
+    """Upload an artifact synchronously so callers can enforce durability."""
+    logged = run.log_artifact(artifact)
+    wait = getattr(logged, "wait", None)
+    if callable(wait):
+        wait()
+
+
 def wandb_log_train(
     run: object | None,
     *,
@@ -120,9 +129,9 @@ def wandb_log_eval(
     step: int,
     eval_path: Path,
     prefix: str = "eval",
-) -> None:
+) -> bool:
     if run is None:
-        return
+        return False
     metrics: dict[str, float] = {}
     if "macro_mean" in payload:
         metrics[f"{prefix}/macro_bpb"] = float(payload["macro_mean"])
@@ -148,7 +157,8 @@ def wandb_log_eval(
     assert wandb is not None
     art = wandb.Artifact(name=f"eval-step{int(step):07d}", type="eval")
     art.add_file(str(eval_path), name=eval_path.name)
-    run.log_artifact(art)
+    _log_artifact_and_wait(run, art)
+    return True
 
 
 def _flatten_skillit_A(record: Mapping[str, Any]) -> dict[str, float]:
@@ -191,9 +201,9 @@ def wandb_log_skillit_update(
     step: int,
     snapshot_path: Optional[Path] = None,
     a_snapshot_path: Optional[Path] = None,
-) -> None:
+) -> bool:
     if run is None:
-        return
+        return False
     metrics: dict[str, Any] = {
         "skillit/eta": float(record.get("eta", 0.0)),
         "skillit/w": float(record.get("w", 1.0)),
@@ -224,7 +234,8 @@ def wandb_log_skillit_update(
         art = wandb.Artifact(name=f"skillit-update-step{int(step):07d}", type="skillit-update")
         for path in artifact_paths:
             art.add_file(str(path), name=path.name)
-        run.log_artifact(art)
+        _log_artifact_and_wait(run, art)
+    return True
 
 
 def wandb_log_checkpoint(
@@ -234,9 +245,9 @@ def wandb_log_checkpoint(
     step: int,
     tokens_seen: int,
     arm_id: str,
-) -> None:
+) -> bool:
     if run is None:
-        return
+        return False
     wandb_log(
         run,
         {
@@ -253,8 +264,9 @@ def wandb_log_checkpoint(
         metadata={"step": int(step), "tokens_seen": int(tokens_seen), "arm_id": arm_id},
     )
     art.add_dir(str(ckpt_dir))
-    run.log_artifact(art)
+    _log_artifact_and_wait(run, art)
     log.info("wandb uploaded checkpoint artifact %s", art.name)
+    return True
 
 
 def wandb_upload_existing(
@@ -263,10 +275,10 @@ def wandb_upload_existing(
     save_folder: Path,
     progress_dir: Path,
     task_loss_results_dir: Path,
-) -> None:
-    """Best-effort upload of local checkpoints / evals / skillit snapshots."""
+) -> bool:
+    """Synchronously upload existing local checkpoints, evals, and metadata."""
     if run is None:
-        return
+        return False
     for ckpt_dir in sorted(save_folder.glob("step*")):
         if not ckpt_dir.is_dir():
             continue
@@ -295,13 +307,42 @@ def wandb_upload_existing(
         assert wandb is not None
         art = wandb.Artifact(name="skillit-updates", type="metrics")
         art.add_file(str(updates), name=updates.name)
-        run.log_artifact(art)
+        _log_artifact_and_wait(run, art)
     meta = progress_dir / "run_meta.json"
     if meta.is_file():
         assert wandb is not None
         art = wandb.Artifact(name="run-meta", type="config")
         art.add_file(str(meta), name=meta.name)
-        run.log_artifact(art)
+        _log_artifact_and_wait(run, art)
+    return True
+
+
+def wandb_log_runtime_artifacts(
+    run: object | None,
+    *,
+    progress_dir: Path,
+    task_loss_results_dir: Path,
+) -> bool:
+    """Upload the complete non-W&B runtime artifact tree from scratch."""
+    if run is None:
+        return False
+    assert wandb is not None
+    art = wandb.Artifact(name="runtime-artifacts", type="run-state")
+    roots = (Path(progress_dir), Path(task_loss_results_dir))
+    seen: set[Path] = set()
+    for root in roots:
+        if not root.is_dir():
+            continue
+        for path in sorted(root.rglob("*")):
+            if not path.is_file() or "wandb" in path.relative_to(root).parts:
+                continue
+            resolved = path.resolve()
+            if resolved in seen:
+                continue
+            seen.add(resolved)
+            art.add_file(str(path), name=f"{root.name}/{path.relative_to(root)}")
+    _log_artifact_and_wait(run, art)
+    return True
 
 
 def log_probe_final_eval(
@@ -312,16 +353,19 @@ def log_probe_final_eval(
     entity: Optional[str] = None,
     mode: str = "online",
     step: int = 0,
+    save_folder: Optional[Path] = None,
+    progress_dir: Optional[Path] = None,
 ) -> Optional[str]:
-    """One-shot W&B log for a probe final eval (no mixlaw trainer edits)."""
+    """Upload a probe's eval, checkpoints, and scratch artifacts in one W&B run."""
     if mode == "disabled":
         return None
     if wandb is None:
+        if mode == "online":
+            raise RuntimeError("wandb package missing for online probe run")
         log.warning("wandb package missing; skip probe W&B log")
         return None
-    if not os.environ.get("WANDB_API_KEY"):
-        log.warning("WANDB_API_KEY unset; skip probe W&B log")
-        return None
+    if mode == "online" and not os.environ.get("WANDB_API_KEY"):
+        raise RuntimeError("WANDB_API_KEY unset for online probe run")
     if not eval_path.is_file():
         log.warning("missing probe eval %s; skip W&B log", eval_path)
         return None
@@ -348,6 +392,18 @@ def log_probe_final_eval(
     )
     try:
         wandb_log_eval(run, payload, step=step, eval_path=eval_path, prefix="probe/eval")
+        if save_folder is not None:
+            wandb_upload_existing(
+                run,
+                save_folder=Path(save_folder),
+                progress_dir=Path(progress_dir or eval_path.parent),
+                task_loss_results_dir=eval_path.parent,
+            )
+        wandb_log_runtime_artifacts(
+            run,
+            progress_dir=Path(progress_dir or eval_path.parent),
+            task_loss_results_dir=eval_path.parent,
+        )
         return getattr(run, "url", None)
     finally:
         run.finish()

@@ -2,7 +2,7 @@
 # Stage a Skill-It 370M working pool from published s3://edullm-data/.
 #
 # Uses prepare_skillit_370m_data.py → edullm_data.read.dataset_paths / resolve_latest.
-# Default dataset: pretrain/olmo-original-30b (validated). Does not read
+# Pinned dataset: pretrain/olmo-127b/v1 (validated). Does not read
 # s3://edullm-datasets/ and does not assume a pre-existing local/scratch pool.
 #
 # Bootstraps a CPU venv in RUN_DIR (edullm-data + boto3). No ladder GPU venv.
@@ -19,11 +19,16 @@ EDULLM_ROOT="${EDULLM_ROOT:-${REPO_ROOT}}"
 
 RUN_NAME="${RUN_NAME:-skillit-train-pool-$(date +%Y%m%d-%H%M%S)}"
 RUN_DIR="${RUN_DIR:-/scratch/users/${SUNET}/agent-runs/${RUN_NAME}}"
-DATASET_ID="${DATASET_ID:-pretrain/olmo-original-30b}"
-DATASET_VERSION="${DATASET_VERSION:-}"
+DATASET_ID="${DATASET_ID:-pretrain/olmo-127b}"
+DATASET_VERSION="${DATASET_VERSION:-v1}"
 BUDGET_TOKENS="${BUDGET_TOKENS:-10000000000}"
 BUILD_WORKERS="${BUILD_WORKERS:-4}"
-EDULLM_DATA_PKG="${EDULLM_DATA_PKG:-edullm-data @ git+https://github.com/edu-llm/edullm-data@v0.2.0}"
+EDULLM_DATA_PKG="${EDULLM_DATA_PKG:-edullm-data @ git+https://github.com/edu-llm/edullm-data@main}"
+
+if [[ "${DATASET_ID}" != "pretrain/olmo-127b" || "${DATASET_VERSION}" != "v1" ]]; then
+  echo "SkillIt pool source is pinned to pretrain/olmo-127b/v1" >&2
+  exit 2
+fi
 
 mkdir -p "${RUN_DIR}/scripts" "${RUN_DIR}/logs" "${RUN_DIR}/pool" "${RUN_DIR}/work" "${RUN_DIR}/plan"
 cd "${RUN_DIR}"
@@ -45,8 +50,7 @@ fi
 source "${RUN_DIR}/venv/bin/activate"
 pip install -U pip wheel
 pip install boto3 tqdm numpy
-# shellcheck disable=SC2086
-pip install ${EDULLM_DATA_PKG}
+pip install --upgrade "${EDULLM_DATA_PKG}"
 
 export EDULLM_ROOT RUN_DIR
 unset PREFIX || true
@@ -68,6 +72,7 @@ RUN_DIR=${RUN_DIR}
 VENV=${RUN_DIR}/venv
 AWS_SESSION_ENV=${AWS_SESSION_ENV:-}
 DATASET_ID=${DATASET_ID}
+DATASET_VERSION=${DATASET_VERSION}
 BUDGET_TOKENS=${BUDGET_TOKENS}
 VERSION_FLAGS=${VERSION_FLAGS}
 EOF
@@ -87,4 +92,5 @@ echo "pool_job_id=${POOL_JOB}"
 echo "RUN_DIR=${RUN_DIR}"
 echo "POOL_DIR=${RUN_DIR}/pool"
 echo "DATASET_ID=${DATASET_ID}"
+echo "DATASET_VERSION=${DATASET_VERSION}"
 echo "${POOL_JOB}" > "${RUN_DIR}/pool_job_id.txt"

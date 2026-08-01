@@ -25,7 +25,7 @@ RUN_DIR="${RUN_DIR:-/scratch/users/${SUNET}/agent-runs/${RUN_NAME}}"
 DATASET_ID="${DATASET_ID:-pretrain/olmo-127b}"
 BUDGET_TOKENS="${BUDGET_TOKENS:-10000000000}"
 BUILD_WORKERS="${BUILD_WORKERS:-4}"
-EDULLM_DATA_PKG="${EDULLM_DATA_PKG:-edullm-data @ git+https://github.com/edu-llm/edullm-data@v0.2.0}"
+EDULLM_DATA_PKG="${EDULLM_DATA_PKG:-edullm-data @ git+https://github.com/edu-llm/edullm-data@main}"
 
 mkdir -p "${RUN_DIR}/scripts" "${RUN_DIR}/logs" "${RUN_DIR}/pool" "${RUN_DIR}/plan"
 cd "${RUN_DIR}"

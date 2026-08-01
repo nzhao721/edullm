@@ -5,10 +5,10 @@
 #   - Stage train shards: YAML data.dataset_id → edullm_data.read → s3://edullm-data/
 #   - Never uses s3://edullm-datasets/ or TRAIN_DATA_S3.
 #   - Do not assume RUN_DIR already holds tokens, venvs, or checkpoints across wipe.
-#   - Durable saves → s3://edullm-checkpoints/token-sel/rho-1/ (background sync + spine).
-#   - RESUME=1: train_olmo_template fetches durable ckpts when local save_folder is empty.
+#   - Durable saves remain on scratch and upload to W&B artifacts.
+#   - RESUME=1: set WANDB_RESUME_ARTIFACT when local save_folder is empty.
 #
-# W&B (SmolLM2 protocol; additive to S3): project token-selection. Push
+# W&B (artifact and metrics store): project token-selection. Push
 # wandb-session.env via scripts/farmshare/push_wandb_session_to_farmshare.sh
 # "$RUN_DIR" (or set WANDB_SESSION_ENV). Local smoke: WANDB_MODE=disabled.
 #
@@ -21,7 +21,7 @@
 #   bash $EDULLM_ROOT/experiments/token-selection/rho-1/farmshare/run_rho_train.sh prepare
 #   bash $EDULLM_ROOT/experiments/token-selection/rho-1/farmshare/run_rho_train.sh train
 #
-# Crash resume within THIS run_id only (durable S3 if local empty):
+# Crash resume within THIS run_id only:
 #   RESUME=1 bash .../run_rho_train.sh train
 set -euo pipefail
 
@@ -70,7 +70,6 @@ fi
 
 RUN_ID="rho-1-regmix10b-v1"
 DISCARDED_RUN_ID="rho-excess-10b-scratch-v1"
-CKPT_S3="${CKPT_S3:-s3://edullm-checkpoints/token-sel/rho-1}"
 # Train shards come from YAML data.dataset_id → edullm_data.read → s3://edullm-data/
 # (ensure_train_tokens). Do not set TRAIN_DATA_S3 / edullm-datasets.
 if [[ -n "${TRAIN_DATA_S3:-}" ]]; then
@@ -79,9 +78,6 @@ if [[ -n "${TRAIN_DATA_S3:-}" ]]; then
   exit 2
 fi
 REF_CKPT_S3="${REF_CKPT_S3:-s3://edullm-checkpoints/olmo-370m/edullm-370M-refhq-5p5b/checkpoints/step1315/}"
-# Experiment results (metrics) live under the same arm prefix on edullm-checkpoints.
-METRICS_S3="${METRICS_S3:-s3://edullm-checkpoints/token-sel/rho-1/metrics}"
-TASK_LOSS_S3="${TASK_LOSS_S3:-s3://edullm-checkpoints/token-sel/rho-1/task_loss_results}"
 OLMO_CORE_DIR="${OLMO_CORE_DIR:-$WORK/OLMo-core}"
 OLMO_CORE_REVISION="${OLMO_CORE_REVISION:-99e0009ed67679c90da970ec5ba439c9459e3757}"
 CFG_REL="${CFG_REL:-rho-1/configs/run_rho_10b.yaml}"
@@ -116,42 +112,10 @@ verify_distcp_checkpoint() {
   return 0
 }
 
-# Sync permanent ladder under …/checkpoints[/method]/stepN → S3.
-# Saves live at OUT_DIR/checkpoints/rho_excess/step*; preserve method subdir on S3.
-sync_checkpoints_to_s3() {
-  local src="$1" dst="$2"
-  mkdir -p "$src"
-  local step_dir rel
-  shopt -s nullglob
-  local candidates=("$src"/step* "$src"/*/step*)
-  shopt -u nullglob
-  for step_dir in "${candidates[@]}"; do
-    [[ -d "$step_dir" ]] || continue
-    if verify_distcp_checkpoint "$step_dir"; then
-      rel="${step_dir#"$src"/}"
-      aws s3 sync "$step_dir" "$dst/$rel" --only-show-errors || true
-    else
-      echo "SKIP S3 sync (incomplete): $step_dir" >&2
-    fi
-  done
-  if [[ -f "$src/run_fingerprint.json" ]]; then
-    aws s3 cp "$src/run_fingerprint.json" "$dst/run_fingerprint.json" --only-show-errors || true
-  fi
-  shopt -s nullglob
-  local fps=("$src"/*/run_fingerprint.json)
-  shopt -u nullglob
-  for fp in "${fps[@]}"; do
-    [[ -f "$fp" ]] || continue
-    rel="${fp#"$src"/}"
-    aws s3 cp "$fp" "$dst/$rel" --only-show-errors || true
-  done
-}
-
 OFFLINE="${OFFLINE:-0}"
-SKIP_S3_UPLOAD="${SKIP_S3_UPLOAD:-$OFFLINE}"
 
 if [[ "$OFFLINE" == "1" ]]; then
-  log "OFFLINE=1 — clearing AWS env; S3 sync/upload disabled"
+  log "OFFLINE=1 — clearing AWS env; S3 input staging disabled"
   unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN AWS_PROFILE AWS_SESSION_ENV || true
   export AWS_EC2_METADATA_DISABLED=true
 fi
@@ -271,9 +235,6 @@ train["checkpoint_keep_last"] = None
 train["ephemeral_checkpoint_every_steps"] = None
 train["save_async"] = False
 train["max_grad_norm"] = 1.0
-s3 = cfg.setdefault("s3", {})
-s3["prefix"] = "token-sel/rho-1"
-s3["checkpoint_bucket"] = "edullm-checkpoints"
 eval_tl = cfg.setdefault("eval", {}).setdefault("task_loss", {})
 eval_tl["enabled"] = True
 eval_tl["results_dir"] = "task_loss_results/rho-1"
@@ -360,8 +321,11 @@ PY
 
   EXTRA_ARGS=()
   if [[ "$RESUME" == "1" ]]; then
-    log "RESUME=1 — fingerprint-gated resume under run_id=$RUN_ID (not $DISCARDED_RUN_ID); fetches from $CKPT_S3 if local empty"
+    log "RESUME=1 — fingerprint-gated resume under run_id=$RUN_ID from W&B artifact/local scratch"
     EXTRA_ARGS+=(--resume)
+    if [[ -n "${WANDB_RESUME_ARTIFACT:-}" ]]; then
+      EXTRA_ARGS+=(--wandb-resume-artifact "$WANDB_RESUME_ARTIFACT")
+    fi
   elif [[ "$FROM_SCRATCH" == "1" ]]; then
     scratch_reset
   else
@@ -386,37 +350,14 @@ PY
   nvidia-smi || true
   date -Is > "$PROGRESS_DIR/heartbeat.txt"
 
-  SYNC_PID=""
-  if [[ "${SKIP_S3_UPLOAD}" != "1" ]]; then
-    (
-      while true; do
-        sleep "${SYNC_INTERVAL_SEC:-120}"
-        # Preserve method subdirs under token-sel/rho-1/checkpoints/
-        sync_checkpoints_to_s3 "$OUT_DIR/checkpoints" "$CKPT_S3/checkpoints"
-        aws s3 sync "$PROGRESS_DIR" "$CKPT_S3/progress" --only-show-errors || true
-        if [[ -d "$OUT_DIR/metrics/rho_excess" ]]; then
-          aws s3 sync "$OUT_DIR/metrics/rho_excess" "$METRICS_S3" --only-show-errors || true
-        fi
-        TL_LOCAL="${TASK_LOSS_LOCAL:-$TS_ROOT/task_loss_results/rho-1}"
-        if [[ -d "$TL_LOCAL" ]]; then
-          aws s3 sync "$TL_LOCAL" "$TASK_LOSS_S3" --only-show-errors || true
-        fi
-        date -Is > "$PROGRESS_DIR/heartbeat.txt" || true
-      done
-    ) &
-    SYNC_PID=$!
-    trap 'kill $SYNC_PID 2>/dev/null || true' EXIT
-  else
-    log "SKIP_S3_UPLOAD=1 — checkpoints stay local-only (not durable on ephemeral scratch)"
-    (
-      while true; do
-        sleep "${SYNC_INTERVAL_SEC:-120}"
-        date -Is > "$PROGRESS_DIR/heartbeat.txt" || true
-      done
-    ) &
-    SYNC_PID=$!
-    trap 'kill $SYNC_PID 2>/dev/null || true' EXIT
-  fi
+  (
+    while true; do
+      sleep "${SYNC_INTERVAL_SEC:-120}"
+      date -Is > "$PROGRESS_DIR/heartbeat.txt" || true
+    done
+  ) &
+  SYNC_PID=$!
+  trap 'kill $SYNC_PID 2>/dev/null || true' EXIT
 
   torchrun \
     --nnodes=1 \
@@ -431,20 +372,7 @@ PY
     "${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}" \
     2>&1 | tee "$LOG_DIR/train.log"
 
-  if [[ "${SKIP_S3_UPLOAD}" != "1" ]]; then
-    log "train exited; final S3 sync under $CKPT_S3"
-    sync_checkpoints_to_s3 "$OUT_DIR/checkpoints" "$CKPT_S3/checkpoints"
-    aws s3 sync "$PROGRESS_DIR" "$CKPT_S3/progress" --only-show-errors || true
-    if [[ -d "$OUT_DIR/metrics/rho_excess" ]]; then
-      aws s3 sync "$OUT_DIR/metrics/rho_excess" "$METRICS_S3" --only-show-errors || true
-    fi
-    TL_LOCAL="${TASK_LOSS_LOCAL:-$TS_ROOT/task_loss_results/rho-1}"
-    if [[ -d "$TL_LOCAL" ]]; then
-      aws s3 sync "$TL_LOCAL" "$TASK_LOSS_S3" --only-show-errors || true
-    fi
-  else
-    log "train exited; SKIP final S3 sync"
-  fi
+  log "train exited; artifacts remain on scratch and W&B"
 }
 
 case "$MODE" in

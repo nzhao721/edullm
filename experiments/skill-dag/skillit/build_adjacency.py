@@ -9,12 +9,14 @@ Pipeline:
      ``mixlaw/extrapolate_chinchilla.py`` logic.
   3. ``A_ij = max(0, L_j(r_RegMix) - L_i_j)`` for domains i and families j,
      with ``L_j(r_RegMix)`` from ``mixlaw_fit_chinchilla.json``.
-  4. Write ``artifacts/A_offline.npy`` plus named JSON, then publish them.
+  4. Write ``artifacts/A_offline.npy`` plus named JSON on runtime scratch and
+     upload the directory to W&B.
 """
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -45,7 +47,6 @@ from skillit_math import (  # noqa: E402
 )
 
 CHINCHILLA_STEP = 5806  # token_budget(20) → 5806
-ARTIFACTS_S3_URI = "s3://edullm-checkpoints/skillit/artifacts"
 LEGACY_UNI_RUN = "probe_uni"
 
 
@@ -180,15 +181,18 @@ def main() -> None:
         default=_SKILLIT / "artifacts",
         help="Write A_offline.npy plus named JSON artifacts here",
     )
+    ap.add_argument("--wandb-project", default=os.environ.get("WANDB_PROJECT", "skillit"))
+    ap.add_argument("--wandb-entity", default=os.environ.get("WANDB_ENTITY") or None)
+    ap.add_argument("--wandb-run-name", default="skillit-build-offline-A")
     ap.add_argument(
-        "--s3-uri",
-        default=ARTIFACTS_S3_URI,
-        help=f"Artifact export prefix (default: {ARTIFACTS_S3_URI})",
+        "--wandb-mode",
+        choices=("online", "offline", "disabled"),
+        default=os.environ.get("WANDB_MODE", "online"),
     )
     ap.add_argument(
-        "--no-s3-export",
+        "--allow-local-only",
         action="store_true",
-        help="Keep artifacts local; equivalent to S3_EXPORT=0 for this invocation",
+        help="Explicit local analysis mode; permits offline/disabled W&B.",
     )
     ap.add_argument("--step", type=int, default=CHINCHILLA_STEP)
     ap.add_argument("--seed", type=int, default=0)
@@ -198,6 +202,11 @@ def main() -> None:
         help="Also write collected + extrapolated JSON under out-dir",
     )
     args = ap.parse_args()
+    if not args.allow_local_only and args.wandb_mode != "online":
+        ap.error(
+            "production artifact publication requires --wandb-mode online; "
+            "use --allow-local-only only for local analysis"
+        )
 
     fit_path = args.fit_json or default_mixlaw_fit_path()
     fit = load_fit_json(fit_path)
@@ -244,12 +253,35 @@ def main() -> None:
         )
         print(f"wrote intermediate JSONs under {args.out_dir}")
 
-    if args.no_s3_export:
-        print("S3 export disabled by --no-s3-export")
-    else:
-        from token_selection.olmo_ext.s3_export import sync_to_s3
-
-        sync_to_s3(args.out_dir, args.s3_uri)
+    if args.wandb_mode != "disabled":
+        if args.wandb_mode == "online" and not os.environ.get("WANDB_API_KEY"):
+            raise SystemExit("WANDB_API_KEY is required for online artifact publication")
+        try:
+            import wandb
+        except ImportError as exc:
+            if not args.allow_local_only:
+                raise SystemExit("wandb is required for artifact publication") from exc
+            print("wandb unavailable; artifacts remain on local scratch")
+        else:
+            os.environ.setdefault("WANDB_MODE", args.wandb_mode)
+            run = wandb.init(
+                project=args.wandb_project,
+                entity=args.wandb_entity,
+                name=args.wandb_run_name,
+                job_type="skillit-analysis",
+                config={"chinchilla_step": target_step, "seed": args.seed},
+            )
+            try:
+                artifact = wandb.Artifact("skillit-offline-A", type="analysis")
+                artifact.add_dir(str(args.out_dir))
+                logged = run.log_artifact(artifact)
+                wait = getattr(logged, "wait", None)
+                if callable(wait):
+                    wait()
+            finally:
+                run.finish()
+    elif not args.allow_local_only:
+        raise SystemExit("W&B cannot be disabled for production artifact publication")
 
     print("\nA (rows=domains, cols=families); positive = domain beats RegMix @ Chinchilla:")
     hdr = " ".join(f"{f[:8]:>8}" for f in CURVE_FAMILIES)

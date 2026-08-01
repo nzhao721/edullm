@@ -196,7 +196,8 @@ def main() -> int:
     except ImportError as exc:
         raise SystemExit(
             "edullm-data package is required "
-            '(install: uv add "edullm-data @ git+https://github.com/edu-llm/edullm-data@v0.2.0")'
+            '(install newest: uv pip install --upgrade '
+            '"edullm-data @ git+https://github.com/edu-llm/edullm-data@main")'
         ) from exc
 
     s3 = Boto3S3.default()

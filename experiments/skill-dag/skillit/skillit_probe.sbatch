@@ -94,11 +94,12 @@ nvidia-smi -L || true
 export PROBE_ID POOL_DIR MIX_WEIGHTS_JSON SAVE_FOLDER PROGRESS_DIR
 export PYTHON="${TRAIN_VENV}/bin/python"
 export NPROC=1
-export DEVICE_BATCH_SIZE="${DEVICE_BATCH_SIZE:-4}"
-export DEVICE_EVAL_BATCH_SIZE="${DEVICE_EVAL_BATCH_SIZE:-4}"
+# Match mixlaw / launch_probe.sh defaults (32/32) so probe family losses for A align.
+export DEVICE_BATCH_SIZE="${DEVICE_BATCH_SIZE:-32}"
+export DEVICE_EVAL_BATCH_SIZE="${DEVICE_EVAL_BATCH_SIZE:-32}"
 export NUM_WORKERS="${NUM_WORKERS:-4}"
 export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
-export RESULTS_S3="${RESULTS_S3:-}"
+export ALLOW_LOCAL_ONLY="${ALLOW_LOCAL_ONLY:-0}"
 
 bash "${SKILLIT_ROOT}/launch_probe.sh"
 

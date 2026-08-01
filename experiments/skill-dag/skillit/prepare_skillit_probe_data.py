@@ -31,6 +31,10 @@ def main() -> int:
     args = ap.parse_args()
 
     recipe = json.loads(args.recipe.read_text(encoding="utf-8"))
+    data_source = recipe.get("data_source") or {}
+    if data_source.get("version") and not data_source.get("dataset_version"):
+        data_source["dataset_version"] = data_source["version"]
+        recipe["data_source"] = data_source
     recipe["_tokens_per_param"] = float(args.tokens_per_param)
     wanted = set(args.only) if args.only else None
     arms = prepare_from_mixtures(recipe, args.recipe, args.work, only=wanted)
@@ -48,6 +52,7 @@ def main() -> int:
         "data_source": recipe.get("data_source")
         or {
             "dataset_id": "pretrain/olmo-127b",
+            "version": "v1",
             "bucket": "edullm-data",
             "mode": "domain_stratified_stream",
         },

@@ -8,11 +8,10 @@
 #   NPROC                 — torchrun nproc_per_node (default: # of visible GPUs, else 1)
 #   CUDA_VISIBLE_DEVICES  — physical GPU pin (required outside Slurm unless YAML sets it)
 #   CONFIG                — override YAML path
-#   RESUME=1              — resume; fetches durable ckpts from edullm-checkpoints
-#                           when the local save folder is empty (ephemeral scratch)
+#   RESUME=1              — resume from local scratch or WANDB_RESUME_ARTIFACT
 #   TOKEN_SELECTION_SKIP_IDLE_CHECK=1 — skip idle GPU probe (Slurm sets this path too)
 #
-# W&B (SmolLM2 protocol; additive to S3): project token-selection. Push
+# W&B project token-selection is the artifact and metrics store. Push
 # wandb-session.env via scripts/farmshare/push_wandb_session_to_farmshare.sh
 # "$RUN_DIR" (or set WANDB_SESSION_ENV). Local smoke: WANDB_MODE=disabled.
 #
@@ -51,10 +50,15 @@ if [[ "${NPROC}" -lt 1 ]]; then
   echo "NPROC must be >= 1 (got ${NPROC})" >&2
   exit 1
 fi
+export TASK_LOSS_STRICT=1
+export TASK_LOSS_NPROC="${TASK_LOSS_NPROC:-${NPROC}}"
 
 LAUNCH_ARGS=(--config "${CONFIG}" --method "${METHOD}" --olmo-root "${OLMO_ROOT}" --launch)
 if [[ "${RESUME:-0}" == "1" ]]; then
   LAUNCH_ARGS+=(--resume)
+fi
+if [[ -n "${WANDB_RESUME_ARTIFACT:-}" ]]; then
+  LAUNCH_ARGS+=(--wandb-resume-artifact "${WANDB_RESUME_ARTIFACT}")
 fi
 
 echo "attention launch: NPROC=${NPROC} CONFIG=${CONFIG} METHOD=${METHOD}"

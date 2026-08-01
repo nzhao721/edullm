@@ -19,11 +19,11 @@ config, launch scripts, and artifacts.
 | Permanent ckpts | `{0, 125, …, 2125, 2360}` (skip 2250) |
 | `run_id` | `middle-ppl-token-10b-v2` |
 | Task loss | full 20-label RC 5-shot `task_loss_bpb` on every permanent ckpt |
-| S3 export | `s3://edullm-checkpoints/token-sel/middle-ppl-token/` |
+| Artifact durability | Runtime scratch + W&B |
 
 **Ephemeral scratch:** set `WORK`/`RUN_DIR` to an empty job scratch dir; stage from
-edullm-data each run; durable artifacts export to S3. `RESUME=1` hydrates from
-S3 when the local save folder is empty. Do not use the repo tree as scratch.
+edullm-data each run; durable artifacts upload to W&B. For `RESUME=1` on an empty
+save folder, set `WANDB_RESUME_ARTIFACT`. Do not use the repo tree as scratch.
 
 Config: [`configs/run_middle_ppl_token_10b.yaml`](configs/run_middle_ppl_token_10b.yaml).
 
@@ -76,4 +76,5 @@ Outputs: `experiments/token-selection/task_loss_results/middle-ppl-token/step{N}
 TASK_LOSS_EVAL=0 bash …/launch_train.sh
 ```
 
-Checkpoint S3 export still runs unless `S3_EXPORT=0`.
+Checkpoints remain on runtime scratch and are uploaded to W&B artifacts.
+Production online runs fail closed if a required checkpoint upload fails.

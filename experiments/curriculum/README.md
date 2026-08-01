@@ -6,14 +6,14 @@ Train from scratch on the RegMix 10B corpus with **fixed token budget** and **on
 
 ## Execution environment
 
-**Ephemeral runtime.** Training assumes job-scoped scratch starts empty and is wiped after the job. Stage train/curriculum bytes from validated `s3://edullm-data/` into a job-local cache. Durable checkpoints, progress, and task-loss land on `s3://edullm-checkpoints/curriculum/<arm_id>/` (trainer `--s3-export`, default on) **and** Weights & Biases project `curriculum` (SmolLM FarmShare protocol: train/eval/checkpoint logging). Export failure after a permanent save or final sync **aborts all ranks**. Local smoke only: `S3_EXPORT=0` / `--no-s3-export` with `--wandb-mode disabled --allow-local-only`. Resume with `--load-path` pointing at a local step dir or `s3://edullm-checkpoints/curriculum/<arm>/checkpoints/stepN`. Do not rely on FarmShare/laptop leftovers or persistent scratch checkpoints.
+**Ephemeral runtime.** Training assumes job-scoped scratch starts empty and is wiped after the job. Stage train/curriculum bytes from validated `s3://edullm-data/` into a job-local cache. Checkpoints, progress, metrics, and task-loss outputs remain on runtime scratch and upload to Weights & Biases project `curriculum`; no run artifact is written to S3. At each permanent step the order is local checkpoint → synchronous all-rank 20-label eval → awaited W&B eval/checkpoint/runtime-state uploads → `last_wandb_step.json`. A production upload failure aborts all ranks. Local smoke only: `--wandb-mode disabled --allow-local-only`, and explicitly disable task loss if the eval stack is unavailable. Every launch selects recovery explicitly: `FRESH=1` / `--fresh`, or `LOAD_PATH` / `--load-path` pointing at a local step dir or `wandb-artifact://entity/project/name:version`.
 
 Instance type, GPU model, and GPU count are **not chosen in this plan** — scripts must work on any CUDA host with 1–N GPUs via `torchrun`.
 
-- Data: resolve+stage from `s3://edullm-data/` (`pretrain/regmix-10b`, `curriculum/regmix-*-370m`)
-- Checkpoints / progress / task_loss: job-local write → `aws s3 sync` to `edullm-checkpoints`
-- Metrics / evals / checkpoints also logged to W&B project `curriculum` (entity = account default unless `WANDB_ENTITY` set; same convention as SmolLM)
-- Resume via `--load-path` (local step dir or `s3://edullm-checkpoints/curriculum/<arm>/checkpoints/stepN`)
+- Data: resolve+stage from `s3://edullm-data/` (`pretrain/regmix-10b`, `curriculum/regmix-370m`)
+- Checkpoints / progress / metrics / task_loss: job-local scratch write → W&B artifacts only
+- Production requires online W&B; each checkpoint artifact upload is awaited and fail-closed
+- Resume via `--load-path` (local step dir or `wandb-artifact://entity/project/name:version`)
 - No slurm/FarmShare-specific launch paths, queue names, or GPU SKU assumptions in required code paths
 - `--device-batch-size` and grad accumulation are CLI parameters; derive steps from global batch `4_194_304` and discovered `world_size`
 - Curriculum index build is a CPU job; runnable locally, on AWS, or any host with S3 access — not tied to training hardware
@@ -22,7 +22,7 @@ Label **generation** lives in **`datasets/regmix/`**; publish token corpora / cu
 
 ## Training contract
 
-Fork [`experiments/token-selection/control/train_ce_regmix_olmo_370m.py`](experiments/token-selection/control/train_ce_regmix_olmo_370m.py) and reuse shared helpers from [`experiments/token-selection/token_selection/olmo_ext/`](experiments/token-selection/token_selection/olmo_ext/) for checkpoint ladder, task-loss wiring, and `s3_export.sync_to_s3`.
+Fork [`experiments/token-selection/control/train_ce_regmix_olmo_370m.py`](experiments/token-selection/control/train_ce_regmix_olmo_370m.py) and reuse shared helpers from [`experiments/token-selection/token_selection/olmo_ext/`](experiments/token-selection/token_selection/olmo_ext/) for the checkpoint ladder and task-loss wiring. Curriculum artifact publication is W&B-only.
 
 ### Architecture
 
@@ -51,9 +51,9 @@ Reference implementation: [`experiments/token-selection/reference/train_olmo3_37
 - **LR after warmup**: constant peak (`alpha_f=1.0`)
 - **Token budget**: ~10B → **2384 steps**
 - **Train corpus**: published `pretrain/regmix-10b` on `s3://edullm-data/`
-- **Curriculum orders**: published `curriculum/regmix-{compression,flesch,mtld,learnability}-370m` (fail closed if unpublished)
+- **Curriculum orders**: published `curriculum/regmix-370m` with groups `compression`, `flesch`, `mtld`, `learnability` (fail closed if unpublished)
 
-Control arm reads flat token memmaps from `pretrain/regmix-10b`; curriculum arms apply in-process pacing over the published token-order for the chosen difficulty metric.
+Control arm reads flat token memmaps from `pretrain/regmix-10b`; curriculum arms read the matching order group from `curriculum/regmix-370m` and apply in-process pacing.
 
 ### Checkpoint saving
 
@@ -65,16 +65,17 @@ Ladder via `permanent_checkpoint_steps()` from [`token_selection.olmo_ext.checkp
 - Omit last on-grid step when within one interval of final → `{0, 125, …, 2250, 2384}` — omit 2375
 - `max_checkpoints=None` — permanent saves only; no ephemeral pruning
 - Checkpoint format `model_and_optim` / `full_state_dict_v1`
-- After each permanent save (and at job end): fail-closed sync to `s3://edullm-checkpoints/curriculum/<arm_id>/`
+- After each permanent save: synchronous, fail-closed W&B model artifact upload; progress/eval/metrics snapshots are W&B run-state artifacts
 
 ### Task-loss eval
 
 - Metric: `task_loss_bpb` = `-log2 p(gold continuation | context) / utf8_bytes(continuation)`
 - Full **20-label** `*_rc_5shot_bpb` suite (ARC, BoolQ, CSQA, HellaSwag, OpenBookQA, PIQA, SocialIQA, WinoGrande, MMLU×4)
-- Trigger on every permanent checkpoint save (step 0 + each ladder step + final); async/subprocess OK
-- [`token_selection.olmo_ext.task_loss_hook.trigger_task_loss_eval`](experiments/token-selection/token_selection/olmo_ext/task_loss_hook.py); rank 0 only; `--task-loss-on-save` default on
+- Trigger synchronously on every permanent checkpoint save (step 0 + each ladder step + final)
+- All ranks pause, release the HSDP train module, evaluate in lockstep through the shared `pause_eval_reload_distributed` helper, then rebuild/reload the saved checkpoint
+- Production is strict and requires `LADDER_BASE_CONFIG`; local smoke may explicitly use `--no-task-loss-on-save`
 - Evaluator script: [`scripts/farmshare/task_loss/eval_task_loss_olmo_core.py`](scripts/farmshare/task_loss/eval_task_loss_olmo_core.py) (repo path only; runs on the training/eval worker)
-- Outputs: job-local `$PROGRESS_DIR/task_loss_results/step{N}_task_loss.json` → synced under the arm S3 prefix
+- Outputs: job-local `$PROGRESS_DIR/task_loss_results/step{N}_task_loss.json` → W&B eval and run-state artifacts
 
 Post-hoc EMA merge runs the 20-label eval on the merged artifact in addition to per-checkpoint evals.
 
@@ -85,17 +86,13 @@ Post-hoc EMA merge runs the 20-label eval on the merged artifact in addition to 
 - Global batch `4_194_304`; per-rank microbatch / grad-accum from `world_size` and `--device-batch-size`; fail-fast if not divisible
 - Eval scripts: 1+ GPU compatible on the same worker policy as training
 
-### S3 export layout
+### Artifact layout
 
-```text
-s3://edullm-checkpoints/curriculum/<arm_id>/
-  checkpoints/
-  task_loss_results/
-  metrics/
-  progress/
-```
-
-Use `arm_s3_prefix(arm_id)` / `curriculum_s3_uri` in the trainer (`curriculum/<arm_id>`).
+Runtime scratch contains `checkpoints/`, `progress/`, `metrics/`, and
+`progress/task_loss_results/`. W&B receives one model artifact per permanent
+checkpoint, one eval artifact per completed task-loss suite, and versioned
+run-state artifacts containing progress, task-loss, and train-metric files.
+Production calls `Artifact.wait()` before advancing past each checkpoint.
 
 ## Local repo layout (`C:\alpha_ai\edullm`)
 
@@ -137,15 +134,35 @@ experiments/curriculum/
 **Dependencies** (existing code, imported — not duplicated):
 
 - [`experiments/token-selection/control/train_ce_regmix_olmo_370m.py`](experiments/token-selection/control/train_ce_regmix_olmo_370m.py) — trainer fork source
-- [`experiments/token-selection/token_selection/olmo_ext/`](experiments/token-selection/token_selection/olmo_ext/) — checkpoint ladder, task_loss, `s3_export`
+- [`experiments/token-selection/token_selection/olmo_ext/`](experiments/token-selection/token_selection/olmo_ext/) — checkpoint ladder and task_loss
 - [`datasets/regmix/`](datasets/regmix/) — labeling (no duplicate upload scripts under `experiments/curriculum/`)
 
-Published training inputs are `edullm-data` dataset IDs (`pretrain/regmix-10b`, `curriculum/regmix-*-370m`), not paths under a legacy datasets bucket.
+Published training inputs are `edullm-data` dataset IDs (`pretrain/regmix-10b`, `curriculum/regmix-370m`), not paths under a legacy datasets bucket.
 
 ## Data on S3 (`edullm-data`)
 
 - **`pretrain/regmix-10b`**: tokenized parent pool (control + curriculum arms)
-- **`curriculum/regmix-compression-370m`** / **`…-flesch-…`** / **`…-mtld-…`** / **`…-learnability-…`**: published token-order curricula (fail closed if missing from `_catalog/`)
+- **`curriculum/regmix-370m`**: four `token-order/v1` groups (`compression`, `flesch`, `mtld`, `learnability`) over `pretrain/regmix-10b` (fail closed if missing from `_catalog/`)
+
+| `--difficulty-metric` | order group |
+|-----------------------|-------------|
+| `compression_ratio`   | `compression` |
+| `flesch`              | `flesch` |
+| `mtld`                | `mtld` |
+| `learnability`        | `learnability` |
+
+Trainers resolve `curriculum/regmix-370m` with `dataset_paths(..., group=<name>, split=train)`. The group defaults from `--difficulty-metric`; override with `--curriculum-order-group` when needed. The order group must bind the exact staged parent dataset version and `manifest_sha256`; a same-length order for another parent version is rejected.
+
+### Parent-pool flat chunk coordinates
+
+Production order vectors are complete permutations of the exact chunks exposed by the published parent:
+
+1. Walk `pretrain/regmix-10b` train shards in `dataset_paths()` order.
+2. Each shard contributes `(shard_tokens - 1) // 2048` independently mapped chunks.
+3. Concatenate those shard-local ranges into flat IDs `0..N-1`.
+4. Map each flat chunk to the labeled document containing the chunk's first token; sort by that document's metric rank, breaking ties by flat ID.
+
+`build_curriculum_index.py` requires a local parent-layout descriptor captured from the published parent. It must include `dataset_id`, pinned `version`, `manifest_sha256`, `seq_len`, `tokenizer_id`, `eos_token_id`, `source_total_tokens`, and ordered `shards` with `path`, `source`, `source_token_start`, and `count`. Label rows must retain one unambiguous `source_path` per source, cover contiguous `source_doc` ordinals, and match exact `n_tokens + EOS` totals. Missing offsets, incomplete metric coverage, tokenizer/hash/version mismatch, or a non-permutation fails closed. The legacy document-local `--curriculum-index` path is rejected.
 
 **17 arms:** 1 control + 4 pacing × 4 metrics (`compression_ratio`, `flesch`, `mtld`, `learnability`).
 
@@ -160,8 +177,10 @@ Published training inputs are `edullm-data` dataset IDs (`pretrain/regmix-10b`, 
 
 ### Phase 1: Build curriculum index (`experiments/curriculum/`)
 
-- `experiments/curriculum/scripts/build_curriculum_index.py` — merge labels, per-metric ranks, optional tokenize
-- CPU job; local staging only by default; publish resulting token-order datasets into `edullm-data`
+- `experiments/curriculum/scripts/build_curriculum_index.py` — merge labels and map ranks into a pinned published-parent flat chunk layout (no production re-tokenization)
+- `datasets/regmix/publish_regmix_curriculum_edullm_data.py` — stage four order groups → `publish()` as `curriculum/regmix-370m`
+- `datasets/regmix/submit_publish_regmix_curriculum_edullm_data.sh` — FarmShare Slurm publish (after index build)
+- CPU job; local staging only by default; publish resulting token-order dataset into `edullm-data`
 
 ### Phase 2: Pacing library
 
@@ -170,13 +189,14 @@ Published training inputs are `edullm-data` dataset IDs (`pretrain/regmix-10b`, 
 ### Phase 3: Shared trainer
 
 - `experiments/curriculum/train_curriculum_regmix_370m.py` — fork from control trainer; `--lr-alpha-f 1.0`
-- Checkpoint ladder via `permanent_checkpoint_steps()`; durable S3 via `curriculum_s3_uri` + `sync_to_s3`; task-loss via `trigger_task_loss_eval`
+- Checkpoint ladder via `permanent_checkpoint_steps()`; fail-closed W&B checkpoint artifacts; task loss via shared `pause_eval_reload_distributed`
 - `experiments/curriculum/tests/test_training_defaults.py` — ladder `{0,125,…,2250,2384}` omits 2375; GBS/microbatch defaults; edullm-data binding
 
 ### Phase 4: Post-hoc EMA
 
 - `experiments/curriculum/ema_merge_checkpoints.py` — merge steps 2000/2125/2250/2384, α=0.8
-- Pull checkpoints from `s3://edullm-checkpoints/curriculum/<arm_id>/` into a work dir first
+- Use checkpoints still on job scratch or download the required W&B model artifact versions into a scratch work dir first
+- Production uploads the merged checkpoint and EMA task-loss result to W&B and awaits both artifact commits; `--allow-local-only` is for local smoke only
 
 ### Phase 5: Launch matrix
 
@@ -211,7 +231,7 @@ Published training inputs are `edullm-data` dataset IDs (`pretrain/regmix-10b`, 
 
 Print the matrix: `bash experiments/curriculum/launch/submit_matrix.sh --print-only`
 
-Example launches (job-scoped scratch; durable layout is `curriculum/<arm_id>/checkpoints` and `…/progress` on S3 + W&B project `curriculum`):
+Example launches (job-scoped scratch; W&B project `curriculum` is the only production artifact backend):
 
 ```bash
 RUN_DIR="${TMPDIR:-/tmp}/curriculum-job-$$"
@@ -224,20 +244,22 @@ export WANDB_PROJECT=curriculum WANDB_MODE=online
 
 # Control
 ARM_ID=control PACING=control \
+  FRESH=1 \
   SAVE_FOLDER=$RUN_DIR/ckpts PROGRESS_DIR=$RUN_DIR/progress \
   DATA_CACHE_DIR=$RUN_DIR/cache \
   bash experiments/curriculum/launch/launch_arm.sh
 
 # Curriculum example (linear + compression_ratio)
 ARM_ID=linear10-cr PACING=linear_n10 DIFFICULTY_METRIC=compression_ratio \
+  FRESH=1 LADDER_BASE_CONFIG=/path/to/ladder-config.yaml \
   SAVE_FOLDER=$RUN_DIR/ckpts PROGRESS_DIR=$RUN_DIR/progress \
   DATA_CACHE_DIR=$RUN_DIR/cache \
   bash experiments/curriculum/launch/launch_arm.sh
 
 # Local smoke (no durable sink)
-# WANDB_MODE=disabled S3_EXPORT=0 ALLOW_LOCAL_ONLY=1 bash …/launch_arm.sh
+# WANDB_MODE=disabled ALLOW_LOCAL_ONLY=1 bash …/launch_arm.sh
 
-# Optional post-hoc EMA (after syncing checkpoints from S3 into a work dir)
+# Optional post-hoc EMA (from scratch checkpoints or downloaded W&B artifacts)
 python experiments/curriculum/ema_merge_checkpoints.py \
   --checkpoints-root /path/to/staged/linear10-cr/checkpoints \
   --arm-id linear10-cr
@@ -259,6 +281,6 @@ Logged: `train/loss`, `train/lr`, throughput; task-loss eval metrics + artifacts
 2. Create `experiments/curriculum/` tree
 3. `build_curriculum_index.py` + publish curriculum orders
 4. `curriculum_pacing.py` + tests
-5. `train_curriculum_regmix_370m.py` (ephemeral scratch + S3 durable export)
+5. `train_curriculum_regmix_370m.py` (ephemeral scratch + fail-closed W&B artifacts)
 6. `ema_merge_checkpoints.py` + launch scripts
 7. Smoke → full 17-arm matrix

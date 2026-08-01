@@ -10,36 +10,38 @@ Fork of ``experiments/curriculum/train_curriculum_regmix_370m.py`` with:
     (legacy fallback: ``artifacts/A_offline.npy``)
   * ``A_MODE=derivative`` — recompute A(r) from mixlaw Chinchilla fit each update
   * Persist full A + p_before/p_after to ``progress/skillit_updates*``
-  * Fail-closed durable S3 export to ``s3://edullm-checkpoints/skillit/<arm>/``
-    (default on; opt out only with ``--no-s3-export`` / ``S3_EXPORT=0``)
-  * W&B online logging (project ``skillit``) for train metrics, Skill-It
-    weight updates, task-loss evals, and checkpoint artifacts — SmolLM-style
-    enablement via ``WANDB_API_KEY`` + ``--wandb-mode`` (orthogonal to S3)
+  * Runtime artifacts remain on scratch; no checkpoint, progress, or eval writes
+    go to S3.
+  * W&B online logging (project ``skillit``) is the production durable sink for
+    train metrics, Skill-It updates, evals, and checkpoints. Checkpoint uploads
+    are synchronous and fail closed before training advances.
 
-Data path: pass ``--dataset-id`` (default ``pretrain/olmo-original-30b``) and a
+Data path is pinned to ``pretrain/olmo-127b/v1``. Pass a
 ``--pool-dir`` staging root. Rank 0 stages train shards from edullm-data on a
 clean machine when the pool marker is missing; training never assumes FarmShare
 scratch, laptop-local pools, or ``s3://edullm-datasets/`` already exist.
 
 Ephemeral-runtime contract:
-  - Permanent checkpoints fail-closed sync to
-    ``s3://edullm-checkpoints/skillit/<arm>/`` (not ``curriculum/``).
-  - W&B is an additional durable sink when enabled; missing ``wandb`` must
-    never disable S3 export.
-  - Never weakens edullm-data staging.
+  - Checkpoints, progress, and evals remain on runtime scratch.
+  - Production requires online W&B; local-only smoke runs require an explicit
+    ``--allow-local-only``.
+  - S3 is read only for edullm-data staging and an explicitly selected legacy
+    resume bootstrap at run start.
 
 Does **not** submit AWS/FarmShare jobs.
 """
 from __future__ import annotations
 
 import argparse
+import gc
+import importlib.util
 import json
 import logging
 import os
 import sys
 import time
 from pathlib import Path
-from typing import Any, Dict, Mapping, Optional, Set
+from typing import Any, Callable, Dict, Mapping, Optional, Set
 
 _SKILLIT = Path(__file__).resolve().parent
 # skillit/ → skill-dag/ → experiments/  (same layout as mixlaw/train_mixlaw_validation_370m.py)
@@ -67,15 +69,16 @@ from token_selection.olmo_ext.checkpoint_ladder import (
     DEFAULT_CHECKPOINT_INTERVAL,
     permanent_checkpoint_steps,
 )
-from token_selection.olmo_ext.task_loss_hook import trigger_task_loss_eval
+from token_selection.olmo_ext.task_loss_hook import resolve_eval_script
 
 import train_curriculum_regmix_370m as curr  # noqa: E402
 from domain_stream import DomainMixtureStream  # noqa: E402  # mixlaw (or staged copy)
 from mixlaw_common import CURVE_FAMILIES, CURVE_TASK_LOSS_LABELS, DOMAINS, task_family  # noqa: E402
 from prepare_skillit_370m_data import (  # noqa: E402
     DEFAULT_DATASET_ID,
-    SOURCE_MARKER,
+    DEFAULT_DATASET_VERSION,
     stage_working_pool,
+    validate_pool_source,
 )
 from skillit_math import (  # noqa: E402
     ETA_DEFAULT,
@@ -92,6 +95,7 @@ from wandb_logging import (  # noqa: E402
     init_wandb,
     wandb_log_checkpoint,
     wandb_log_eval,
+    wandb_log_runtime_artifacts,
     wandb_log_skillit_update,
     wandb_log_train,
     wandb_upload_existing,
@@ -106,8 +110,7 @@ PEAK_LR = curr.PEAK_LR
 DEFAULT_SEED = curr.DEFAULT_SEED
 DEFAULT_LENGTH_TOKENS = curr.DEFAULT_LENGTH_TOKENS
 CONFIG_NAME = "OLMo-2-370M-skillit"
-CHECKPOINT_BUCKET = "edullm-checkpoints"
-SKILLIT_S3_ROOT = "skillit"
+LEGACY_RESUME_S3_ROOT = "s3://edullm-checkpoints/skillit"
 
 SKILLIT_UPDATE_STEPS: tuple[int, ...] = (500, 875, 1250, 1625, 2000)
 _A_OFFLINE_CANDIDATES = (
@@ -131,36 +134,35 @@ def load_arm_weights(path: Path) -> tuple[dict[str, float], dict[str, Any]]:
     return out, payload
 
 
-def arm_s3_prefix(arm_id: str) -> str:
-    arm = str(arm_id).strip().strip("/")
-    if not arm:
-        raise ValueError("arm_id must be non-empty")
-    return f"{SKILLIT_S3_ROOT}/{arm}"
+def _import_task_loss_eval_module(eval_script: Optional[str] = None) -> Any:
+    """Import the shared step-1 evaluator by resolved file path."""
+    script = resolve_eval_script(eval_script)
+    if script is None:
+        raise FileNotFoundError(
+            "shared task-loss evaluator not found; set TASK_LOSS_EVAL_SCRIPT "
+            "or --task-loss-eval-script"
+        )
+    spec = importlib.util.spec_from_file_location("eval_task_loss_olmo_core", script)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"cannot import shared task-loss evaluator from {script}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    if not hasattr(module, "pause_eval_reload_distributed"):
+        raise ImportError(
+            f"{script} lacks shared pause_eval_reload_distributed helper"
+        )
+    return module
 
 
-def arm_s3_uri(arm_id: str, *parts: str) -> str:
-    """Build ``s3://edullm-checkpoints/skillit/<arm>[/parts…]``."""
-    prefix = arm_s3_prefix(arm_id)
-    extra = "/".join(p.strip("/") for p in parts if str(p).strip())
-    if extra:
-        return f"s3://{CHECKPOINT_BUCKET}/{prefix}/{extra}"
-    return f"s3://{CHECKPOINT_BUCKET}/{prefix}/"
+def _reset_olmo_world_mesh() -> None:
+    """Allow rebuilding the train module after releasing FSDP for evaluation."""
+    try:
+        import olmo_core.distributed.parallel as parallel
 
-
-def _redirect_curriculum_s3_to_skillit() -> None:
-    """Point curriculum ``save_checkpoint`` S3 helpers at the skillit/ prefix.
-
-    ``curr.save_checkpoint`` calls ``export_curriculum_*`` which default to
-    ``curriculum/<arm>/``. Override the URI builders so fail-closed export
-    lands under ``skillit/<arm>/`` without disabling S3.
-    """
-    curr.curriculum_s3_uri = arm_s3_uri  # type: ignore[attr-defined]
-    curr.arm_s3_prefix = arm_s3_prefix  # type: ignore[attr-defined]
-    log.info(
-        "Curriculum S3 helpers redirected → s3://%s/%s/<arm>/",
-        CHECKPOINT_BUCKET,
-        SKILLIT_S3_ROOT,
-    )
+        if getattr(parallel, "_WORLD_MESH", None) is not None:
+            parallel._WORLD_MESH = None  # type: ignore[attr-defined]
+    except Exception as exc:  # noqa: BLE001
+        log.warning("Could not reset olmo-core world mesh: %s", exc)
 
 
 def curve_family_losses_from_task_loss(path: Path) -> Dict[str, float]:
@@ -297,8 +299,8 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument(
         "--dataset-version",
         type=str,
-        default=None,
-        help="Pin edullm-data version (default: resolve_latest)",
+        default=DEFAULT_DATASET_VERSION,
+        help=f"Pinned edullm-data version (required: {DEFAULT_DATASET_VERSION})",
     )
     ap.add_argument(
         "--max-tokens-per-domain",
@@ -345,44 +347,44 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--log-interval", type=int, default=10)
     ap.add_argument("--task-loss-results-dir", type=str, default=None)
     ap.add_argument("--task-loss-eval-script", type=str, default=None)
+    ap.add_argument("--device-eval-batch-size", type=int, default=4)
     ap.add_argument(
         "--task-loss-on-save",
         action=argparse.BooleanOptionalAction,
         default=True,
     )
     ap.add_argument(
-        "--s3-export",
-        action=argparse.BooleanOptionalAction,
-        default=True,
-        help=(
-            "Fail-closed upload of checkpoints/progress/task_loss to "
-            f"s3://{CHECKPOINT_BUCKET}/{SKILLIT_S3_ROOT}/<arm>/ (default on). "
-            "Disable only for local smoke: --no-s3-export or S3_EXPORT=0 / SKIP_S3_UPLOAD=1."
-        ),
+        "--allow-local-only",
+        action="store_true",
+        help="Explicit local smoke mode; permits W&B offline/disabled.",
     )
     add_wandb_args(ap)
     args = ap.parse_args()
     if args.name is None:
         args.name = args.arm_id
+    if bool(args.fresh) == bool(args.load_path):
+        ap.error("choose exactly one resume mode: --fresh or --load-path <local|s3://...>")
+    if args.dataset_id != DEFAULT_DATASET_ID or args.dataset_version != DEFAULT_DATASET_VERSION:
+        ap.error(
+            "SkillIt source is pinned to "
+            f"{DEFAULT_DATASET_ID}/{DEFAULT_DATASET_VERSION}"
+        )
     if not args.pool_dir:
         args.pool_dir = str(Path(args.progress_dir).resolve().parent / "pool")
     # Compatibility with curriculum save_checkpoint meta fields.
     args.pacing = f"skillit:{args.a_mode}"
     args.difficulty_metric = None
-    # Honor S3_EXPORT / SKIP_S3_UPLOAD env without disabling the fail-closed default
-    # when the flag is left at its default True.
-    if args.s3_export:
-        from token_selection.olmo_ext.s3_export import s3_export_enabled
-
-        if not s3_export_enabled(None):
-            args.s3_export = False
+    if not args.allow_local_only and args.wandb_mode != "online":
+        ap.error(
+            "production runs require --wandb-mode online; "
+            "use --allow-local-only only for local smoke"
+        )
     return args
 
 
 def _ensure_pool(args: argparse.Namespace) -> dict[str, Any]:
     """Stage edullm-data domain shards into ``args.pool_dir`` if needed (rank 0)."""
     pool_dir = Path(args.pool_dir)
-    marker = pool_dir / SOURCE_MARKER
     if get_rank() == 0:
         source = stage_working_pool(
             pool_dir=pool_dir,
@@ -404,11 +406,200 @@ def _ensure_pool(args: argparse.Namespace) -> dict[str, Any]:
         source = {}
     if is_distributed():
         dist.barrier()
-        if get_rank() != 0:
-            if not marker.is_file():
-                raise SystemExit(f"rank {get_rank()}: missing pool marker {marker}")
-            source = json.loads(marker.read_text(encoding="utf-8"))
+    source = validate_pool_source(
+        pool_dir,
+        dataset_id=DEFAULT_DATASET_ID,
+        version=DEFAULT_DATASET_VERSION,
+        require_370m_layout=True,
+    )
     return source
+
+
+def _stage_resume_path(
+    args: argparse.Namespace,
+    *,
+    save_folder: Path,
+    progress_dir: Path,
+) -> Path:
+    """Stage an explicit local/S3 bootstrap checkpoint at run start."""
+    raw = str(args.load_path).strip()
+    if not raw.startswith("s3://"):
+        path = Path(raw)
+        if not (path / "state.pt").is_file():
+            raise SystemExit(f"--load-path {path} is missing state.pt")
+        return path
+
+    expected_root = f"{LEGACY_RESUME_S3_ROOT}/{args.arm_id}"
+    checkpoint_root = f"{expected_root}/checkpoints/"
+    if not raw.startswith(checkpoint_root):
+        raise SystemExit(
+            f"SkillIt S3 --load-path must be under {checkpoint_root}; got {raw}"
+        )
+    step_name = raw.rstrip("/").rsplit("/", 1)[-1]
+    if not step_name.startswith("step"):
+        raise SystemExit(f"SkillIt S3 --load-path must end in stepN; got {raw}")
+
+    dest = save_folder / step_name
+    ok = True
+    error = ""
+    if get_rank() == 0:
+        try:
+            # This is a read-only bootstrap at run start; SkillIt never writes
+            # checkpoints or progress back to S3.
+            dest = curr.stage_load_path(
+                raw,
+                save_folder=save_folder,
+                s3_export=True,
+            )
+            # A checkpoint at an update step is pre-update; restoring the durable
+            # progress history is required to recover the post-update stream weights.
+            from token_selection.olmo_ext.s3_export import sync_from_s3
+
+            sync_from_s3(
+                f"{expected_root}/progress/",
+                progress_dir,
+                enabled=True,
+                raise_on_error=True,
+            )
+        except Exception as exc:  # noqa: BLE001
+            ok = False
+            error = f"failed to stage SkillIt resume artifacts from {raw}: {exc}"
+    curr._abort_all_ranks(error or "SkillIt S3 resume staging failed", ok=ok)
+    if is_distributed():
+        dist.barrier()
+    if not (dest / "state.pt").is_file():
+        raise SystemExit(f"staged --load-path {dest} is missing state.pt")
+    return dest
+
+
+def _validate_checkpoint_source(
+    checkpoint_dir: Path,
+    *,
+    arm_id: str,
+    a_mode: str,
+) -> None:
+    """Reject resumes from another source, arm, or SkillIt update mode."""
+    payload = torch.load(
+        checkpoint_dir / "state.pt",
+        map_location="cpu",
+        weights_only=False,
+    )
+    meta = payload.get("meta") or {}
+    source = meta.get("edullm_data") or {}
+    got_source = (source.get("dataset_id"), source.get("version"))
+    expected_source = (DEFAULT_DATASET_ID, DEFAULT_DATASET_VERSION)
+    if got_source != expected_source:
+        raise SystemExit(
+            f"{checkpoint_dir}: checkpoint source {got_source!r} does not match "
+            f"pinned source {expected_source!r}"
+        )
+    if str(meta.get("arm")) != arm_id:
+        raise SystemExit(
+            f"{checkpoint_dir}: checkpoint arm={meta.get('arm')!r} != {arm_id!r}"
+        )
+    if str(meta.get("a_mode")) != a_mode:
+        raise SystemExit(
+            f"{checkpoint_dir}: checkpoint a_mode={meta.get('a_mode')!r} != {a_mode!r}"
+        )
+
+
+def _validate_task_loss_payload(
+    payload: Mapping[str, Any],
+    *,
+    step: int,
+    path: Path,
+) -> None:
+    """Require a fresh, complete 20-label result for the exact update step."""
+    if int(payload.get("step", -1)) != int(step):
+        raise RuntimeError(
+            f"{path}: stale task-loss payload step={payload.get('step')!r}; expected {step}"
+        )
+    labels = payload.get("labels") or {}
+    if not payload.get("suite_complete") or int(payload.get("raw_label_count", 0)) != 20:
+        raise RuntimeError(f"{path}: task-loss suite is not contract-complete")
+    if not isinstance(labels, dict) or len(labels) != 20:
+        raise RuntimeError(f"{path}: expected exactly 20 raw task-loss labels")
+
+
+def _pause_eval_reload(
+    args: argparse.Namespace,
+    ckpt_dir: Path,
+    step: int,
+    *,
+    books: Any,
+    lr: float,
+    rank_micro_tokens: int,
+    tokens_per_step: int,
+) -> tuple[Any, Mapping[str, Any]]:
+    """Use the shared all-rank pause/eval/reload helper in strict mode."""
+    eval_mod = _import_task_loss_eval_module(args.task_loss_eval_script)
+    out_path = Path(args.task_loss_results_dir) / f"step{step}_task_loss.json"
+    if get_rank() == 0 and out_path.exists():
+        out_path.unlink()
+    if is_distributed():
+        dist.barrier()
+
+    def release_train_state() -> None:
+        for attr in ("trainer", "_trainer", "train_module", "_train_module"):
+            if hasattr(books, attr):
+                try:
+                    setattr(books, attr, None)
+                except Exception:
+                    pass
+
+    def reload_train_state() -> Any:
+        _reset_olmo_world_mesh()
+        module = curr.build_train_module(
+            lr=lr,
+            lr_warmup_steps=int(args.lr_warmup_steps),
+            alpha_f=float(args.lr_alpha_f),
+            compile_model=bool(args.compile),
+            rank_microbatch_tokens=rank_micro_tokens,
+        )
+        module._attach_trainer(books)  # type: ignore[arg-type]
+        loaded = curr.load_checkpoint(ckpt_dir, module)
+        books.global_step = int(loaded)
+        books.global_train_tokens_seen = int(loaded) * int(tokens_per_step)
+        return module
+
+    module, payload = eval_mod.pause_eval_reload_distributed(
+        ckpt_dir,
+        out_path,
+        f"{args.arm_id}-step{step}",
+        release_train_state=release_train_state,
+        reload_train_state=reload_train_state,
+        base_config=Path(os.environ["LADDER_BASE_CONFIG"]),
+        device_eval_batch_size=int(args.device_eval_batch_size),
+        strict=True,
+    )
+    if payload is None:
+        raise RuntimeError(f"shared evaluator returned no payload for step {step}")
+    _validate_task_loss_payload(payload, step=step, path=out_path)
+    return module, payload
+
+
+def _wandb_upload_or_abort(
+    args: argparse.Namespace,
+    wb_run: object | None,
+    upload: Callable[[], bool],
+    *,
+    what: str,
+) -> None:
+    """Run a rank-0 W&B upload and fail all ranks for production failures."""
+    ok = True
+    error = ""
+    if get_rank() == 0:
+        try:
+            uploaded = bool(upload()) if wb_run is not None else False
+            if not uploaded and not bool(args.allow_local_only):
+                raise RuntimeError("online W&B run is unavailable")
+        except Exception as exc:  # noqa: BLE001
+            if not bool(args.allow_local_only):
+                ok = False
+                error = f"{what} failed: {exc}"
+            else:
+                log.warning("%s failed in local-only smoke mode: %s", what, exc)
+    curr._abort_all_ranks(error or f"{what} failed", ok=ok)
 
 
 def main() -> None:
@@ -418,13 +609,12 @@ def main() -> None:
         format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
     )
     if args.task_loss_results_dir is None:
-        # Match curriculum: keep 20-label ladder evals under ephemeral progress/,
-        # then sync with other arm artifacts to s3://edullm-checkpoints/skillit/.
+        # Keep 20-label ladder evals under runtime scratch; W&B is the only
+        # production artifact sink.
         args.task_loss_results_dir = str(Path(args.progress_dir) / "task_loss_results")
     # Non-main ranks must not touch W&B (SmolLM-style single-writer).
     if os.environ.get("RANK", os.environ.get("LOCAL_RANK", "0")) not in ("0", ""):
         os.environ["WANDB_MODE"] = "disabled"
-    _redirect_curriculum_s3_to_skillit()
     try:
         torch.set_float32_matmul_precision("high")
     except Exception:
@@ -492,6 +682,15 @@ def _run(args: argparse.Namespace) -> None:
         Path(args.task_loss_results_dir).mkdir(parents=True, exist_ok=True)
 
     pool_source = _ensure_pool(args)
+    if arm_meta:
+        arm_source = arm_meta.get("edullm_data") or {}
+        arm_identity = (arm_source.get("dataset_id"), arm_source.get("version"))
+        pool_identity = (pool_source.get("dataset_id"), pool_source.get("version"))
+        if arm_identity != pool_identity:
+            raise SystemExit(
+                f"{args.arm_weights_json}: source {arm_identity!r} does not match "
+                f"staged pool {pool_identity!r}"
+            )
     stream_dtype = pool_source.get("dtype") or "uint32"
     stream = DomainMixtureStream(
         args.pool_dir,
@@ -511,9 +710,9 @@ def _run(args: argparse.Namespace) -> None:
         "a_mode": args.a_mode,
         "method": f"skillit:{args.a_mode}",
         "run_id": args.name,
-        "s3_prefix": arm_s3_prefix(args.arm_id),
-        "s3_uri": arm_s3_uri(args.arm_id),
-        "s3_export": bool(args.s3_export),
+        "artifact_backend": "wandb",
+        "artifact_storage": "runtime_scratch",
+        "allow_local_only": bool(args.allow_local_only),
         "train_stack": "TransformerTrainModule HSDP bf16 SkipStepAdamW compile",
         "tokenizer": curr.TOKENIZER_ID,
         "vocab_size": curr.EMBEDDING_SIZE,
@@ -541,6 +740,13 @@ def _run(args: argparse.Namespace) -> None:
             "version": pool_source.get("version"),
             "dtype": stream_dtype,
             "bucket": "edullm-data",
+            "uri": (
+                f"s3://edullm-data/{pool_source.get('dataset_id')}/"
+                f"{pool_source.get('version')}/"
+            ),
+            "identity": (
+                f"{pool_source.get('dataset_id')}@{pool_source.get('version')}"
+            ),
         },
         "arm_weights_json": str(args.arm_weights_json) if args.arm_weights_json else None,
         "recipe": arm_meta.get("recipe"),
@@ -560,6 +766,8 @@ def _run(args: argparse.Namespace) -> None:
         },
     }
     wb_run = None
+    wandb_init_ok = True
+    wandb_init_error = ""
     logged_eval_steps: Set[int] = set()
     if rank == 0:
         (progress_dir / "run_meta.json").write_text(json.dumps(meta, indent=2) + "\n")
@@ -578,25 +786,39 @@ def _run(args: argparse.Namespace) -> None:
             total_steps,
             list(SKILLIT_UPDATE_STEPS),
         )
-        wb_run = init_wandb(
-            args,
-            meta,
-            is_main=True,
-            output_dir=progress_dir,
-            default_name=str(args.name),
-        )
-        if wb_run is not None:
-            meta["wandb"]["run_id"] = getattr(wb_run, "id", None)
-            meta["wandb"]["url"] = getattr(wb_run, "url", None)
-            (progress_dir / "run_meta.json").write_text(json.dumps(meta, indent=2) + "\n")
-            if args.wandb_upload_existing:
-                log.info("uploading existing checkpoints/evals to wandb...")
-                wandb_upload_existing(
-                    wb_run,
-                    save_folder=save_folder,
-                    progress_dir=progress_dir,
-                    task_loss_results_dir=Path(args.task_loss_results_dir),
-                )
+        try:
+            wb_run = init_wandb(
+                args,
+                meta,
+                is_main=True,
+                output_dir=progress_dir,
+                default_name=str(args.name),
+            )
+            if wb_run is None and not bool(args.allow_local_only):
+                raise RuntimeError("online W&B initialization returned no run")
+            if wb_run is not None:
+                meta["wandb"]["run_id"] = getattr(wb_run, "id", None)
+                meta["wandb"]["url"] = getattr(wb_run, "url", None)
+                (progress_dir / "run_meta.json").write_text(json.dumps(meta, indent=2) + "\n")
+                if args.wandb_upload_existing:
+                    log.info("uploading existing checkpoints/evals to wandb...")
+                    wandb_upload_existing(
+                        wb_run,
+                        save_folder=save_folder,
+                        progress_dir=progress_dir,
+                        task_loss_results_dir=Path(args.task_loss_results_dir),
+                    )
+        except Exception as exc:  # noqa: BLE001
+            if not bool(args.allow_local_only):
+                wandb_init_ok = False
+                wandb_init_error = f"production W&B initialization failed: {exc}"
+            else:
+                log.warning("W&B initialization failed in local-only smoke mode: %s", exc)
+            wb_run = None
+    curr._abort_all_ranks(
+        wandb_init_error or "production W&B initialization failed",
+        ok=wandb_init_ok,
+    )
 
     train_module = curr.build_train_module(
         lr=lr,
@@ -616,44 +838,84 @@ def _run(args: argparse.Namespace) -> None:
     start_step = 0
     if args.fresh:
         if rank == 0:
-            log.info("--fresh: starting from scratch")
+            log.info("--fresh: starting from scratch; local checkpoints are ignored")
     else:
-        load_dir = Path(args.load_path) if args.load_path else curr.find_latest_checkpoint(save_folder)
-        if load_dir is not None:
-            start_step = curr.load_checkpoint(load_dir, train_module)
+        load_dir = _stage_resume_path(
+            args,
+            save_folder=save_folder,
+            progress_dir=progress_dir,
+        )
+        _validate_checkpoint_source(
+            load_dir,
+            arm_id=args.arm_id,
+            a_mode=args.a_mode,
+        )
+        start_step = curr.load_checkpoint(load_dir, train_module)
 
     # Restore domain weights after the last Skill-It update at or before start_step.
     if start_step > 0:
-        restored = _restore_weights_from_jsonl(progress_dir, start_step)
+        expected_update = max(
+            (step for step in SKILLIT_UPDATE_STEPS if step <= start_step),
+            default=None,
+        )
+        restored = _restore_weights_from_jsonl(
+            progress_dir,
+            start_step,
+            required_update_step=expected_update,
+        )
+        if expected_update is not None and restored is None:
+            raise SystemExit(
+                f"resume at step {start_step} requires durable post-update weights "
+                f"from step {expected_update}; skillit_updates.jsonl is missing/incomplete"
+            )
         if restored is not None:
             stream.set_weights(restored)
-            if rank == 0:
-                log.info("Restored Skill-It weights for resume at step=%d", start_step)
-    elif rank == 0:
-        # Step-0 baseline once at train start (no weight change).
-        if not _has_snapshot_step(progress_dir / "skillit_updates.jsonl", 0):
-            A0 = resolve_A(args.a_mode, p, offline_A=offline_A, fit=fit)
-            record0 = write_skillit_snapshot(
-                progress_dir,
-                step=0,
-                arm_id=args.arm_id,
-                a_mode=args.a_mode,
-                A=A0,
-                p_before=p,
-                p_after=p,
-                losses=None,
-                r_for_deriv=p if args.a_mode == "derivative" else None,
-                eta=ETA_DEFAULT,
-                w=1.0,
-                note="baseline RegMix weights; no Skill-It update yet",
+        if rank == 0:
+            log.info(
+                "Restored explicit SkillIt resume at step=%d (last_update=%s)",
+                start_step,
+                expected_update,
             )
-            wandb_log_skillit_update(
-                wb_run,
-                record0,
-                step=0,
-                snapshot_path=Path(record0["_weights_path"]),
-                a_snapshot_path=Path(record0["_A_path"]),
-            )
+    else:
+        baseline_ok = True
+        baseline_error = ""
+        if rank == 0:
+            # Step-0 baseline once at train start (no weight change).
+            try:
+                if not _has_snapshot_step(progress_dir / "skillit_updates.jsonl", 0):
+                    A0 = resolve_A(args.a_mode, p, offline_A=offline_A, fit=fit)
+                    record0 = write_skillit_snapshot(
+                        progress_dir,
+                        step=0,
+                        arm_id=args.arm_id,
+                        a_mode=args.a_mode,
+                        A=A0,
+                        p_before=p,
+                        p_after=p,
+                        losses=None,
+                        r_for_deriv=p if args.a_mode == "derivative" else None,
+                        eta=ETA_DEFAULT,
+                        w=1.0,
+                        note="baseline RegMix weights; no Skill-It update yet",
+                    )
+                    if wb_run is not None:
+                        wandb_log_skillit_update(
+                            wb_run,
+                            record0,
+                            step=0,
+                            snapshot_path=Path(record0["_weights_path"]),
+                            a_snapshot_path=Path(record0["_A_path"]),
+                        )
+            except Exception as exc:  # noqa: BLE001
+                if not bool(args.allow_local_only):
+                    baseline_ok = False
+                    baseline_error = f"step-0 W&B Skill-It artifact upload failed: {exc}"
+                else:
+                    log.warning("step-0 artifact upload failed in local-only mode: %s", exc)
+        curr._abort_all_ranks(
+            baseline_error or "step-0 W&B Skill-It artifact upload failed",
+            ok=baseline_ok,
+        )
 
     t0 = time.time()
     window_t0 = t0
@@ -668,15 +930,37 @@ def _run(args: argparse.Namespace) -> None:
             dist.barrier()
         ckpt0 = save_folder / "step0"
         curr.save_checkpoint(ckpt0, 0, train_module, args, meta)
-        _maybe_task_loss(args, ckpt0, 0, async_=True)
-        if rank == 0:
-            wandb_log_checkpoint(
+        if bool(args.task_loss_on_save):
+            del train_module
+            train_module, payload0 = _pause_eval_reload(
+                args,
+                ckpt0,
+                0,
+                books=books,
+                lr=lr,
+                rank_micro_tokens=rank_micro_tokens,
+                tokens_per_step=tokens_per_step,
+            )
+        def upload_step0_bundle() -> bool:
+            if bool(args.task_loss_on_save):
+                eval0 = Path(args.task_loss_results_dir) / "step0_task_loss.json"
+                wandb_log_eval(wb_run, payload0, step=0, eval_path=eval0)
+                logged_eval_steps.add(0)
+            return wandb_log_checkpoint(
                 wb_run,
                 ckpt0,
                 step=0,
                 tokens_seen=0,
                 arm_id=args.arm_id,
             )
+
+        _wandb_upload_or_abort(
+            args,
+            wb_run,
+            upload_step0_bundle,
+            what="W&B checkpoint upload for step 0",
+        )
+        if rank == 0:
             _maybe_log_task_loss_wandb(
                 wb_run,
                 Path(args.task_loss_results_dir),
@@ -760,21 +1044,55 @@ def _run(args: argparse.Namespace) -> None:
                 dist.barrier()
             ckpt_dir = save_folder / f"step{global_step}"
             curr.save_checkpoint(ckpt_dir, global_step, train_module, args, meta)
-            # Skill-It update steps need sync 20-label eval so losses are ready.
             need_sync = global_step in update_set
-            _maybe_task_loss(args, ckpt_dir, global_step, async_=not need_sync)
-            if rank == 0 and need_sync:
-                _apply_skillit_update(
+            eval_payload: Optional[Mapping[str, Any]] = None
+            if bool(args.task_loss_on_save):
+                del train_module
+                train_module, eval_payload = _pause_eval_reload(
                     args,
-                    progress_dir=progress_dir,
-                    stream=stream,
-                    step=global_step,
-                    offline_A=offline_A,
-                    fit=fit,
-                    eta=ETA_DEFAULT,
-                    wb_run=wb_run,
-                    logged_eval_steps=logged_eval_steps,
+                    ckpt_dir,
+                    global_step,
+                    books=books,
+                    lr=lr,
+                    rank_micro_tokens=rank_micro_tokens,
+                    tokens_per_step=tokens_per_step,
                 )
+            elif need_sync:
+                raise SystemExit(
+                    f"Skill-It update step {global_step} requires strict task-loss eval; "
+                    "--no-task-loss-on-save is only valid for smoke runs that stop "
+                    "before the first update"
+                )
+            update_ok = True
+            update_err = ""
+            if rank == 0 and need_sync:
+                try:
+                    _apply_skillit_update(
+                        args,
+                        progress_dir=progress_dir,
+                        stream=stream,
+                        step=global_step,
+                        offline_A=offline_A,
+                        fit=fit,
+                        eta=ETA_DEFAULT,
+                        wb_run=wb_run,
+                        logged_eval_steps=logged_eval_steps,
+                    )
+                except Exception as exc:  # noqa: BLE001 — fail closed via broadcast
+                    update_ok = False
+                    update_err = (
+                        f"Skill-It update at step {global_step} failed: {exc}"
+                    )
+                    log.error("%s", update_err)
+            if need_sync:
+                # Prefer crash over continuing with stale RegMix domain weights.
+                if is_distributed():
+                    curr._abort_all_ranks(
+                        update_err or "Skill-It update failed",
+                        ok=update_ok,
+                    )
+                elif not update_ok:
+                    raise SystemExit(update_err or "Skill-It update failed")
             if is_distributed():
                 # Broadcast new weights from rank 0.
                 p_t = torch.tensor(stream.weights, dtype=torch.float64, device=device)
@@ -782,14 +1100,34 @@ def _run(args: argparse.Namespace) -> None:
                 stream.set_weights(p_t.detach().cpu().numpy())
                 dist.barrier()
 
-            if rank == 0:
-                wandb_log_checkpoint(
+            def upload_checkpoint_bundle() -> bool:
+                if eval_payload is not None and global_step not in logged_eval_steps:
+                    eval_path = (
+                        Path(args.task_loss_results_dir)
+                        / f"step{global_step}_task_loss.json"
+                    )
+                    wandb_log_eval(
+                        wb_run,
+                        dict(eval_payload),
+                        step=global_step,
+                        eval_path=eval_path,
+                    )
+                    logged_eval_steps.add(global_step)
+                return wandb_log_checkpoint(
                     wb_run,
                     ckpt_dir,
                     step=global_step,
                     tokens_seen=global_step * tokens_per_step,
                     arm_id=args.arm_id,
                 )
+
+            _wandb_upload_or_abort(
+                args,
+                wb_run,
+                upload_checkpoint_bundle,
+                what=f"W&B checkpoint upload for step {global_step}",
+            )
+            if rank == 0:
                 if not need_sync:
                     _maybe_log_task_loss_wandb(
                         wb_run,
@@ -797,22 +1135,16 @@ def _run(args: argparse.Namespace) -> None:
                         step=global_step,
                         logged=logged_eval_steps,
                     )
-                # Durable S3 export is fail-closed inside curr.save_checkpoint
-                # (URI redirected to skillit/ via _redirect_curriculum_s3_to_skillit).
-
     final_ok = True
-    final_err = (
-        "final durable S3 export failed "
-        "(use S3_EXPORT=0 / --no-s3-export only for local smoke)"
-    )
+    final_err = "final W&B runtime artifact upload failed"
     if rank == 0:
         try:
             log.info(
-                "Training complete at step=%d world_size=%d arm=%s durable=%s wandb=%s",
+                "Training complete at step=%d world_size=%d arm=%s artifacts=%s wandb=%s",
                 total_steps,
                 world_size,
                 args.arm_id,
-                arm_s3_uri(args.arm_id) if args.s3_export else "s3-off",
+                "wandb" if wb_run is not None else "runtime-scratch-only",
                 getattr(wb_run, "url", None) if wb_run is not None else "off",
             )
             # Sweep async evals that finished after their ladder step.
@@ -823,14 +1155,13 @@ def _run(args: argparse.Namespace) -> None:
                 except ValueError:
                     continue
                 _maybe_log_task_loss_wandb(wb_run, tl_dir, step=estep, logged=logged_eval_steps)
-            # Fail-closed final tree sync under skillit/ (patched curriculum helpers).
-            curr.export_curriculum_artifacts(
-                args.arm_id,
-                checkpoints_root=save_folder,
+            uploaded = wandb_log_runtime_artifacts(
+                wb_run,
                 progress_dir=progress_dir,
-                task_loss_dir=tl_dir,
-                enabled=bool(args.s3_export),
+                task_loss_results_dir=tl_dir,
             )
+            if not uploaded and not bool(args.allow_local_only):
+                raise RuntimeError("online W&B run unavailable for final artifact upload")
             if wb_run is not None:
                 try:
                     wb_run.finish()
@@ -838,12 +1169,17 @@ def _run(args: argparse.Namespace) -> None:
                     log.warning("wandb.finish failed: %s", exc)
         except Exception as exc:  # noqa: BLE001 — fail closed via broadcast
             final_ok = False
-            final_err = f"final durable S3 export / teardown failed: {exc}"
+            final_err = f"final W&B artifact upload / teardown failed: {exc}"
             log.error("%s", final_err)
     curr._abort_all_ranks(final_err, ok=final_ok)
 
 
-def _restore_weights_from_jsonl(progress_dir: Path, start_step: int) -> Optional[np.ndarray]:
+def _restore_weights_from_jsonl(
+    progress_dir: Path,
+    start_step: int,
+    *,
+    required_update_step: Optional[int] = None,
+) -> Optional[np.ndarray]:
     path = progress_dir / "skillit_updates.jsonl"
     if not path.is_file():
         return None
@@ -857,6 +1193,13 @@ def _restore_weights_from_jsonl(progress_dir: Path, start_step: int) -> Optional
             best = rec
     if best is None:
         return None
+    if required_update_step is not None and int(best.get("step", -1)) != int(
+        required_update_step
+    ):
+        raise RuntimeError(
+            f"{path}: latest snapshot through resume step {start_step} is "
+            f"step {best.get('step')!r}; required post-update step {required_update_step}"
+        )
     order = best.get("domain_order") or list(DOMAINS)
     p_after = best["p_after"]
     return np.array([float(p_after[d]) for d in order], dtype=np.float64)
@@ -896,26 +1239,6 @@ def _maybe_log_task_loss_wandb(
     logged.add(int(step))
 
 
-def _maybe_task_loss(
-    args: argparse.Namespace,
-    ckpt_dir: Path,
-    step: int,
-    *,
-    async_: bool,
-) -> None:
-    if get_rank() != 0:
-        return
-    results_dir = Path(args.task_loss_results_dir)
-    trigger_task_loss_eval(
-        ckpt_dir,
-        run_name=f"{args.arm_id}-step{step}",
-        out_path=results_dir / f"step{step}_task_loss.json",
-        eval_script=args.task_loss_eval_script,
-        enabled=None if args.task_loss_on_save else False,
-        async_=async_,
-    )
-
-
 def _apply_skillit_update(
     args: argparse.Namespace,
     *,
@@ -930,13 +1253,14 @@ def _apply_skillit_update(
 ) -> None:
     results_path = Path(args.task_loss_results_dir) / f"step{step}_task_loss.json"
     if not results_path.is_file():
-        log.warning(
-            "Skill-It update at step %d skipped: missing %s "
-            "(ensure TASK_LOSS_EVAL_SCRIPT works and sync eval succeeded)",
-            step,
-            results_path,
+        raise RuntimeError(
+            f"Skill-It update at step {step} required {results_path}; "
+            "task-loss eval must succeed before domain-weight updates "
+            "(refusing to continue with stale RegMix weights). "
+            "Ensure TASK_LOSS_EVAL_SCRIPT works and sync eval succeeded."
         )
-        return
+    payload = json.loads(results_path.read_text(encoding="utf-8"))
+    _validate_task_loss_payload(payload, step=step, path=results_path)
     if logged_eval_steps is None:
         logged_eval_steps = set()
     _maybe_log_task_loss_wandb(

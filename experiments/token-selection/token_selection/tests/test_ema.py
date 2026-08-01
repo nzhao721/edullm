@@ -38,7 +38,7 @@ def test_alpha_at_step_exp_schedule_ignores_linear_knobs():
     a = alpha_at_step(
         150,
         t0=48,
-        total_steps=2384,
+        total_steps=2360,
         alpha_start=0.99,
         alpha_end=0.98,
         schedule="exp",
@@ -60,16 +60,16 @@ def test_alpha_exp_rejects_bad_tau():
 
 
 def test_alpha_for_half_life_refhq_constant():
-    """rel-ema-refhq pins α≈0.9985 ≈ 20% half-life on a 2384-step run."""
-    a = alpha_for_half_life(0.2 * 2384)
+    """rel-ema-refhq pins α≈0.9985 ≈ 20% half-life on a 2360-step run."""
+    a = alpha_for_half_life(0.2 * 2360)
     assert abs(a - 0.9985) < 5e-5
     # Constant schedule with start==end returns α at every step.
-    for step in (0, 1, 500, 2384):
+    for step in (0, 1, 500, 2360):
         assert (
             alpha_at_step(
                 step,
                 t0=0,
-                total_steps=2384,
+                total_steps=2360,
                 alpha_start=0.9985,
                 alpha_end=0.9985,
                 schedule="linear",

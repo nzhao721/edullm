@@ -7,17 +7,15 @@
 # STAGE_DIR. Optional TRAIN_PATHS_FILE reuses a prior stage of this arm.
 # Never reads s3://edullm-datasets/ or assumes FarmShare/laptop corpora exist.
 #
-# Durable artifacts: trainer syncs checkpoints/progress/task_loss to
-# s3://edullm-checkpoints/token-sel/control/ (upload-before-end; fail-closed
-# when S3 export is enabled). Disable with S3_EXPORT=0 / SKIP_S3_UPLOAD=1.
+# Artifacts remain on scratch and upload to W&B; production online uploads fail closed.
 #
-# W&B (SmolLM2 protocol; additive to S3): project token-selection. Push
+# W&B project token-selection is the artifact store. Push
 # wandb-session.env via scripts/farmshare/push_wandb_session_to_farmshare.sh
 # "$RUN_DIR" (or set WANDB_SESSION_ENV). Local smoke: WANDB_MODE=disabled.
 #
 # Required env / args (no host-specific defaults):
-#   SAVE_FOLDER       — local/scratch checkpoint root (synced to S3)
-#   PROGRESS_DIR      — local/scratch metrics / run_meta (synced to S3)
+#   SAVE_FOLDER       — local/scratch checkpoint root (uploaded to W&B)
+#   PROGRESS_DIR      — local/scratch metrics / run_meta (uploaded to W&B)
 #   STAGE_DIR         — ephemeral scratch for edullm-data shards
 #                       (unless TRAIN_PATHS_FILE from a prior stage)
 #
@@ -29,10 +27,10 @@
 #   NAME              — run id (default: control-regmix10b-v2)
 #   LENGTH_TOKENS     — default 9900000000 → 2360 steps (one-epoch matrix)
 #   FRESH=1           — ignore any local checkpoints
-#   LOAD_PATH         — explicit resume dir (stage from S3 first on clean machines)
+#   LOAD_PATH         — explicit local resume dir
 #   ALLOW_LOCAL_RESUME=1 — same-job local auto-resume only (not across wiped scratch)
 #   TASK_LOSS_EVAL    — 0 to disable post-save evals (default: enabled by trainer)
-#   S3_EXPORT         — 0 to disable durable S3 sync (default: on when aws CLI present)
+#   WANDB_RESUME_ARTIFACT — checkpoint artifact ref for cross-job resume
 #   EXTRA_ARGS        — extra flags forwarded to the trainer
 #
 # Examples:
@@ -45,7 +43,7 @@
 #   TRAIN_PATHS_FILE=$STAGE_DIR/train_tokenized/paths_train.txt \
 #     SAVE_FOLDER=... PROGRESS_DIR=... NPROC=4 ./launch_control.sh
 #
-#   # Resume: stage ckpt from s3://edullm-checkpoints/token-sel/control/ first
+#   # Resume: restore WANDB_RESUME_ARTIFACT into SAVE_FOLDER
 #   LOAD_PATH=.../step1250 SAVE_FOLDER=... PROGRESS_DIR=... STAGE_DIR=... \
 #     ./launch_control.sh
 set -euo pipefail
@@ -79,6 +77,18 @@ if ! [[ "${NPROC_PER_NODE}" =~ ^[1-9][0-9]*$ ]]; then
   exit 1
 fi
 
+# Production permanent checkpoints pause until the full evaluator completes.
+# By default the evaluator uses the same process count; deployments with
+# dedicated eval GPUs may override TASK_LOSS_CUDA_VISIBLE_DEVICES/NPROC.
+export TASK_LOSS_STRICT=1
+export TASK_LOSS_NPROC="${TASK_LOSS_NPROC:-${NPROC_PER_NODE}}"
+if [[ "${TASK_LOSS_EVAL:-1}" == "0" || "${NO_TASK_LOSS:-0}" == "1" ]]; then
+  if [[ "${ALLOW_LOCAL_ONLY:-0}" != "1" ]]; then
+    echo "Disabling task-loss is allowed only with ALLOW_LOCAL_ONLY=1 smoke runs." >&2
+    exit 1
+  fi
+fi
+
 TRAINER="${SCRIPT_DIR}/train_ce_regmix_olmo_370m.py"
 COMMON_ARGS=(
   --name "${NAME}"
@@ -102,6 +112,9 @@ if [[ "${FRESH:-0}" == "1" ]]; then
 fi
 if [[ -n "${LOAD_PATH:-}" ]]; then
   COMMON_ARGS+=(--load-path "${LOAD_PATH}")
+fi
+if [[ -n "${WANDB_RESUME_ARTIFACT:-}" ]]; then
+  COMMON_ARGS+=(--wandb-resume-artifact "${WANDB_RESUME_ARTIFACT}")
 fi
 if [[ "${TASK_LOSS_EVAL:-1}" == "0" ]] || [[ "${NO_TASK_LOSS:-0}" == "1" ]]; then
   COMMON_ARGS+=(--no-task-loss-on-save)

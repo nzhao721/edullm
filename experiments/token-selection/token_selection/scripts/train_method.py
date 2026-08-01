@@ -24,7 +24,6 @@ from token_selection.scripts import (
     load_config,
     resolve_output_dir,
     resolve_train_dataset,
-    s3_uri,
 )
 from token_selection.scripts.experiment_contract import validate_scratch_config
 
@@ -81,7 +80,6 @@ def main() -> None:
 
     total_steps, t0_steps = derive_steps(cfg)
     ts_cfg = make_ts_config(cfg, method=method, total_steps=total_steps, t0_steps=t0_steps)
-    ckpt_uri = s3_uri(cfg, "checkpoints", method, bucket_key="checkpoint_bucket")
     print(
         json.dumps(
             {
@@ -100,14 +98,13 @@ def main() -> None:
                     "rows": train_data["rows"],
                     "n_shards": len(train_data["paths"]),
                 },
-                "durable_checkpoints": ckpt_uri,
+                "checkpoint_artifacts": "wandb",
                 "hint": (
                     "Use token_selection.scripts.train_olmo_template --method "
                     f"{method} --olmo-root <OLMo-core> --launch "
-                    "(stages tokens+order from edullm-data; exports ckpts to "
-                    f"{ckpt_uri}/). Ephemeral scratch is not durable — keep "
-                    "S3_EXPORT=1. Resume with --resume (fetches from that S3 prefix "
-                    "when the local save folder is empty)."
+                    "(stages tokens+order from edullm-data; uploads checkpoints, "
+                    "progress, and evals to W&B). Resume with --resume and "
+                    "WANDB_RESUME_ARTIFACT when local scratch is empty."
                 ),
                 "run_id": cfg.get("run_id"),
                 "output_dir": str(out),

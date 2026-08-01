@@ -5,8 +5,8 @@
 #   - Stages (or reuses) a working pool from published s3://edullm-data/
 #   - Never reads s3://edullm-datasets/
 #   - Does not assume a persistent scratch pool, checkpoint tree, or ladder venv
-#   - Durable artifacts: trainer + end-of-job sync to
-#     s3://edullm-checkpoints/skillit/<arm_id>/ when S3_EXPORT is enabled
+#   - Checkpoints/progress/evals stay on runtime scratch and upload to W&B
+#   - S3 is used only to stage training data or an explicit resume bootstrap
 #
 # Required:
 #   TRAIN_VENV       Absolute path to a Python env with torch + olmo-core (+ skillit
@@ -18,16 +18,19 @@
 #   PROGRESS_ROOT    progress parent (default: ${RUN_DIR}/progress)
 #   POOL_DIR         pre-staged pool with _EDULLM_DATA_SOURCE.json;
 #                    else stage into ${RUN_DIR}/pool via a CPU Slurm job
-#   DATASET_ID       default pretrain/olmo-original-30b
-#   DATASET_VERSION  pin (default: resolve_latest)
+#   DATASET_ID       pinned pretrain/olmo-127b
+#   DATASET_VERSION  pinned v1
+#   RESUME_MODE      required: fresh | resume
+#   LOAD_PATH_TEMPLATE resume path containing {arm_id}, local or S3 stepN
+#   LADDER_BASE_CONFIG compatible OLMES YAML (required)
 #   RECIPE           path to skillit_train_recipe.json
 #   NPROC            GPUs per arm (default 1)
 #   ARRAY_TASKS      override Slurm array (default 0-1)
 #   RUN_DIR          ephemeral run root (default: /scratch/.../skillit-370m-<ts>)
 #   EDULLM_ROOT      only for optional FarmShare AWS session helpers
-#   S3_EXPORT        0 to disable live aws s3 sync (default: enabled)
 #   WANDB_PROJECT    default skillit
-#   WANDB_MODE       online if ${RUN_DIR}/wandb-session.env exists, else disabled
+#   WANDB_MODE       production requires online
+#   ALLOW_LOCAL_ONLY 1 permits disabled/offline W&B for local smoke only
 #   WANDB_ENTITY / WANDB_GROUP / WANDB_UPLOAD_EXISTING
 #
 # Mint/push optional W&B session from the laptop (SmolLM-style):
@@ -40,8 +43,36 @@ MIXLAW_ROOT="$(cd "${SCRIPT_DIR}/../mixlaw" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
 EDULLM_ROOT="${EDULLM_ROOT:-${REPO_ROOT}}"
 RECIPE="${RECIPE:-${SCRIPT_DIR}/skillit_train_recipe.json}"
-DATASET_ID="${DATASET_ID:-pretrain/olmo-original-30b}"
-EDULLM_DATA_PKG="${EDULLM_DATA_PKG:-edullm-data @ git+https://github.com/edu-llm/edullm-data@v0.2.0}"
+DATASET_ID="${DATASET_ID:-pretrain/olmo-127b}"
+DATASET_VERSION="${DATASET_VERSION:-v1}"
+EDULLM_DATA_PKG="${EDULLM_DATA_PKG:-edullm-data @ git+https://github.com/edu-llm/edullm-data@main}"
+RESUME_MODE="${RESUME_MODE:-}"
+LOAD_PATH_TEMPLATE="${LOAD_PATH_TEMPLATE:-}"
+LADDER_BASE_CONFIG="${LADDER_BASE_CONFIG:-}"
+
+if [[ "${DATASET_ID}" != "pretrain/olmo-127b" || "${DATASET_VERSION}" != "v1" ]]; then
+  echo "SkillIt source is pinned to pretrain/olmo-127b/v1" >&2
+  exit 2
+fi
+case "${RESUME_MODE}" in
+  fresh)
+    [[ -z "${LOAD_PATH_TEMPLATE}" ]] || { echo "RESUME_MODE=fresh conflicts with LOAD_PATH_TEMPLATE" >&2; exit 2; }
+    ;;
+  resume)
+    [[ "${LOAD_PATH_TEMPLATE}" == *"{arm_id}"* ]] || {
+      echo "RESUME_MODE=resume requires LOAD_PATH_TEMPLATE containing {arm_id}" >&2
+      exit 2
+    }
+    ;;
+  *)
+    echo "Set RESUME_MODE=fresh or RESUME_MODE=resume" >&2
+    exit 2
+    ;;
+esac
+if [[ -z "${LADDER_BASE_CONFIG}" || ! -f "${LADDER_BASE_CONFIG}" ]]; then
+  echo "Set LADDER_BASE_CONFIG to an existing compatible OLMES YAML" >&2
+  exit 2
+fi
 
 TRAIN_VENV="${TRAIN_VENV:-${LADDER_VENV:-}}"
 if [[ -z "${TRAIN_VENV}" ]]; then
@@ -98,19 +129,20 @@ if [[ ! -x "${POOL_VENV}/bin/python" ]]; then
   # shellcheck disable=SC1091
   source "${POOL_VENV}/bin/activate"
   pip install -U pip wheel
-  # shellcheck disable=SC2086
-  pip install boto3 numpy ${EDULLM_DATA_PKG}
+  pip install boto3 numpy
+  pip install --upgrade "${EDULLM_DATA_PKG}"
   deactivate || true
 fi
 
 # Arm sidecars do not need a staged pool (weights only).
-"${POOL_VENV}/bin/python" - <<'PY' "${RUN_DIR}/skillit_train_recipe.json" "${RUN_DIR}/work" "${DATASET_ID}"
+"${POOL_VENV}/bin/python" - <<'PY' "${RUN_DIR}/skillit_train_recipe.json" "${RUN_DIR}/work" "${DATASET_ID}" "${DATASET_VERSION}"
 import json, sys
 from pathlib import Path
 
 recipe = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
 work = Path(sys.argv[2])
 dataset_id = sys.argv[3]
+dataset_version = sys.argv[4]
 domains = recipe.get("domain_order") or [
     "dclm", "arxiv", "starcoder", "pes2o", "open-web-math", "algebraic-stack", "wiki"
 ]
@@ -135,7 +167,7 @@ for arm in recipe["arms"]:
         "recipe_seed": seed,
         "stream_seed": seed + int(arm["id"]),
         "budget_tokens": recipe.get("budget_tokens"),
-        "edullm_data": {"dataset_id": dataset_id},
+        "edullm_data": {"dataset_id": dataset_id, "version": dataset_version},
         "sampling": "domain_stratified_stream",
         "skillit": recipe.get("skillit", {}),
     }
@@ -151,7 +183,7 @@ for arm in recipe["arms"]:
     )
     print(arm["arm_id"])
 (work / "skillit_arms.json").write_text(
-    json.dumps({"dataset_id": dataset_id, "arms": arms}, indent=2) + "\n",
+    json.dumps({"dataset_id": dataset_id, "dataset_version": dataset_version, "arms": arms}, indent=2) + "\n",
     encoding="utf-8",
 )
 PY
@@ -197,15 +229,19 @@ if [[ -z "${POOL_DIR:-}" ]]; then
   echo "pool_job_id=${POOL_JOB}"
   echo "${POOL_JOB}" > "${RUN_DIR}/pool_job_id.txt"
   DEP_OPTS=(--dependency="afterok:${POOL_JOB}")
-elif [[ ! -f "${POOL_DIR}/_EDULLM_DATA_SOURCE.json" ]]; then
-  echo "POOL_DIR=${POOL_DIR} missing _EDULLM_DATA_SOURCE.json (stage from edullm-data first)" >&2
-  exit 2
+else
+  "${POOL_VENV}/bin/python" "${RUN_DIR}/prepare_skillit_370m_data.py" \
+    --pool-dir "${POOL_DIR}" \
+    --dataset-id "${DATASET_ID}" \
+    --dataset-version "${DATASET_VERSION}" \
+    --validate-pool-only
 fi
 
 WANDB_PROJECT="${WANDB_PROJECT:-skillit}"
 WANDB_ENTITY="${WANDB_ENTITY:-}"
 WANDB_GROUP="${WANDB_GROUP:-${RUN_NAME}}"
 WANDB_UPLOAD_EXISTING="${WANDB_UPLOAD_EXISTING:-0}"
+ALLOW_LOCAL_ONLY="${ALLOW_LOCAL_ONLY:-0}"
 if [[ -f "${RUN_DIR}/wandb-session.env" ]]; then
   WANDB_MODE="${WANDB_MODE:-online}"
 else
@@ -214,6 +250,10 @@ fi
 if [[ "${WANDB_MODE}" == "online" && ! -f "${RUN_DIR}/wandb-session.env" ]]; then
   echo "missing ${RUN_DIR}/wandb-session.env (required for WANDB_MODE=online)" >&2
   echo "push: bash scripts/farmshare/push_wandb_session_to_farmshare.sh ${RUN_DIR}" >&2
+  exit 2
+fi
+if [[ "${ALLOW_LOCAL_ONLY}" != "1" && "${WANDB_MODE}" != "online" ]]; then
+  echo "production requires WANDB_MODE=online; set ALLOW_LOCAL_ONLY=1 only for local smoke" >&2
   exit 2
 fi
 
@@ -226,9 +266,12 @@ NPROC=${NPROC}
 POOL_DIR=${POOL_DIR}
 DATASET_ID=${DATASET_ID}
 DATASET_VERSION=${DATASET_VERSION:-}
+RESUME_MODE=${RESUME_MODE}
+LOAD_PATH_TEMPLATE=${LOAD_PATH_TEMPLATE}
+LADDER_BASE_CONFIG=${LADDER_BASE_CONFIG}
 SAVE_ROOT=${SAVE_ROOT}
 PROGRESS_ROOT=${PROGRESS_ROOT}
-S3_EXPORT=${S3_EXPORT:-1}
+ALLOW_LOCAL_ONLY=${ALLOW_LOCAL_ONLY}
 A_OFFLINE=${RUN_DIR}/artifacts/A_offline.npy
 MIXLAW_FIT_JSON=${RUN_DIR}/mixlaw_fit_chinchilla.json
 WANDB_PROJECT=${WANDB_PROJECT}
@@ -256,45 +299,46 @@ if [[ -f "${RUN_DIR}/aws-session.env" ]]; then
   # shellcheck disable=SC1090
   source "${RUN_DIR}/aws-session.env"
 fi
+if [[ -f "${RUN_DIR}/hf-session.env" ]]; then
+  # shellcheck disable=SC1090
+  source "${RUN_DIR}/hf-session.env"
+fi
 set -u
 IDX="${SLURM_ARRAY_TASK_ID:?}"
 ARM_ID="$(sed -n "$((IDX + 1))p" "${RUN_DIR}/arm_ids.txt")"
 : "${ARM_ID:?empty ARM_ID for index ${IDX}}"
 ARM_WEIGHTS_JSON="${RUN_DIR}/work/${ARM_ID}/arm_weights.json"
 A_MODE="$("${TRAIN_VENV}/bin/python" -c "import json; print(json.load(open('${ARM_WEIGHTS_JSON}'))['a_mode'])")"
-export ARM_ID A_MODE POOL_DIR DATASET_ID ARM_WEIGHTS_JSON
+LOAD_PATH="${LOAD_PATH_TEMPLATE//\{arm_id\}/${ARM_ID}}"
+export ARM_ID A_MODE POOL_DIR DATASET_ID DATASET_VERSION ARM_WEIGHTS_JSON
+export RESUME_MODE LOAD_PATH LADDER_BASE_CONFIG
 export SAVE_FOLDER="${SAVE_ROOT}/${ARM_ID}/checkpoints"
 export PROGRESS_DIR="${PROGRESS_ROOT}/${ARM_ID}/progress"
-export NPROC S3_EXPORT
+export NPROC ALLOW_LOCAL_ONLY
 export A_OFFLINE MIXLAW_FIT_JSON
 export EDULLM_ROOT MIXLAW_ROOT PYTHONPATH
 export WANDB_PROJECT WANDB_ENTITY WANDB_GROUP WANDB_MODE WANDB_UPLOAD_EXISTING
 export WANDB_RUN_NAME="${ARM_ID}"
 export WANDB_DIR="${PROGRESS_DIR}/wandb"
-if [[ -n "${DATASET_VERSION:-}" ]]; then
-  export DATASET_VERSION
-fi
 mkdir -p "${SAVE_FOLDER}" "${PROGRESS_DIR}" "${WANDB_DIR}"
-if [[ ! -f "${POOL_DIR}/_EDULLM_DATA_SOURCE.json" ]]; then
-  echo "missing ${POOL_DIR}/_EDULLM_DATA_SOURCE.json — stage from edullm-data first" >&2
+"${TRAIN_VENV}/bin/python" "${RUN_DIR}/prepare_skillit_370m_data.py" \
+  --pool-dir "${POOL_DIR}" \
+  --dataset-id "${DATASET_ID}" \
+  --dataset-version "${DATASET_VERSION}" \
+  --validate-pool-only
+test -n "${HF_TOKEN:-${HUGGING_FACE_HUB_TOKEN:-}}" || {
+  echo "HF_TOKEN missing after sourcing hf-session.env; fail-closed eval cannot launch" >&2
   exit 2
-fi
+}
 if [[ "${WANDB_MODE}" == "online" ]]; then
   test -n "${WANDB_API_KEY:-}" || { echo "WANDB_API_KEY missing after sourcing wandb-session.env" >&2; exit 2; }
-fi
-if [[ "${WANDB_MODE}" != "disabled" ]] && ! python -c "import wandb" >/dev/null 2>&1; then
-  echo "warn: wandb missing from TRAIN_VENV; continuing with S3 durability (W&B soft-off)" >&2
-fi
-echo "S3_EXPORT=${S3_EXPORT} WANDB_PROJECT=${WANDB_PROJECT} WANDB_MODE=${WANDB_MODE} WANDB_RUN_NAME=${WANDB_RUN_NAME}"
-bash "${RUN_DIR}/launch_arm.sh"
-if [[ "${S3_EXPORT}" != "0" ]]; then
-  if ! command -v aws >/dev/null 2>&1; then
-    echo "aws CLI missing; fail-closed upload-before-end requires aws when S3_EXPORT=1" >&2
+  if ! "${TRAIN_VENV}/bin/python" -c "import wandb" >/dev/null 2>&1; then
+    echo "wandb missing from TRAIN_VENV; production checkpoint durability cannot proceed" >&2
     exit 2
   fi
-  aws s3 sync "${SAVE_FOLDER}" "s3://edullm-checkpoints/skillit/${ARM_ID}/checkpoints/" --only-show-errors
-  aws s3 sync "${PROGRESS_DIR}" "s3://edullm-checkpoints/skillit/${ARM_ID}/progress/" --only-show-errors
 fi
+echo "RESUME_MODE=${RESUME_MODE} DATASET=${DATASET_ID}/${DATASET_VERSION} WANDB_PROJECT=${WANDB_PROJECT} WANDB_MODE=${WANDB_MODE} WANDB_RUN_NAME=${WANDB_RUN_NAME} ALLOW_LOCAL_ONLY=${ALLOW_LOCAL_ONLY}"
+bash "${RUN_DIR}/launch_arm.sh"
 EOF
 chmod +x "${RUN_DIR}/train_one.sh"
 
@@ -320,6 +364,8 @@ echo "job_id=${JOB}"
 echo "RUN_DIR=${RUN_DIR}"
 echo "POOL_DIR=${POOL_DIR}"
 echo "DATASET_ID=${DATASET_ID}"
+echo "DATASET_VERSION=${DATASET_VERSION}"
+echo "RESUME_MODE=${RESUME_MODE}"
 echo "TRAIN_VENV=${TRAIN_VENV}"
 echo "SAVE_ROOT=${SAVE_ROOT}"
 echo "PROGRESS_ROOT=${PROGRESS_ROOT}"

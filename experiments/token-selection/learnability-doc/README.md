@@ -4,7 +4,7 @@ Offline corpus filter + plain CE on RegMix docs with the **largest early→late 
 
 **Train data:** published+validated `pretrain/learnability-doc-top60` on `s3://edullm-data/` (fail-closed if missing — never falls back to unfiltered `regmix-10b` or legacy `edullm-datasets`).
 
-**Durable exports:** `s3://edullm-checkpoints/token-sel/learnability-doc/` after each permanent save and at end of run (fail-closed unless `S3_EXPORT=0` for local smoke).
+**Artifact durability:** runtime scratch + W&B after each permanent save and at end of run; production online checkpoint uploads fail closed.
 
 Near-clone of **control** CE stack (same arch, ladder, eval hook); independent variable is the offline doc filter. Differs from **learnability-token** (online dual-ref scorer) by filtering documents offline only.
 
@@ -14,8 +14,8 @@ Jobs must run on a clean scratch that starts empty and may be wiped after the jo
 
 1. Stage train shards from `s3://edullm-data/` into `STAGE_DIR` (trainer does this via `edullm_data.read`).
 2. Write checkpoints/progress under job-local `SAVE_FOLDER` / `PROGRESS_DIR`.
-3. Upload those artifacts to `edullm-checkpoints` before the job ends (trainer enforces this when S3 export is on).
-4. Resume only with `LOAD_PATH` after staging a checkpoint from durable S3 — local `SAVE_FOLDER` is **not** auto-resumed.
+3. Upload those artifacts to W&B before the job ends.
+4. Resume with `WANDB_RESUME_ARTIFACT` or a local `LOAD_PATH`; `SAVE_FOLDER` is not auto-resumed.
 
 ## Label dependency (publish path)
 
@@ -80,7 +80,7 @@ Permanent ladder: `{0, 125, …, 2125, 2360}` (omit 2250). Immediate 20-label `t
 
 ```bash
 export STAGE_DIR=/tmp/learnability-doc-stage      # empty scratch OK
-export SAVE_FOLDER=/tmp/ckpts/learnability-doc    # job-local; uploaded to S3
+export SAVE_FOLDER=/tmp/ckpts/learnability-doc    # job-local; uploaded to W&B
 export PROGRESS_DIR=/tmp/progress/learnability-doc
 export NPROC=1
 # FRESH defaults on; durable export defaults on
@@ -111,7 +111,7 @@ torchrun --standalone --nproc_per_node="$NPROC" \
 
 Upsample: `--length-tokens 9900000000` (2360 steps at GBS `4_194_304`); the dataloader cycles the kept ~6B tokens.
 
-Disable eval enqueue with `TASK_LOSS_EVAL=0` / `--no-task-loss-on-save`. Local-only smoke: `S3_EXPORT=0` (artifacts are not durable across scratch wipe). Resume: stage a checkpoint from `edullm-checkpoints`, then `LOAD_PATH=...`.
+Disable eval enqueue with `TASK_LOSS_EVAL=0` / `--no-task-loss-on-save`. Resume with `WANDB_RESUME_ARTIFACT=entity/project/name:alias`.
 
 ## Files
 
@@ -120,7 +120,7 @@ Disable eval enqueue with `TASK_LOSS_EVAL=0` / `--no-task-loss-on-save`. Local-o
 | `filter_learnability_docs.py` | Token-weighted top-60% selection from `metrics_index` |
 | `build_filtered_corpus.py` | Re-tokenize kept docs → uint32 memmaps (publish input) |
 | `prepare_data.sh` | Filter + build orchestration |
-| `train_ce_learnability_doc_olmo_370m.py` | CE trainer + permanent ladder + S3 durable export |
+| `train_ce_learnability_doc_olmo_370m.py` | CE trainer; permanent checkpoint → synchronous 20-label eval → strict W&B upload → durable marker |
 | `launch_train.sh` | Hardware-agnostic launcher (STAGE_DIR required) |
 | `enqueue_task_loss.sh` | Optional FarmShare eval wrapper (trainer uses shared hook) |
 | `test_filter_polarity.py` | Polarity + ladder unit tests (no GPU) |

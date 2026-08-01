@@ -106,7 +106,7 @@ def main() -> int:
 
     summary = {
         "arm": "middle-ppl-doc",
-        "s3_export_prefix": "token-sel/middle-ppl-doc",
+        "artifact_store": "wandb",
         "train": {
             **train_info,
             "tokenized_root": str(args.train_tokenized_root.resolve()),

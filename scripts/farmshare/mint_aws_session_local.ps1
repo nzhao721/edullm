@@ -1,5 +1,5 @@
 # Mint temporary AWS credentials on this Windows device and write aws-session.env
-# for upload to FarmShare. Never prints secret material.
+# for an approved FarmShare or RunPod SSH bootstrap. Never prints secret material.
 param(
   [string]$Profile = "sbsandbox",
   [string]$Region = "us-east-1",
@@ -29,7 +29,7 @@ function Quote-Bash([string]$value) {
 }
 
 $lines = @(
-  "# Generated on engineer laptop for FarmShare aws-session.env; do not commit or log.",
+  "# Generated on engineer laptop for approved remote bootstrap; do not commit or log.",
   "unset AWS_PROFILE",
   ("export AWS_ACCESS_KEY_ID=" + (Quote-Bash $creds.AccessKeyId)),
   ("export AWS_SECRET_ACCESS_KEY=" + (Quote-Bash $creds.SecretAccessKey)),

@@ -10,7 +10,7 @@ downstream token-selection arms (via DistCP → `export_refhq_reference.py`).
 | GBS / seq / LR | `4_194_304` / 2048 / `4e-4` (warmup 24, `alpha_f=0.1`) |
 | Token budget | published train rows (~5.509B → ≈1313 steps) |
 | Dataset | `pretrain/refhq-regmix-5p5b` (`s3://edullm-data/`, latest validated) |
-| S3 export | `s3://edullm-checkpoints/token-sel/reference/` (`S3_EXPORT=0` to disable) |
+| Artifact durability | Runtime scratch + W&B (production online fail-closed) |
 
 ## Files
 
@@ -18,20 +18,20 @@ downstream token-selection arms (via DistCP → `export_refhq_reference.py`).
 |------|------|
 | [`prepare_refhq_data.py`](prepare_refhq_data.py) | Resolve + stage edullm-data shards → path list |
 | [`train_olmo3_370m_refhq.py`](train_olmo3_370m_refhq.py) | Trainer (1..N GPU via `torchrun`) |
-| [`launch_train.sh`](launch_train.sh) | Stage/train + upload-before-end sync |
+| [`launch_train.sh`](launch_train.sh) | Stage inputs and launch training |
 | [`export_refhq_reference.py`](export_refhq_reference.py) | DistCP → flat `model.pt` for other arms |
 
 ## Export flat reference weights
 
-Default DistCP URI (trainer `NAME=refhq-regmix-5p5b-v1`, final step ≈1313):
+Example read-only bootstrap DistCP URI:
 
-`s3://edullm-checkpoints/token-sel/reference/checkpoints/refhq-regmix-5p5b-v1/step1313/`
+`s3://edullm-checkpoints/olmo-370m/edullm-370M-refhq-5p5b/checkpoints/step1315/`
 
 ```bash
 python experiments/token-selection/reference/export_refhq_reference.py \
+  --s3-uri s3://edullm-checkpoints/olmo-370m/edullm-370M-refhq-5p5b/checkpoints/step1315/ \
   --work-dir /scratch/refhq-export \
-  --output /scratch/refhq_step1313.pt
-# override: --s3-uri s3://edullm-checkpoints/token-sel/reference/checkpoints/<NAME>/step<N>/
+  --output /scratch/refhq_step1315.pt
 ```
 
 ## Ephemeral runtime
@@ -41,14 +41,11 @@ Scratch starts empty and may be wiped when the job ends.
 - **Allowed:** stage shards from `s3://edullm-data` into scratch for the job.
 - **Forbidden:** assuming FarmShare/laptop corpora, legacy `s3://edullm-datasets/`,
   or persistent local checkpoints already on disk.
-- **Durable:** permanent DistCP steps + progress upload to
-  `s3://edullm-checkpoints/token-sel/reference/` (live after each ladder save,
-  plus a final sync in `launch_train.sh`). Upload failure aborts the job
-  (fail-closed). `S3_EXPORT=0` is local-smoke opt-out only.
+- **Artifacts:** permanent DistCP steps and progress remain on scratch and
+  upload to W&B. Production online checkpoint uploads fail closed.
 
-Resume: sync the needed `step*` prefix from S3 into a fresh `SAVE_FOLDER` (or
-pass `--load-path` to a locally materialized DistCP dir). Do not rely on an
-old scratch tree surviving between jobs.
+Resume with `WANDB_RESUME_ARTIFACT` into a fresh `SAVE_FOLDER`, or pass
+`--load-path` to a local DistCP dir.
 
 ## Prepare (optional; trainer can stage itself)
 
@@ -61,7 +58,7 @@ python experiments/token-selection/reference/prepare_refhq_data.py \
 ## Launch
 
 ```bash
-# Clean ephemeral node: stage + train + S3 export
+# Clean ephemeral node: stage inputs + train + W&B artifacts
 STAGE_DIR=/scratch/staged \
 SAVE_FOLDER=/scratch/ckpts/refhq-regmix-5p5b-v1 \
 PROGRESS_DIR=/scratch/progress/refhq-regmix-5p5b-v1 \
@@ -81,6 +78,5 @@ PROGRESS_DIR=/scratch/progress/refhq-regmix-5p5b-v1 \
 bash experiments/token-selection/reference/launch_train.sh
 ```
 
-Requires the `edullm-data` package and AWS read access to `s3://edullm-data`
-(plus write to `edullm-checkpoints` when `S3_EXPORT` is on). Does **not** submit
-AWS jobs from this wrapper.
+Requires the `edullm-data` package and AWS read access to `s3://edullm-data`.
+No S3 artifact-write permission is needed.

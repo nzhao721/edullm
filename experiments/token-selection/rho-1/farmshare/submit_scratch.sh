@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Submit a scratch RHO-1 job (rho-1-regmix10b-v1). Never resumes discarded v1.
 #
-# Ephemeral empty-scratch: stage edullm-data; durable ckpts → edullm-checkpoints.
+# Ephemeral empty-scratch: stage edullm-data; durable ckpts → W&B artifacts.
 # Do not assume a pre-populated RUN_DIR (tokens/venv/ckpts) survives wipe.
 #
 #   export RUN_DIR=/scratch/users/$USER/agent-runs/rho-1-regmix10b-v1
@@ -13,7 +13,7 @@
 # Crash resume of THIS run_id only (fetches from S3 if local save_folder empty):
 #   RESUME=1 bash .../submit_scratch.sh
 #
-# Local smoke only (not durable): OFFLINE=1 SKIP_S3_UPLOAD=1
+# Local smoke only: OFFLINE=1 WANDB_MODE=disabled
 set -euo pipefail
 
 RUN_DIR="${RUN_DIR:?set RUN_DIR}"
@@ -34,7 +34,6 @@ fi
 export TOKEN_SELECTION_SKIP_IDLE_CHECK=1
 export SKIP_REF_EXPORT="${SKIP_REF_EXPORT:-0}"
 export OFFLINE="${OFFLINE:-0}"
-export SKIP_S3_UPLOAD="${SKIP_S3_UPLOAD:-0}"
 
 cd "$RUN_DIR"
 mkdir -p logs
@@ -49,8 +48,8 @@ fi
 
 JOB=$(sbatch --exclude=wheat-01 \
   --gres=gpu:"${NUM_GPUS}" \
-  --export=ALL,RUN_DIR,EDULLM_ROOT,NUM_GPUS,RANK_MICROBATCH_SIZE,NUM_WORKERS,COMPILE_MODEL,FROM_SCRATCH,RESUME,TOKEN_SELECTION_SKIP_IDLE_CHECK,SKIP_REF_EXPORT,OFFLINE,SKIP_S3_UPLOAD \
+  --export=ALL,RUN_DIR,EDULLM_ROOT,NUM_GPUS,RANK_MICROBATCH_SIZE,NUM_WORKERS,COMPILE_MODEL,FROM_SCRATCH,RESUME,TOKEN_SELECTION_SKIP_IDLE_CHECK,SKIP_REF_EXPORT,OFFLINE \
   "$SBATCH" | awk '{print $NF}')
 echo "$JOB" > "$RUN_DIR/job_id.txt"
-echo "SUBMITTED_JOB_ID=$JOB run_id=rho-1-regmix10b-v1 FROM_SCRATCH=${FROM_SCRATCH} RESUME=${RESUME} OFFLINE=${OFFLINE} SKIP_S3_UPLOAD=${SKIP_S3_UPLOAD}"
+echo "SUBMITTED_JOB_ID=$JOB run_id=rho-1-regmix10b-v1 FROM_SCRATCH=${FROM_SCRATCH} RESUME=${RESUME} OFFLINE=${OFFLINE}"
 squeue -u "$(whoami)" -o '%.18i %.16j %.8T %.10M %R' | head -10

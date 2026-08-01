@@ -15,8 +15,10 @@ ephemeral empty scratch: stages only from published ``edullm-data``.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
+import shutil
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -41,6 +43,24 @@ def peak_tokens_from_mixtures(mixtures_json: Path, budget: int) -> dict[str, int
         for d in DOMAINS:
             peak[d] = max(peak[d], counts[d] * SEQ_LEN)
     return {d: int(peak[d] * 1.02) for d in DOMAINS}
+
+
+def arm_tokens_from_mixtures(
+    mixtures_json: Path,
+    budget: int,
+    mix_name: str,
+) -> dict[str, int]:
+    """Return selected-arm demand with the same allocation as the shared pool."""
+    matches = [mix for mix in load_mixtures(mixtures_json) if mix.run_name == mix_name]
+    if len(matches) != 1:
+        raise SystemExit(
+            f"{mixtures_json}: expected one mixture named {mix_name!r}, got {len(matches)}"
+        )
+    counts = allocate_sequences(matches[0].weights, budget // SEQ_LEN)
+    return {
+        domain: max(SEQ_LEN, int(counts[domain] * SEQ_LEN * 1.02))
+        for domain in DOMAINS
+    }
 
 
 def _parse_s3_uri(uri: str) -> tuple[str, str]:
@@ -126,12 +146,20 @@ def select_shards(
     inventory: dict[str, dict[str, Any]],
     peak: dict[str, int],
     seed: int,
+    *,
+    deterministic_prefix: bool = False,
 ) -> dict[str, list[dict[str, Any]]]:
     rng = np.random.default_rng(seed)
     selected: dict[str, list[dict[str, Any]]] = {}
     for d in DOMAINS:
         need = int(peak[d])
         shards = list(inventory[d]["shards"])
+        # Preserve the existing FarmShare shared-pool draw exactly in both modes.
+        # The RNG consumes one full permutation per domain, independent of demand,
+        # so a selected-arm draw is a byte-for-byte prefix of the shared pool for
+        # the same seed and inventory. ``deterministic_prefix`` changes only the
+        # temporary shard layout below, preventing same-named domains from
+        # colliding while platform children stage independently.
         order = rng.permutation(len(shards))
         chosen: list[dict[str, Any]] = []
         got = 0
@@ -238,6 +266,9 @@ def stage_pool(
     dataset_id: str = DEFAULT_DATASET_ID,
     dataset_version: str | None = None,
     seed: int = 6198,
+    mix_name: str | None = None,
+    deterministic_prefix: bool = False,
+    delete_shards: bool = False,
     skip_download: bool = False,
     skip_concat: bool = False,
     s3: Any | None = None,
@@ -246,7 +277,11 @@ def stage_pool(
 
     s3 = s3 or Boto3S3.default()
     dataset_id, version = resolve_dataset(dataset_id, dataset_version, s3=s3)
-    peak = peak_tokens_from_mixtures(mixtures_json, budget_tokens)
+    peak = (
+        arm_tokens_from_mixtures(mixtures_json, budget_tokens, mix_name)
+        if mix_name
+        else peak_tokens_from_mixtures(mixtures_json, budget_tokens)
+    )
 
     out_dir.mkdir(parents=True, exist_ok=True)
     plan_dir = out_dir / "plan"
@@ -279,23 +314,31 @@ def stage_pool(
         + "\n"
     )
 
-    selected = select_shards(inventory, peak, seed)
-    (plan_dir / "selected_shards.json").write_text(
-        json.dumps(
-            {
-                d: [{"uri": s["uri"], "tokens": s["tokens"], "bytes": s["bytes"]} for s in rows]
-                for d, rows in selected.items()
-            },
-            indent=2,
-        )
-        + "\n"
+    selected = select_shards(
+        inventory,
+        peak,
+        seed,
+        deterministic_prefix=deterministic_prefix,
     )
+    selected_manifest = {
+        d: [{"uri": s["uri"], "tokens": s["tokens"], "bytes": s["bytes"]} for s in rows]
+        for d, rows in selected.items()
+    }
+    selected_bytes = (
+        json.dumps(selected_manifest, indent=2, sort_keys=True) + "\n"
+    ).encode("utf-8")
+    (plan_dir / "selected_shards.json").write_bytes(selected_bytes)
+    selected_sha256 = hashlib.sha256(selected_bytes).hexdigest()
 
     shard_dir = out_dir / "shards"
     if not skip_download:
         for d, rows in selected.items():
             for s in rows:
-                dest = shard_dir / s["name"]
+                dest = (
+                    shard_dir / d / s["name"]
+                    if deterministic_prefix
+                    else shard_dir / s["name"]
+                )
                 print(f"download {s['uri']}", flush=True)
                 download_shard(s3, s, dest)
 
@@ -305,7 +348,13 @@ def stage_pool(
         for d, rows in selected.items():
             out = tok_dir / d / f"{d}.u32le.bin"
             header = int(inventory[d]["header_bytes"])
-            n = concat_domain(rows, shard_dir, out, SEQ_LEN, header_bytes=header)
+            n = concat_domain(
+                rows,
+                shard_dir / d if deterministic_prefix else shard_dir,
+                out,
+                SEQ_LEN,
+                header_bytes=header,
+            )
             written[d] = n
             meta = {
                 "domain": d,
@@ -318,13 +367,20 @@ def stage_pool(
             }
             (tok_dir / d / f"{d}.json").write_text(json.dumps(meta, indent=2) + "\n")
             print(f"wrote {out} ({n / 1e9:.3f}B tokens)", flush=True)
+        if delete_shards and shard_dir.is_dir():
+            shutil.rmtree(shard_dir)
 
     summary = {
         "dataset_id": dataset_id,
         "version": version,
         "mixtures_json": str(mixtures_json.resolve()),
         "budget_tokens": budget_tokens,
+        "mix_name": mix_name,
         "peak_tokens": peak,
+        "selected_shards_sha256": selected_sha256,
+        "selection": "deterministic_domain_prefix"
+        if deterministic_prefix
+        else "legacy_seeded_permutation",
         "domain_tokens": written,
         "pool_dir": str(out_dir.resolve()),
         "layout": "tokenized/<domain>/<domain>.u32le.bin",
@@ -343,6 +399,17 @@ def main() -> int:
     ap.add_argument("--dataset-id", default=DEFAULT_DATASET_ID)
     ap.add_argument("--dataset-version", default=None, help="Pin version; default resolve_latest")
     ap.add_argument("--seed", type=int, default=6198)
+    ap.add_argument("--mix-name", default=None, help="Stage demand for one recipe arm only")
+    ap.add_argument(
+        "--deterministic-prefix",
+        action="store_true",
+        help="Select a stable per-domain shard prefix (platform mode)",
+    )
+    ap.add_argument(
+        "--delete-shards",
+        action="store_true",
+        help="Delete downloaded temporary shards after successful concatenation",
+    )
     ap.add_argument("--skip-download", action="store_true")
     ap.add_argument("--skip-concat", action="store_true")
     args = ap.parse_args()
@@ -354,6 +421,9 @@ def main() -> int:
         dataset_id=args.dataset_id,
         dataset_version=args.dataset_version,
         seed=args.seed,
+        mix_name=args.mix_name,
+        deterministic_prefix=args.deterministic_prefix,
+        delete_shards=args.delete_shards,
         skip_download=args.skip_download,
         skip_concat=args.skip_concat,
     )

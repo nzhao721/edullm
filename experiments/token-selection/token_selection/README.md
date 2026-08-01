@@ -59,9 +59,9 @@ token_selection/
 - Hardware: `torchrun` world size; leave `train.cuda_visible_devices` empty unless pinning intentionally.
 - **Corpus**: `data.dataset_id` → published `s3://edullm-data/` (never legacy `edullm-datasets`).
 - **Ephemeral runtime**: `--launch` stages tokens+order from edullm-data and materializes
-  RefHQ refs from `reference.s3_uri`. Durable ckpts/metrics/fingerprints export to
-  `s3://edullm-checkpoints/token-sel/<arm>/`. `--resume` fetches from that prefix when
-  the local save folder is empty — do not assume scratch persistence or a pre-baked venv.
+  RefHQ refs from `reference.s3_uri`. Checkpoints/metrics/fingerprints remain on scratch
+  and upload to W&B. `--resume` restores a W&B checkpoint artifact when the local save
+  folder is empty.
 
 ## Quick start (YAML arms)
 
@@ -72,13 +72,14 @@ python -m token_selection.scripts.validate_experiment --config <arm.yaml> --stag
 # Dry-run plan / derived steps (resolves edullm-data; no local shards required)
 python -m token_selection.scripts.train_method --config <arm.yaml> --method <method>
 
-# Launch (requires pinned olmo_core; stages corpus + exports durable ckpts)
+# Launch (requires pinned olmo_core; stages corpus + uploads durable W&B artifacts)
 python -m token_selection.scripts.train_olmo_template \
   --config <arm.yaml> --method <method> --olmo-root /path/to/OLMo-core --launch
 
-# Resume on a wiped scratch host (pulls fingerprints + step dirs from edullm-checkpoints)
+# Resume on a wiped scratch host from a W&B checkpoint artifact
 python -m token_selection.scripts.train_olmo_template \
-  --config <arm.yaml> --method <method> --olmo-root /path/to/OLMo-core --launch --resume
+  --config <arm.yaml> --method <method> --olmo-root /path/to/OLMo-core --launch \
+  --resume --wandb-resume-artifact entity/project/run-checkpoint:latest
 ```
 
 RHO / RefHQ-seeded REL / learnability need `reference.s3_uri` (or early/late S3 fields)

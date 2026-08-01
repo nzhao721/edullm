@@ -231,9 +231,24 @@ def build_mask(
 ) -> Tensor:
     """Build loss mask for supported token-selection methods."""
     if method == "full" or warmup:
-        ref = shape_ref if shape_ref is not None else current_loss
+        ref = next(
+            (
+                candidate
+                for candidate in (
+                    shape_ref,
+                    current_loss,
+                    reference_loss,
+                    early_loss,
+                    late_loss,
+                    attention_score,
+                    history_loss,
+                )
+                if candidate is not None
+            ),
+            None,
+        )
         if ref is None:
-            raise ValueError("full/warmup mask requires shape_ref or current_loss")
+            raise ValueError("full/warmup mask requires at least one shape-bearing tensor")
         return full_mask(ref, valid=valid)
 
     if method == "random":

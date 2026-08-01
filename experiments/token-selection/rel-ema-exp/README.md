@@ -13,7 +13,7 @@ Online token selection: keep top **60%** by `REL = L_hist − L_curr`.
 | Checkpoints | `{0, 125, …, 2125, 2360}` (skip 2250) |
 | Eval | Full 20-label `task_loss_bpb` on every permanent save |
 | `run_id` | `rel-ema-exp-10b-scratch-v1` (**not** `rel-ema-10b-scratch-v1`) |
-| S3 export | `s3://edullm-checkpoints/token-sel/rel-ema-exp/` |
+| Artifact durability | Runtime scratch + W&B |
 
 **Ephemeral scratch:** set `RUN_DIR` empty; stage edullm-data each job; durable
 export via the shared spine. `--resume` fetches from S3 when local is empty.
@@ -65,8 +65,9 @@ export RUN_DIR=/path/to/empty/scratch     # required; job-local tokens/ckpts
 
 bash "$EDULLM_ROOT/experiments/token-selection/rel-ema-exp/launch_train.sh" prepare
 bash "$EDULLM_ROOT/experiments/token-selection/rel-ema-exp/launch_train.sh" train
-# Resume later (durable S3 hydrate if local empty):
-bash "$EDULLM_ROOT/experiments/token-selection/rel-ema-exp/launch_train.sh" train --resume
+# Resume later from W&B if local scratch is empty:
+WANDB_RESUME_ARTIFACT=entity/project/run-checkpoint:latest \
+  bash "$EDULLM_ROOT/experiments/token-selection/rel-ema-exp/launch_train.sh" train --resume
 ```
 
 Or call the shared trainer directly:

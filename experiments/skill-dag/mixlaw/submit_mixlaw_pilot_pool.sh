@@ -33,7 +33,7 @@ DATASET_ID="${DATASET_ID:-pretrain/olmo-127b}"
 DATASET_VERSION="${DATASET_VERSION:-}"
 TOKENS_PER_PARAM="${TOKENS_PER_PARAM:-5}"
 BUILD_WORKERS="${BUILD_WORKERS:-4}"
-EDULLM_DATA_PKG="${EDULLM_DATA_PKG:-edullm-data @ git+https://github.com/edu-llm/edullm-data@v0.2.0}"
+EDULLM_DATA_PKG="${EDULLM_DATA_PKG:-edullm-data @ git+https://github.com/edu-llm/edullm-data@main}"
 
 MIXLAW_ROOT="${SCRIPT_DIR}"
 

@@ -268,10 +268,22 @@ def main() -> int:
     parser.add_argument("--val-fraction", type=float, default=VAL_FRACTION)
     parser.add_argument("--hash-workers", type=int, default=16)
     parser.add_argument("--copy-workers", type=int, default=16)
+    parser.add_argument(
+        "--text-run-dir",
+        type=Path,
+        default=None,
+        help="run dir with trim/<source>/*-trimmed.json.gz (default: parent of tokenized-root)",
+    )
+    parser.add_argument("--skip-text-stage", action="store_true")
     parser.add_argument("--skip-stage", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--force", action="store_true")
     args = parser.parse_args()
+
+    _datasets_root = Path(__file__).resolve().parents[1]
+    if str(_datasets_root) not in sys.path:
+        sys.path.insert(0, str(_datasets_root))
+    from edullm_text_companion import PUBLISH_PROFILE, TEXT_GROUP_META, stage_text_companion
 
     if args.manifest is not None:
         manifest = json.loads(args.manifest.read_text(encoding="utf-8"))
@@ -297,6 +309,15 @@ def main() -> int:
     elif not args.stage_dir.is_dir():
         raise SystemExit(f"--skip-stage but stage-dir missing: {args.stage_dir}")
 
+    text_run_dir = args.text_run_dir or args.tokenized_root.parent
+    if not args.skip_text_stage:
+        stage_text_companion(
+            sources=sorted(manifest["domains"]),
+            run_dir=text_run_dir,
+            out_root=args.stage_dir,
+            shard_bytes=args.shard_bytes,
+        )
+
     if args.dry_run:
         print(f"dry-run: staged under {args.stage_dir}", flush=True)
         return 0
@@ -320,7 +341,8 @@ def main() -> int:
     notes = (
         f"Validation split: {args.val_fraction:.4%} of each source carved into "
         f"tokens/<source>/val-00000.u32le.bin so val source weights match the full mix "
-        f"(~{args.val_fraction:.2%} of corpus). Legacy path on edullm-datasets: "
+        f"(~{args.val_fraction:.2%} of corpus). Companion raw documents under text/<source>/ "
+        f"(text-corpus/v1) retain their complete selected document stream. Legacy path on edullm-datasets: "
         "regmix/regmix-10b/tokenized/*.npy headerless uint32 memmaps."
     )
 
@@ -329,8 +351,9 @@ def main() -> int:
         args.stage_dir,
         dataset_id=args.dataset_id,
         purpose=args.purpose,
-        profile="pretrain-tokens/v1",
+        profile=PUBLISH_PROFILE,
         tokenizer=args.tokenizer,
+        group_meta=TEXT_GROUP_META,
         s3=Boto3S3.default(),
         created_at=created_at,
         hash_workers=args.hash_workers,

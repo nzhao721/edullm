@@ -141,7 +141,8 @@ def test_rel_ema_refhq_arm_contract():
     assert float(cfg["train"]["lr_alpha_f"]) == 0.1
     assert int(cfg["train"]["global_batch_size"]) == 4_194_304
     assert str((cfg.get("train") or {}).get("cuda_visible_devices") or "") == ""
-    assert cfg["s3"]["prefix"] == "token-sel/rel-ema-refhq"
+    assert "checkpoint_bucket" not in cfg["s3"]
+    assert "prefix" not in cfg["s3"]
     assert (cfg.get("reference") or {}).get("step") == 1315
     # load_path may be null; s3_uri is enough — --launch auto-materializes DistCP→.pt
     assert (cfg.get("reference") or {}).get("load_path") is None
@@ -164,7 +165,7 @@ def test_rel_ema_refhq_arm_contract():
     assert (exp_cfg.get("ema") or {}).get("seed_mode") == "zero"
     assert str(exp_cfg.get("alpha_schedule") or "") == "exp"
     assert cfg["run_id"] != exp_cfg["run_id"]
-    assert cfg["s3"]["prefix"] != exp_cfg["s3"]["prefix"]
+    assert cfg["arm"] != exp_cfg["arm"]
     assert exp_cfg["data"]["dataset_id"] == "pretrain/regmix-10b"
 
 
@@ -208,8 +209,6 @@ def test_validate_experiment_refuses_missing_rho_reference(tmp_path, monkeypatch
                 },
                 "s3": {
                     "dataset_bucket": "b",
-                    "checkpoint_bucket": "c",
-                    "prefix": "p",
                 },
             }
         ),
@@ -363,8 +362,8 @@ def test_middle_ppl_token_arm_contract():
     assert (mid.get("eval") or {}).get("task_loss", {}).get("results_dir") == (
         "task_loss_results/middle-ppl-token"
     )
-    assert mid["s3"]["prefix"] == "token-sel/middle-ppl-token"
-    assert mid["s3"]["checkpoint_bucket"] == "edullm-checkpoints"
+    assert "checkpoint_bucket" not in mid["s3"]
+    assert "prefix" not in mid["s3"]
     assert mid["data"]["dataset_id"] == "pretrain/regmix-10b"
     assert "edullm-datasets" not in str(mid.get("data") or {})
 
@@ -389,7 +388,7 @@ def test_rho_package_config_still_isolated_from_middle_ppl_token():
     )
     assert rho["run_id"] != mid["run_id"]
     assert rho["output_dir"] != mid["output_dir"]
-    assert rho["s3"]["prefix"] != mid["s3"]["prefix"]
+    assert rho["arm"] != mid["arm"]
 
 
 def test_rho_1_arm_contract():
@@ -421,8 +420,8 @@ def test_rho_1_arm_contract():
     assert (rho.get("eval") or {}).get("task_loss", {}).get("results_dir") == (
         "task_loss_results/rho-1"
     )
-    assert rho["s3"]["prefix"] == "token-sel/rho-1"
-    assert rho["s3"]["checkpoint_bucket"] == "edullm-checkpoints"
+    assert "checkpoint_bucket" not in rho["s3"]
+    assert "prefix" not in rho["s3"]
 
 
 def test_learnability_token_arm_contract():
@@ -460,9 +459,33 @@ def test_learnability_token_arm_contract():
     assert str((cfg.get("train") or {}).get("cuda_visible_devices") or "") == ""
     assert (cfg.get("eval") or {}).get("task_loss", {}).get("enabled") is True
     assert cfg["eval"]["task_loss"]["results_dir"] == "task_loss_results/learnability-token"
-    assert cfg["s3"]["prefix"] == "token-sel/learnability-token"
-    assert cfg["s3"]["checkpoint_bucket"] == "edullm-checkpoints"
+    assert "checkpoint_bucket" not in cfg["s3"]
+    assert "prefix" not in cfg["s3"]
     assert cfg["data"]["dataset_id"] == "pretrain/regmix-10b"
     assert "edullm-datasets" not in str(cfg.get("data") or {})
     assert cfg["reference"].get("dataset") == "pretrain/refhq-regmix-5p5b"
+
+
+def test_all_yaml_arms_use_strict_2360_permanent_contract():
+    root = Path(__file__).resolve().parents[2]
+    config_paths = [
+        root / "attention/configs/run_attention_10b.yaml",
+        root / "learnability-token/configs/run_learnability_10b.yaml",
+        root / "middle-ppl-token/configs/run_middle_ppl_token_10b.yaml",
+        root / "rel-ema-exp/configs/run_rel_ema_exp_10b.yaml",
+        root / "rel-ema-refhq/configs/run_rel_ema_refhq_10b.yaml",
+        root / "rho-1/configs/run_rho_10b.yaml",
+    ]
+    for path in config_paths:
+        cfg = load_config(path)
+        train = cfg["train"]
+        assert int(train["max_tokens"]) == 9_900_000_000, path
+        assert int(train["max_tokens"]) // int(train["global_batch_size"]) == 2360, path
+        assert train.get("save_async") is False, path
+        assert train.get("checkpoint_keep_last") is None, path
+        assert train.get("ephemeral_checkpoint_every_steps") is None, path
+        assert train.get("fused_ce", False) is False, path
+        task_loss = cfg["eval"]["task_loss"]
+        assert task_loss.get("enabled") is True, path
+        assert task_loss.get("strict") is True, path
 

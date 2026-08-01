@@ -1,16 +1,15 @@
-"""OLMo-core callback: launch full-suite ``task_loss_bpb`` on each permanent ckpt.
+"""OLMo-core callback: complete the permanent-checkpoint durability contract.
 
 Wired from ``train_olmo_template`` for YAML arms (middle_ppl, rho, rel, …).
-Rank 0 only; evals run asynchronously so training can continue.
+Every rank pauses while rank 0 waits for materialization, runs strict synchronous
+task-loss evaluation, uploads artifacts to W&B, and advances the local marker.
 """
 
 from __future__ import annotations
 
 import json
 import os
-import shlex
-import subprocess
-import sys
+import time
 from pathlib import Path
 from typing import Any, Optional, Set
 
@@ -18,9 +17,6 @@ from .checkpoint_ladder import (
     DEFAULT_CHECKPOINT_INTERVAL,
     is_permanent_checkpoint_step,
 )
-from .s3_export import export_arm_checkpoint
-from .s3_layout import arm_from_prefix
-
 try:  # pragma: no cover - OLMo-core is intentionally absent from local CI.
     from olmo_core.train.callbacks import Callback  # type: ignore
 
@@ -42,11 +38,10 @@ def _default_eval_script() -> Path:
 
 
 class TaskLossEvalCallback(Callback if _HAS_OLMO else object):  # type: ignore[misc]
-    """Spawn background task-loss eval when a permanent ladder step is saved.
+    """Finalize each permanent ladder step before training continues.
 
-    Priority 0 so ``CheckpointerCallback`` (priority 1) starts the save first.
-    The child polls until DistCP metadata (or ``state.pt`` / ``model_eval.pt``)
-    exists, then runs the shared evaluator.
+    Priority 0 lets ``CheckpointerCallback`` (priority 1) finish its post-step
+    work first. ``save_async=False`` is required by the YAML spine.
     """
 
     priority = 0
@@ -64,8 +59,12 @@ class TaskLossEvalCallback(Callback if _HAS_OLMO else object):  # type: ignore[m
         eval_script: Optional[str | Path] = None,
         device_eval_batch_size: int = 4,
         arm: Optional[str] = None,
-        s3_prefix: Optional[str] = None,
-        s3_export: bool = True,
+        progress_dir: Optional[str | Path] = None,
+        method: Optional[str] = None,
+        task_loss_nproc: Optional[int] = None,
+        strict: bool = True,
+        production: bool = False,
+        wandb_mode: Optional[str] = None,
     ) -> None:
         if not _HAS_OLMO:
             raise ImportError("olmo_core is required for TaskLossEvalCallback")
@@ -80,13 +79,15 @@ class TaskLossEvalCallback(Callback if _HAS_OLMO else object):  # type: ignore[m
         self.eval_script = Path(eval_script) if eval_script else _default_eval_script()
         self.device_eval_batch_size = int(device_eval_batch_size)
         self._launched: Set[int] = set()
-        if arm:
-            self.arm = str(arm)
-        elif s3_prefix:
-            self.arm = arm_from_prefix(str(s3_prefix))
-        else:
-            self.arm = None
-        self.s3_export = bool(s3_export)
+        self.arm = str(arm or method or self.save_folder.name)
+        self.progress_dir = Path(progress_dir) if progress_dir else None
+        self.method = str(method) if method else self.save_folder.name
+        self.task_loss_nproc = (
+            int(task_loss_nproc) if task_loss_nproc is not None else None
+        )
+        self.strict = bool(strict)
+        self.production = bool(production)
+        self.wandb_mode = wandb_mode
 
     @property
     def _rank(self) -> int:
@@ -100,31 +101,6 @@ class TaskLossEvalCallback(Callback if _HAS_OLMO else object):  # type: ignore[m
     def _out_path(self, step: int) -> Path:
         return self.results_dir / f"step{int(step)}_task_loss.json"
 
-    def _build_cmd(self, step: int, step_dir: Path, out_path: Path) -> list[str]:
-        if self.command_template:
-            rendered = self.command_template.format(
-                checkpoint=str(step_dir),
-                out=str(out_path),
-                run_id=self.run_id,
-                run_name=self.run_id,
-                step=int(step),
-                eval_script=str(self.eval_script),
-                python=sys.executable,
-            )
-            return shlex.split(rendered)
-        return [
-            sys.executable,
-            str(self.eval_script),
-            "--checkpoint",
-            str(step_dir),
-            "--out",
-            str(out_path),
-            "--run-name",
-            self.run_id,
-            "--device-eval-batch-size",
-            str(self.device_eval_batch_size),
-        ]
-
     def _task_loss_eval_wanted(self) -> bool:
         if not self.enabled:
             return False
@@ -135,14 +111,14 @@ class TaskLossEvalCallback(Callback if _HAS_OLMO else object):  # type: ignore[m
             "off",
         }
 
-    def _maybe_launch(self, step: int) -> None:
-        """On each permanent ladder step: durable S3 export (± optional task_loss).
+    def _barrier(self) -> None:
+        import torch.distributed as dist
 
-        Checkpoint upload must not depend on task-loss eval being enabled —
-        ephemeral scratch is wiped, so ``TASK_LOSS_EVAL=0`` still needs S3.
-        """
-        if self._rank != 0:
-            return
+        if dist.is_available() and dist.is_initialized():
+            dist.barrier()
+
+    def _maybe_launch(self, step: int) -> None:
+        """Complete checkpoint → eval → export → marker in lockstep."""
         step = int(step)
         if step in self._launched:
             return
@@ -150,123 +126,72 @@ class TaskLossEvalCallback(Callback if _HAS_OLMO else object):  # type: ignore[m
             return
 
         eval_wanted = self._task_loss_eval_wanted()
-        s3_wanted = bool(self.s3_export and self.arm)
-        if not eval_wanted and not s3_wanted:
-            return
-
         self._launched.add(step)
         step_dir = self._step_dir(step)
-        out_path = self._out_path(step)
         self.results_dir.mkdir(parents=True, exist_ok=True)
-        if s3_wanted:
-            # Best-effort: upload once DistCP/state.pt lands (waiter re-exports).
-            # Immediate call covers state.pt trainers.
-            export_arm_checkpoint(self.arm, step_dir, method=self.save_folder.name)
-            fp = self.save_folder / "run_fingerprint.json"
-            if fp.is_file():
-                from token_selection.olmo_ext.s3_export import export_arm_run_fingerprint
+        self._barrier()
+        error: Optional[BaseException] = None
+        if self._rank == 0:
+            try:
+                deadline = time.time() + 3600
+                while time.time() < deadline:
+                    ready = (
+                        (step_dir / "model_and_optim" / ".metadata").is_file()
+                        or (step_dir / "model_eval.pt").is_file()
+                        or (step_dir / "state.pt").is_file()
+                    )
+                    if ready:
+                        break
+                    time.sleep(1)
+                else:
+                    raise RuntimeError(
+                        f"timed out waiting for permanent checkpoint {step_dir}"
+                    )
+                if self.command_template:
+                    raise RuntimeError(
+                        "eval.task_loss.command_template is out of contract; "
+                        "use eval_script/resource fields so strict validation applies"
+                    )
+                from .permanent_checkpoint import finalize_permanent_checkpoint
+                from .wandb_logging import wandb_run_from_trainer
 
-                export_arm_run_fingerprint(
-                    self.arm, fp, method=self.save_folder.name
+                finalize_permanent_checkpoint(
+                    arm=str(self.arm),
+                    checkpoint_dir=step_dir,
+                    step=step,
+                    run_name=self.run_id,
+                    task_loss_dir=self.results_dir,
+                    task_loss_enabled=eval_wanted,
+                    task_loss_eval_script=self.eval_script,
+                    task_loss_nproc=self.task_loss_nproc,
+                    progress_dir=self.progress_dir,
+                    fingerprint_path=self.save_folder / "run_fingerprint.json",
+                    method=self.method,
+                    wandb_run=wandb_run_from_trainer(self.trainer),
+                    wandb_mode=self.wandb_mode,
+                    production=self.production,
                 )
-
-        cmd = self._build_cmd(step, step_dir, out_path) if eval_wanted else []
-        # Wait for async DistCP finalize, then export (± eval) off the train PG.
-        arm = self.arm
-        method = self.save_folder.name
-        s3_export = s3_wanted
-        results_dir = self.results_dir
-        run_eval = eval_wanted
-        waiter = f"""
-import json, os, subprocess, sys, time
-from pathlib import Path
-step_dir = Path({str(step_dir)!r})
-out_path = Path({str(out_path)!r})
-results_dir = Path({str(results_dir)!r})
-cmd = {cmd!r}
-arm = {arm!r}
-method = {method!r}
-s3_export = {s3_export!r}
-run_eval = {run_eval!r}
-deadline = time.time() + 3600
-ready = lambda: (
-    (step_dir / "model_and_optim" / ".metadata").is_file()
-    or (step_dir / "model_eval.pt").is_file()
-    or (step_dir / "state.pt").is_file()
-)
-while time.time() < deadline and not ready():
-    time.sleep(5)
-if not ready():
-    print(json.dumps({{"status": "timeout_waiting_ckpt", "step_dir": str(step_dir)}}), flush=True)
-    sys.exit(2)
-if s3_export and arm:
-    try:
-        from token_selection.olmo_ext.s3_export import export_arm_checkpoint
-        export_arm_checkpoint(arm, step_dir, method=method)
-    except Exception as exc:
-        print(json.dumps({{"status": "s3_ckpt_export_warn", "error": str(exc)}}), flush=True)
-if not run_eval:
-    print(json.dumps({{"status": "s3_export_only", "step_dir": str(step_dir)}}), flush=True)
-    sys.exit(0)
-if out_path.is_file():
-    print(json.dumps({{"status": "skip_exists", "out": str(out_path)}}), flush=True)
-    if s3_export and arm:
-        try:
-            from token_selection.olmo_ext.s3_export import export_arm_task_loss_dir
-            export_arm_task_loss_dir(arm, results_dir)
-        except Exception:
-            pass
-    sys.exit(0)
-env = os.environ.copy()
-for k in (
-    "RANK", "WORLD_SIZE", "LOCAL_RANK", "LOCAL_WORLD_SIZE", "GROUP_RANK",
-    "ROLE_RANK", "ROLE_NAME", "MASTER_ADDR", "MASTER_PORT", "TORCHELASTIC_RUN_ID",
-):
-    env.pop(k, None)
-tlc = os.environ.get("TASK_LOSS_CUDA_VISIBLE_DEVICES")
-if tlc is not None:
-    env["CUDA_VISIBLE_DEVICES"] = tlc
-print(json.dumps({{"status": "launching_task_loss", "cmd": cmd}}), flush=True)
-rc = subprocess.call(cmd, env=env)
-if s3_export and arm:
-    try:
-        from token_selection.olmo_ext.s3_export import export_arm_task_loss_dir
-        export_arm_task_loss_dir(arm, results_dir)
-    except Exception as exc:
-        print(json.dumps({{"status": "s3_task_loss_export_warn", "error": str(exc)}}), flush=True)
-raise SystemExit(rc)
-"""
-        log_name = (
-            f"step{step}_task_loss_launch.log"
-            if eval_wanted
-            else f"step{step}_s3_export.log"
-        )
-        log_path = self.results_dir / log_name
-        with open(log_path, "a", encoding="utf-8") as log_f:
-            subprocess.Popen(  # noqa: S603 — intentional async handoff
-                [sys.executable, "-c", waiter],
-                stdout=log_f,
-                stderr=subprocess.STDOUT,
-                start_new_session=True,
-                env=os.environ.copy(),
+            except BaseException as exc:  # noqa: BLE001
+                error = exc
+        if self._rank == 0 and error is not None:
+            # torchrun propagates the rank-0 failure and terminates ranks waiting
+            # at the barrier; never continue past a partial permanent step.
+            raise error
+        self._barrier()
+        if self._rank == 0:
+            print(
+                json.dumps(
+                    {
+                        "status": "permanent_checkpoint_complete",
+                        "step": step,
+                        "checkpoint": str(step_dir),
+                        "arm": self.arm,
+                        "task_loss_eval": eval_wanted,
+                        "artifact_store": "wandb",
+                    }
+                ),
+                flush=True,
             )
-        print(
-            json.dumps(
-                {
-                    "status": (
-                        "task_loss_spawned" if eval_wanted else "durable_s3_export_spawned"
-                    ),
-                    "step": step,
-                    "checkpoint": str(step_dir),
-                    "out": str(out_path) if eval_wanted else None,
-                    "log": str(log_path),
-                    "arm": self.arm,
-                    "s3_export": s3_wanted,
-                    "task_loss_eval": eval_wanted,
-                }
-            ),
-            flush=True,
-        )
 
     def pre_train(self) -> None:  # pragma: no cover - requires olmo_core
         self._maybe_launch(0)

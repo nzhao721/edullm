@@ -19,7 +19,7 @@ Near-clone of [`../rel-ema-exp/`](../rel-ema-exp/): controlled knobs match; only
 | Checkpoints | `{0, 125, …, 2125, 2360}` (skip 2250); permanent |
 | Eval | Immediate full 20-label `task_loss_bpb` on each permanent save |
 | `run_id` | `rel-ema-refhq-10b-scratch-v1` |
-| S3 export | `s3://edullm-checkpoints/token-sel/rel-ema-refhq/` |
+| Artifact durability | Runtime scratch + W&B |
 
 **Ephemeral scratch:** set `RUN_DIR` empty; stage edullm-data each job; durable
 export via the shared spine. `--resume` fetches from S3 when local is empty.
@@ -81,8 +81,9 @@ export REF_PT=/path/to/refhq_step1315_model.pt   # optional if YAML s3_uri set
 
 bash "$EDULLM_ROOT/experiments/token-selection/rel-ema-refhq/launch_train.sh" prepare
 bash "$EDULLM_ROOT/experiments/token-selection/rel-ema-refhq/launch_train.sh" train
-# Resume later (durable S3 hydrate if local empty):
-bash "$EDULLM_ROOT/experiments/token-selection/rel-ema-refhq/launch_train.sh" train --resume
+# Resume later from W&B if local scratch is empty:
+WANDB_RESUME_ARTIFACT=entity/project/run-checkpoint:latest \
+  bash "$EDULLM_ROOT/experiments/token-selection/rel-ema-refhq/launch_train.sh" train --resume
 ```
 
 FarmShare thin wrapper (same launcher; defaults `RUN_DIR` + `RANK_MICROBATCH_SIZE=16384`):

@@ -45,9 +45,6 @@ data:
 s3:
   # Train inputs resolve via data.dataset_id → s3://edullm-data/ (not this field).
   dataset_bucket: edullm-data
-  checkpoint_bucket: edullm-checkpoints
-  # Checkpoints + results → s3://edullm-checkpoints/token-sel/rho-1/
-  prefix: token-sel/rho-1
   profile: sbsandbox
 
 model:
@@ -99,6 +96,8 @@ eval:
   metrics_filename: metrics.json
   task_loss:
     enabled: true
+    strict: true
+    nproc: null  # launcher TASK_LOSS_NPROC; all training ranks remain paused
     results_dir: task_loss_results/rho-1
     # Optional: command_template with {step},{checkpoint},{out},{run_id}
     # Or set TOKEN_SELECTION_TASK_LOSS_EVAL_SCRIPT / TOKEN_SELECTION_TASK_LOSS_CMD.

@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "files": [
+    "experiments/curriculum/curriculum_pacing.py",
+    "experiments/curriculum/train_curriculum_regmix_370m.py",
+    "experiments/skill-dag/mixlaw/domain_stream.py",
+    "experiments/skill-dag/mixlaw/launch_validation_370m.sh",
+    "experiments/skill-dag/mixlaw/mixlaw_common.py",
+    "experiments/skill-dag/mixlaw/mixlaw_runtime.py",
+    "experiments/skill-dag/mixlaw/mixlaw_wandb.py",
+    "experiments/skill-dag/mixlaw/preflight_validation_370m.py",
+    "experiments/skill-dag/mixlaw/prepare_validation_370m_data.py",
+    "experiments/skill-dag/mixlaw/stage_validation_pool_from_edullm_data.py",
+    "experiments/skill-dag/mixlaw/train_mixlaw_validation_370m.py",
+    "experiments/skill-dag/mixlaw/validation_mixtures_10b.json",
+    "experiments/token-selection/token_selection/__init__.py",
+    "experiments/token-selection/token_selection/olmo_ext/__init__.py",
+    "experiments/token-selection/token_selection/olmo_ext/checkpoint_ladder.py",
+    "experiments/token-selection/token_selection/olmo_ext/durability.py",
+    "experiments/token-selection/token_selection/olmo_ext/task_loss_hook.py",
+    "experiments/token-selection/token_selection/olmo_ext/wandb_logging.py",
+    "scripts/farmshare/task_loss/eval_task_loss_olmo_core.py",
+    "scripts/runpod/run_mixlaw_370m_mix01.sh"
+  ]
+}

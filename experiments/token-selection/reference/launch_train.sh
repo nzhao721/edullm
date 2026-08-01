@@ -2,18 +2,17 @@
 # Launch RefHQ OLMo-2 370M reference training (train_olmo3_370m_refhq.py only).
 #
 # Clean / ephemeral machine: scratch starts empty. Stage from s3://edullm-data,
-# train with local SAVE_FOLDER on scratch, upload durable checkpoints to
-# s3://edullm-checkpoints/token-sel/reference/ (disable with S3_EXPORT=0).
+# train with local SAVE_FOLDER on scratch, and upload artifacts to W&B.
 #
-# W&B (SmolLM2 protocol; additive to S3): project token-selection. Push
+# W&B project token-selection is the artifact store. Push
 # wandb-session.env via scripts/farmshare/push_wandb_session_to_farmshare.sh
 # "$RUN_DIR" (or set WANDB_SESSION_ENV). Local smoke: WANDB_MODE=disabled.
 #
 # Does not assume FarmShare scratch, laptop trees, or legacy s3://edullm-datasets/.
 #
 # Required:
-#   SAVE_FOLDER     — ephemeral checkpoint working dir (uploaded to S3)
-#   PROGRESS_DIR    — ephemeral metrics / run_meta (uploaded to S3)
+#   SAVE_FOLDER     — ephemeral checkpoint working dir (uploaded to W&B)
+#   PROGRESS_DIR    — ephemeral metrics / run_meta (uploaded to W&B)
 #
 # Data (one of):
 #   STAGE_DIR       — scratch dir; trainer downloads edullm-data shards here
@@ -26,11 +25,12 @@
 #   NAME            — run id (default: refhq-regmix-5p5b-v1)
 #   DATASET_ID      — default pretrain/refhq-regmix-5p5b
 #   DATASET_VERSION — pin version (default: resolve_latest)
-#   S3_EXPORT       — 0 to disable live checkpoint uploads (default: on)
+#   WANDB_MODE      — online for production durability; disabled for local smoke
+#   WANDB_RESUME_ARTIFACT — checkpoint artifact ref for an empty scratch resume
 #   EXTRA_ARGS      — extra flags forwarded to the trainer
 #
 # Examples:
-#   # Ephemeral: stage + train + S3 export
+#   # Ephemeral: stage + train + W&B artifact upload
 #   STAGE_DIR=$SCRATCH/staged SAVE_FOLDER=$SCRATCH/ckpts PROGRESS_DIR=$SCRATCH/progress \
 #     NPROC=4 ./launch_train.sh
 #
@@ -102,8 +102,11 @@ fi
 
 # shellcheck disable=SC2206
 EXTRA=( ${EXTRA_ARGS:-} )
+if [[ -n "${WANDB_RESUME_ARTIFACT:-}" ]]; then
+  EXTRA+=(--wandb-resume-artifact "${WANDB_RESUME_ARTIFACT}")
+fi
 
-echo "Launching RefHQ reference: nproc_per_node=${NPROC_PER_NODE} name=${NAME} dataset=${DATASET_ID}${DATASET_VERSION:+/${DATASET_VERSION}} stage=${STAGE_DIR:-<s3-uris|paths-file>} s3_export=${S3_EXPORT:-1}" >&2
+echo "Launching RefHQ reference: nproc_per_node=${NPROC_PER_NODE} name=${NAME} dataset=${DATASET_ID}${DATASET_VERSION:+/${DATASET_VERSION}} stage=${STAGE_DIR:-<s3-uris|paths-file>} artifact_store=wandb" >&2
 
 # shellcheck disable=SC1091
 source "${TS_ROOT}/token_selection/scripts/wandb_env.sh" "reference" "${NAME}"
@@ -122,18 +125,5 @@ else
   rc=$?
 fi
 set -e
-
-# Upload-before-end belt: fail-closed when S3_EXPORT is on (local smoke: S3_EXPORT=0).
-if [[ "${rc}" -eq 0 ]] && [[ "${S3_EXPORT:-1}" != "0" ]]; then
-  if ! command -v aws >/dev/null 2>&1; then
-    echo "launch_train: durable S3 export required but aws CLI missing; set S3_EXPORT=0 for local smoke only" >&2
-    exit 1
-  fi
-  REMOTE_CKPT="s3://edullm-checkpoints/token-sel/reference/checkpoints/${NAME}/"
-  REMOTE_PROG="s3://edullm-checkpoints/token-sel/reference/progress/${NAME}/"
-  echo "launch_train: final S3 sync → ${REMOTE_CKPT}" >&2
-  aws s3 sync "${SAVE_FOLDER}" "${REMOTE_CKPT}" --only-show-errors
-  aws s3 sync "${PROGRESS_DIR}" "${REMOTE_PROG}" --only-show-errors
-fi
 
 exit "${rc}"

@@ -5,11 +5,10 @@
 # Ephemeral empty-scratch contract:
 #   - Stage train shards from s3://edullm-data/ into STAGE_DIR for this job.
 #   - Do not assume pre-existing scratch corpora, venvs, or local checkpoints.
-#   - Durable saves upload to s3://edullm-checkpoints/token-sel/learnability-doc/
-#     after each permanent checkpoint (fail-closed unless S3_EXPORT=0).
-#   - Resume only via LOAD_PATH (stage that checkpoint from S3 first).
+#   - Artifacts remain on scratch and upload to W&B (production online fail-closed).
+#   - Resume via WANDB_RESUME_ARTIFACT or an explicit local LOAD_PATH.
 #
-# W&B (SmolLM2 protocol; additive to S3): project token-selection. Push
+# W&B project token-selection is the artifact and metrics store. Push
 # wandb-session.env via scripts/farmshare/push_wandb_session_to_farmshare.sh
 # "$RUN_DIR" (or set WANDB_SESSION_ENV). Local smoke: WANDB_MODE=disabled.
 #
@@ -30,14 +29,14 @@
 #   TASK_LOSS_EVAL_SCRIPT / TASK_LOSS_OUT_DIR
 #   LOAD_PATH            explicit checkpoint dir to resume (no local auto-resume)
 #   FRESH=1              explicit start-from-0 (default when LOAD_PATH unset)
-#   S3_EXPORT=0          local-only smoke (not durable on ephemeral scratch)
+#   WANDB_RESUME_ARTIFACT W&B checkpoint artifact ref for cross-job resume
 #   EXTRA_ARGS
 set -Eeuo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TS_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
-: "${SAVE_FOLDER:?Set SAVE_FOLDER for job-local checkpoints (exported to S3 when enabled)}"
+: "${SAVE_FOLDER:?Set SAVE_FOLDER for job-local checkpoints (uploaded to W&B)}"
 : "${PROGRESS_DIR:?Set PROGRESS_DIR for run meta / progress}"
 
 if [[ -z "${TRAIN_PATHS_FILE:-}" ]]; then
@@ -62,6 +61,9 @@ if ! [[ "${NPROC_PER_NODE}" =~ ^[1-9][0-9]*$ ]]; then
   exit 1
 fi
 
+export TASK_LOSS_STRICT=1
+export TASK_LOSS_NPROC="${TASK_LOSS_NPROC:-${NPROC_PER_NODE}}"
+
 export PYTHONPATH="${TS_ROOT}${PYTHONPATH:+:${PYTHONPATH}}"
 
 EXTRA=()
@@ -84,6 +86,9 @@ if [[ -n "${STAGE_DIR:-}" ]]; then
 fi
 if [[ -n "${TRAIN_PATHS_FILE:-}" ]]; then
   EXTRA+=(--train-paths-file "${TRAIN_PATHS_FILE}")
+fi
+if [[ -n "${WANDB_RESUME_ARTIFACT:-}" ]]; then
+  EXTRA+=(--wandb-resume-artifact "${WANDB_RESUME_ARTIFACT}")
 fi
 # shellcheck disable=SC2206
 EXTRA+=( ${EXTRA_ARGS:-} )

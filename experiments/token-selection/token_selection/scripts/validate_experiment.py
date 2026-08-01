@@ -32,7 +32,7 @@ def _reference_local_ok(cfg: dict, *, method: str | None) -> bool:
     if method is None:
         return True
     ref = cfg.get("reference") or {}
-    if method in ("rho_excess", "rel_ema"):
+    if method in ("rho_excess", "rel_ema", "middle_ppl"):
         if method == "rel_ema":
             ema = cfg.get("ema") or {}
             seed = str(ema.get("seed_mode") or cfg.get("ema_seed_mode") or "zero").lower()
@@ -57,6 +57,26 @@ def _reference_local_ok(cfg: dict, *, method: str | None) -> bool:
             if not path.is_file():
                 return False
         return True
+    return True
+
+
+def _reference_remote_ok(cfg: dict, *, method: str | None) -> bool:
+    """True when every missing local reference can be materialized from pinned S3."""
+    ref = cfg.get("reference") or {}
+    if method in ("rho_excess", "middle_ppl"):
+        if method == "middle_ppl":
+            return bool(ref.get("s3_uris")) and bool(ref.get("steps"))
+        return str(ref.get("s3_uri") or "").startswith("s3://")
+    if method == "rel_ema":
+        ema = cfg.get("ema") or {}
+        seed = str(ema.get("seed_mode") or cfg.get("ema_seed_mode") or "zero").lower()
+        return seed != "refhq" or str(ref.get("s3_uri") or "").startswith("s3://")
+    if method == "learnability":
+        early = ref.get("early") or {}
+        late = ref.get("late") or {}
+        return str(early.get("s3_uri") or "").startswith("s3://") and bool(
+            late.get("s3_uris")
+        ) and bool(late.get("steps"))
     return True
 
 
@@ -87,17 +107,25 @@ def main() -> None:
     out = resolve_output_dir(cfg, ROOT)
     methods = cfg.get("methods") or []
     method = str(methods[0]) if len(methods) == 1 else None
-    validate_scratch_config(cfg, method=method)
+    try:
+        validate_scratch_config(cfg, method=method)
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
 
     # Refs: accept local .pt *or* S3 provenance (materialized at --launch). Do not
     # require a pre-existing scratch/laptop cache of RefHQ weights.
-    if method in ("rho_excess", "rel_ema", "learnability"):
+    if method in ("rho_excess", "rel_ema", "learnability", "middle_ppl"):
         if not reference_source_ok(cfg, method=method):
             raise SystemExit(
                 f"{method} requires reference.load_path (local .pt) or S3 provenance "
                 "(reference.s3_uri / early+late s3 fields); nothing to materialize at launch."
             )
         if not _reference_local_ok(cfg, method=method):
+            if not _reference_remote_ok(cfg, method=method):
+                raise SystemExit(
+                    f"{method} reference.load_path does not exist and no complete S3 "
+                    "provenance was provided"
+                )
             print(
                 json.dumps(
                     {

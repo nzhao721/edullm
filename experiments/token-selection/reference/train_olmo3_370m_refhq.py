@@ -20,10 +20,9 @@ Dataset is **only** published RefHQ from ``s3://edullm-data/`` via
 local/scratch directory for the job; this script does not assume FarmShare
 scratch, laptop-local, or legacy ``s3://edullm-datasets/`` data already present.
 
-``--save-folder`` / ``--progress-dir`` are working dirs on scratch. Durable
-artifacts upload to ``s3://edullm-checkpoints/token-sel/reference/`` after each
-permanent ladder save and again at end-of-run. Upload failure aborts training
-(fail-closed); ``S3_EXPORT=0`` / ``--no-s3-export`` is local-smoke opt-out only.
+``--save-folder`` / ``--progress-dir`` are working dirs on scratch. Checkpoints
+and progress upload to W&B artifacts. Production online checkpoint uploads are
+fail-closed; ``--local-smoke`` permits a non-production run without W&B.
 
 W&B (SmolLM2-style, project ``token-selection``): soft-enabled when
 ``WANDB_API_KEY`` is set; skipped otherwise. No task-loss evals on this arm.
@@ -56,7 +55,9 @@ from token_selection.olmo_ext.wandb_logging import (  # noqa: E402
     add_wandb_argparse_options,
     apply_wandb_env_defaults,
     ensure_wandb_not_hard_disabled,
+    is_production_run,
     make_wandb_artifacts_callback,
+    production_online,
     wandb_callback_kwargs_from_env,
     wandb_enabled,
     wandb_mode_from_args,
@@ -98,13 +99,6 @@ from token_selection.olmo_ext.checkpoint_ladder import (
     checkpointer_kwargs_for_ladder,
     is_permanent_checkpoint_step,
 )
-from token_selection.olmo_ext.s3_export import (
-    export_arm_checkpoint,
-    s3_export_enabled,
-    sync_to_s3,
-)
-from token_selection.olmo_ext.s3_layout import arm_uri
-
 log = logging.getLogger("train_olmo2_370m_refhq")
 
 SEQ_LEN = 2048
@@ -349,113 +343,6 @@ def _broadcast_export_ok(ok: bool) -> bool:
     return ok
 
 
-def _fail_closed_s3(ok: bool, what: str) -> None:
-    if _broadcast_export_ok(ok):
-        return
-    raise SystemExit(
-        f"Durable S3 export failed for {what}. "
-        "Fix AWS credentials / aws CLI on the train host, then retry. "
-        "Set S3_EXPORT=0 only for intentional non-durable local smoke runs."
-    )
-
-
-class S3CheckpointExportCallback(Callback):
-    """Upload DistCP step dirs to edullm-checkpoints after permanent ladder saves.
-
-    Priority 0 so ``CheckpointerCallback`` (priority 1) finishes first.
-    ``save_folder`` is ephemeral scratch; durable home is S3. Fail-closed when
-    export is enabled (``S3_EXPORT=0`` / ``--no-s3-export`` is local-smoke only).
-    """
-
-    priority = 0
-
-    def __init__(
-        self,
-        *,
-        save_folder: str | Path,
-        progress_dir: str | Path,
-        run_name: str,
-        total_steps: int,
-        save_interval: int,
-        enabled: bool = True,
-    ) -> None:
-        super().__init__()
-        self.save_folder = Path(save_folder)
-        self.progress_dir = Path(progress_dir)
-        self.run_name = str(run_name)
-        self.total_steps = int(total_steps)
-        self.save_interval = int(save_interval)
-        self.enabled = bool(enabled)
-        self._exported: Set[int] = set()
-
-    def _maybe_export_step(self, step: int) -> None:
-        step = int(step)
-        if not is_permanent_checkpoint_step(step, self.total_steps, self.save_interval):
-            return
-        if step in self._exported:
-            return
-
-        export_ok = True
-        if self.enabled and get_rank() == 0:
-            if not s3_export_enabled():
-                log.warning(
-                    "S3 export disabled (S3_EXPORT=0 / SKIP_S3_UPLOAD=1); "
-                    "checkpoint step%s is local-only and will be lost when scratch is wiped",
-                    step,
-                )
-            else:
-                step_dir = self.save_folder / f"step{step}"
-                if not _wait_distcp_ready(step_dir):
-                    log.error("DistCP step dir not ready for durable export: %s", step_dir)
-                    export_ok = False
-                else:
-                    export_ok = bool(
-                        export_arm_checkpoint(
-                            ARM, step_dir, method=self.run_name, enabled=True
-                        )
-                    )
-        elif not self.enabled and get_rank() == 0:
-            log.warning(
-                "S3 export disabled; permanent step%s stays local-only on ephemeral scratch",
-                step,
-            )
-
-        if self.enabled:
-            _fail_closed_s3(export_ok, f"checkpoint step{step}")
-        # All ranks: avoid re-entering fail-closed on later batches for this step.
-        self._exported.add(step)
-
-    def post_train_batch(self) -> None:  # pragma: no cover - requires olmo_core
-        step = int(getattr(self.trainer, "global_step", 0) or 0)
-        self._maybe_export_step(step)
-
-    def post_train(self) -> None:  # pragma: no cover - requires olmo_core
-        export_ok = True
-        if self.enabled and get_rank() == 0:
-            if not s3_export_enabled():
-                log.warning(
-                    "S3 export disabled; end-of-run artifacts are local-only on ephemeral scratch"
-                )
-            else:
-                ckpt_ok = bool(
-                    sync_to_s3(
-                        self.save_folder,
-                        arm_uri(ARM, "checkpoints", self.run_name),
-                        enabled=True,
-                    )
-                )
-                prog_ok = bool(
-                    sync_to_s3(
-                        self.progress_dir,
-                        arm_uri(ARM, "progress", self.run_name),
-                        enabled=True,
-                    )
-                )
-                export_ok = ckpt_ok and prog_ok
-        if self.enabled:
-            _fail_closed_s3(export_ok, f"end-of-run tree under {self.save_folder}")
-
-
 def dtype_to_olmo(dtype_name: str) -> NumpyDatasetDType:
     name = dtype_name.strip().lower()
     # ResolvedSplit may return "uint32"; numpy_dtype may return "<u4".
@@ -624,22 +511,11 @@ def build_config(opts: argparse.Namespace, train_data: ResolvedTrainData) -> Exp
             "checkpointer",
             CheckpointerCallback(**ckpt_kwargs),
         )
-        .with_callback(
-            "s3_export",
-            S3CheckpointExportCallback(
-                save_folder=opts.save_folder,
-                progress_dir=opts.progress_dir,
-                run_name=opts.name,
-                total_steps=total_steps,
-                save_interval=save_interval,
-                enabled=not opts.no_s3_export,
-            ),
-        )
         .with_callback("config_saver", ConfigSaverCallback())
     )
 
     # W&B: train scalars via olmo_core WandBCallback; checkpoint artifacts via side channel.
-    # Soft-skip without WANDB_API_KEY (SmolLM2); never weakens S3 fail-closed export.
+    # Production online checkpoint uploads are fail-closed.
     apply_wandb_env_defaults(
         project=getattr(opts, "wandb_project", None) or "token-selection",
         run_name=getattr(opts, "wandb_run_name", None) or opts.name,
@@ -648,6 +524,13 @@ def build_config(opts: argparse.Namespace, train_data: ResolvedTrainData) -> Exp
     os.environ["WANDB_MODE"] = wandb_mode_from_args(opts)
     ensure_wandb_not_hard_disabled()
     wb_enabled = wandb_enabled(mode=wandb_mode_from_args(opts), is_main=True)
+    production = not bool(getattr(opts, "local_smoke", False))
+    if production_online(
+        production=production, mode=wandb_mode_from_args(opts)
+    ) and not wb_enabled:
+        raise SystemExit(
+            "production online reference runs require W&B checkpoint artifacts"
+        )
     try:
         from olmo_core.train.callbacks import WandBCallback  # type: ignore
 
@@ -679,13 +562,17 @@ def build_config(opts: argparse.Namespace, train_data: ResolvedTrainData) -> Exp
                 total_steps=total_steps,
                 interval=save_interval,
                 tokens_per_step=tokens_per_step,
+                progress_dir=opts.progress_dir,
+                production=production,
+                wandb_mode=wandb_mode_from_args(opts),
+                run_name=opts.name,
             ),
         )
     except ImportError:
+        if production_online(production=production, mode=wandb_mode_from_args(opts)):
+            raise
         if get_rank() == 0:
-            log.warning(
-                "olmo_core.WandBCallback unavailable; continuing without W&B"
-            )
+            log.warning("olmo_core.WandBCallback unavailable; local smoke has no W&B")
 
     if get_rank() == 0:
         progress = Path(opts.progress_dir)
@@ -723,8 +610,7 @@ def build_config(opts: argparse.Namespace, train_data: ResolvedTrainData) -> Exp
             "final_checkpoint": "post_train",
             "max_checkpoints": None,
             "ephemeral_scratch": True,
-            "s3_export_prefix": f"token-sel/{ARM}",
-            "s3_export": not opts.no_s3_export,
+            "artifact_store": "wandb",
             "compile_model": opts.compile_model,
             "attn_backend": str(resolve_attn_backend()),
             "seed": opts.seed,
@@ -778,6 +664,28 @@ def main(opts: argparse.Namespace) -> None:
     prepare_training_environment()
     try:
         train_data = resolve_train_data(opts)
+        if opts.wandb_resume_artifact:
+            if get_rank() == 0:
+                from token_selection.olmo_ext.wandb_logging import (
+                    restore_checkpoint_artifact,
+                )
+
+                restored = restore_checkpoint_artifact(
+                    opts.wandb_resume_artifact,
+                    opts.save_folder,
+                    require_fingerprint=False,
+                )
+                (Path(opts.progress_dir) / "wandb_resume_path.txt").parent.mkdir(
+                    parents=True, exist_ok=True
+                )
+                (Path(opts.progress_dir) / "wandb_resume_path.txt").write_text(
+                    str(restored), encoding="utf-8"
+                )
+            if dist.is_available() and dist.is_initialized():
+                dist.barrier()
+            opts.load_path = (
+                Path(opts.progress_dir) / "wandb_resume_path.txt"
+            ).read_text(encoding="utf-8").strip()
         cfg = build_config(opts, train_data)
         seed_all(cfg.init_seed)
 
@@ -801,34 +709,7 @@ def main(opts: argparse.Namespace) -> None:
             log.info("No checkpoint in save folder; loading from %s", cfg.load_path)
             trainer.load_checkpoint(cfg.load_path, load_trainer_state=False)
 
-        try:
-            trainer.fit()
-        finally:
-            # Belt-and-suspenders durable upload (scratch may be wiped after exit).
-            export_ok = True
-            if not opts.no_s3_export and get_rank() == 0:
-                if not s3_export_enabled():
-                    log.warning(
-                        "S3 export disabled; final artifacts are local-only on ephemeral scratch"
-                    )
-                else:
-                    ckpt_ok = bool(
-                        sync_to_s3(
-                            opts.save_folder,
-                            arm_uri(ARM, "checkpoints", opts.name),
-                            enabled=True,
-                        )
-                    )
-                    prog_ok = bool(
-                        sync_to_s3(
-                            opts.progress_dir,
-                            arm_uri(ARM, "progress", opts.name),
-                            enabled=True,
-                        )
-                    )
-                    export_ok = ckpt_ok and prog_ok
-            if not opts.no_s3_export:
-                _fail_closed_s3(export_ok, f"final sync of {opts.save_folder}")
+        trainer.fit()
     finally:
         teardown_training_environment()
 
@@ -876,12 +757,12 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     ap.add_argument(
         "--save-folder",
         required=True,
-        help="Ephemeral DistCP working dir; durable copy → edullm-checkpoints/token-sel/reference/",
+        help="Runtime-scratch DistCP working dir; checkpoints upload to W&B",
     )
     ap.add_argument(
         "--progress-dir",
         required=True,
-        help="Ephemeral metrics/run_meta dir (also uploaded to S3 when export is on)",
+        help="Runtime-scratch metrics/run_meta dir (uploaded to W&B)",
     )
     ap.add_argument("--work-dir", default=None, help="olmo_core dataset work dir (default: progress-dir)")
     ap.add_argument(
@@ -915,8 +796,7 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
         default=None,
         help=(
             "Local DistCP dir to warm-start when save-folder is empty. "
-            "Must already be materialized on this machine (sync from "
-            "s3://edullm-checkpoints/token-sel/reference/ first on ephemeral nodes)."
+            "Use --wandb-resume-artifact for cross-job restore."
         ),
     )
     ap.add_argument(
@@ -926,10 +806,9 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
         help="torch.compile (default: on)",
     )
     ap.add_argument(
-        "--no-s3-export",
+        "--local-smoke",
         action="store_true",
-        help="Disable uploads to s3://edullm-checkpoints/token-sel/reference/ "
-        "(also honored via S3_EXPORT=0 / SKIP_S3_UPLOAD=1)",
+        help="Allow a non-production local run without required online W&B artifacts",
     )
     ap.add_argument("--dry-run", action="store_true")
     add_wandb_argparse_options(ap, default_run_name=None)
@@ -939,11 +818,6 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
         opts.wandb_run_name = opts.name
     if opts.data_bucket == LEGACY_DATA_BUCKET:
         ap.error(f"legacy bucket {LEGACY_DATA_BUCKET} is not allowed; use edullm-data")
-    # Env kill-switch mirrors other arms (S3_EXPORT=0).
-    if os.environ.get("S3_EXPORT", "1").strip().lower() in {"0", "false", "no", "off"}:
-        opts.no_s3_export = True
-    if os.environ.get("SKIP_S3_UPLOAD", "").strip().lower() in {"1", "true", "yes", "on"}:
-        opts.no_s3_export = True
     if opts.load_path:
         lp = opts.load_path.replace("\\", "/")
         if LEGACY_DATA_BUCKET in lp:
@@ -951,7 +825,7 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
         if lp.startswith("s3://"):
             ap.error(
                 "--load-path must be a local DistCP directory on this machine; "
-                "sync from s3://edullm-checkpoints/token-sel/reference/ first"
+                "use --wandb-resume-artifact for cross-job restore"
             )
     if opts.global_batch_size % opts.sequence_length != 0:
         ap.error("--global-batch-size must be a multiple of --sequence-length")

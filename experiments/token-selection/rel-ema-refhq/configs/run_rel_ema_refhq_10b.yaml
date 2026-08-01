@@ -54,9 +54,6 @@ data:
 s3:
   # Train inputs resolve via data.dataset_id → s3://edullm-data/ (not this field).
   dataset_bucket: edullm-data
-  checkpoint_bucket: edullm-checkpoints
-  # Checkpoints + results → s3://edullm-checkpoints/token-sel/rel-ema-refhq/
-  prefix: token-sel/rel-ema-refhq
   profile: sbsandbox
 
 model:
@@ -106,5 +103,7 @@ eval:
   metrics_filename: metrics.json
   task_loss:
     enabled: true
+    strict: true
+    nproc: null  # launcher TASK_LOSS_NPROC; all training ranks remain paused
     # Relative to experiments/token-selection/ when not absolute.
     results_dir: task_loss_results/rel-ema-refhq

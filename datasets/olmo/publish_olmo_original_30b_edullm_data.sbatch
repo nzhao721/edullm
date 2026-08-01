@@ -3,8 +3,8 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=16
-#SBATCH --mem=64G
-#SBATCH --time=24:00:00
+#SBATCH --mem=80G
+#SBATCH --time=48:00:00
 #SBATCH --exclude=wheat-01
 #SBATCH --job-name=olmo30b-edullm-pub
 #SBATCH --output=logs/olmo30b_edullm_publish_%j.out
@@ -18,17 +18,19 @@ set -Eeuo pipefail
 
 : "${RUN_DIR:?}" "${STAGE_DIR:?}" "${EDULLM_ROOT:?}"
 
+VENV="${VENV:-${RUN_DIR}/venv}"
 # shellcheck disable=SC1091
-source "${RUN_DIR}/venv/bin/activate"
+source "${VENV}/bin/activate"
 # shellcheck disable=SC1090
 source "${AWS_SESSION_ENV:?}"
 
-export PATH="${HOME}/.local/bin:${HOME}/tools/aws/bin:${PATH}"
+export PATH="${PATH}:${HOME}/.local/bin:${HOME}/tools/aws/bin"
 export AWS_DEFAULT_REGION="${AWS_DEFAULT_REGION:-us-east-1}"
 
-SCRIPTS="${SCRIPTS:-${RUN_DIR}/scripts/olmo}"
+SCRIPTS="${SCRIPTS:-${EDULLM_ROOT}/datasets/olmohq}"
 BUCKET="${BUCKET:-edullm-datasets}"
 PREFIX="${PREFIX:-olmo30b/olmo-mix-1124-30b}"
+TEXT_RUN_DIR="${TEXT_RUN_DIR:-/scratch/users/nzhao2/agent-runs/olmo-mix-30b-20260722}"
 CACHE_DIR="${CACHE_DIR:-${RUN_DIR}/cache}"
 MANIFEST_LOCAL="${MANIFEST_LOCAL:-${CACHE_DIR}/plan/tokenized_manifest.json}"
 EDULLM_DATA_DIR="${EDULLM_DATA_DIR:-${RUN_DIR}/edullm-data}"
@@ -50,6 +52,7 @@ python "${SCRIPTS}/publish_olmohq_edullm_data.py" \
   --manifest "${MANIFEST_LOCAL}" \
   --s3-bucket "${BUCKET}" \
   --s3-tokenized-prefix "${PREFIX}/tokenized" \
+  --text-run-dir "${TEXT_RUN_DIR:?}" \
   --stage-dir "${STAGE_DIR}" \
   --dataset-id "${DATASET_ID}" \
   --purpose "${PURPOSE}" \

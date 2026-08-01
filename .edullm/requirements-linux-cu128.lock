@@ -1,0 +1,22 @@
+# Direct runtime lock for the platform's Linux amd64 / CUDA 12.8 image.
+# Git requirements are immutable commits; the FlashAttention wheel is the
+# CPython 3.12, torch 2.8, CUDA 12 binary used by the validated 8xA100 runtime.
+--extra-index-url https://download.pytorch.org/whl/cu128
+
+torch==2.8.0+cu128
+ai2-olmo-core==2.4.0
+ai2-olmo @ git+https://github.com/allenai/OLMo.git@090253dac6688f2532509daa7aa2eb5fae50e956
+edullm-data @ git+https://github.com/edu-llm/edullm-data.git@f0254ddb7aba589aa27e5a84ebaa95cb152edcfa
+flash-attn @ https://github.com/Dao-AILab/flash-attention/releases/download/v2.8.3.post1/flash_attn-2.8.3.post1+cu12torch2.8cxx11abiTRUE-cp312-cp312-linux_x86_64.whl
+numpy==1.26.4
+boto3==1.43.60
+datasets==5.0.0
+omegaconf==2.3.0
+PyYAML==6.0.3
+rich==15.0.0
+safetensors==0.8.0
+scikit-learn==1.9.0
+tokenizers==0.22.2
+torchmetrics==1.9.0
+transformers==4.57.6
+wandb==0.28.1

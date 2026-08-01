@@ -30,7 +30,7 @@ weights (no full-matrix materialization during FlashAttention).
 | Permanent ckpts | `{0, 125, …, 2125, 2360}` (omit 2250) |
 | Eval | full 20-label `task_loss_bpb` on each permanent save |
 | `run_id` | `attention-topk-10b-scratch-v1` |
-| S3 export | `s3://edullm-checkpoints/token-sel/attention/` |
+| Artifact durability | Runtime scratch + W&B |
 
 ## Launch
 
@@ -66,8 +66,8 @@ Dry-run (print plan only): omit `--launch`.
 
 Resume: `RESUME=1 bash attention/launch.sh` (fingerprint-gated). On ephemeral
 scratch, `--resume` fetches `run_fingerprint.json` + step dirs from
-`s3://edullm-checkpoints/token-sel/attention/` when the local save folder is
-empty — keep `S3_EXPORT=1` during training.
+W&B when the local save folder is
+empty. Set `WANDB_RESUME_ARTIFACT` to the checkpoint artifact reference.
 
 Task-loss results: `task_loss_results/attention/step{N}_task_loss.json`
 (disable with `TASK_LOSS_EVAL=0`).

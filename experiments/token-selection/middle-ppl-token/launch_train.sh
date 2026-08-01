@@ -5,10 +5,8 @@
 #   - Set WORK or RUN_DIR to a job scratch dir (do not use the repo tree).
 #   - Stage train shards from s3://edullm-data/ via data.dataset_id.
 #   - Do not assume pre-staged tokens, local venvs, or prior checkpoints.
-#   - Durable saves → s3://edullm-checkpoints/token-sel/middle-ppl-token/
-#     (train_olmo_template + TaskLossEvalCallback; S3_EXPORT=0 for local smoke only).
-#   - RESUME=1 fetches fingerprints + step dirs from that S3 prefix when local
-#     save_folder is empty. Never resume from wiped scratch alone.
+#   - Artifacts remain on scratch and upload to W&B.
+#   - RESUME=1 restores the run's W&B checkpoint artifact when scratch is empty.
 #
 # Env:
 #   EDULLM_ROOT          repo root (default: inferred from this script)
@@ -18,11 +16,10 @@
 #   CUDA_VISIBLE_DEVICES physical GPU pin (required on bare multi-GPU hosts)
 #   RANK_MICROBATCH_SIZE tokens/rank microbatch (default: YAML 65536)
 #   MODE                 prepare | train | all  (default: all)
-#   RESUME               1 to --resume (durable S3 fetch if needed)
-#   TASK_LOSS_EVAL       0 to disable post-save task_loss spawn (S3 export still runs)
-#   S3_EXPORT=0          local-only smoke (not durable on ephemeral scratch)
+#   RESUME               1 to --resume (W&B restore if needed)
+#   TASK_LOSS_EVAL       0 to disable post-save task_loss spawn
 #
-# W&B (SmolLM2 protocol; additive to S3): project token-selection. Push
+# W&B project token-selection is the artifact store. Push
 # wandb-session.env via scripts/farmshare/push_wandb_session_to_farmshare.sh
 # "$RUN_DIR" (or set WANDB_SESSION_ENV). Local smoke: WANDB_MODE=disabled.
 set -euo pipefail
@@ -59,6 +56,8 @@ if [[ "$NPROC" -lt 1 ]]; then
   echo "NUM_GPUS / CUDA_VISIBLE_DEVICES must yield >= 1 GPU" >&2
   exit 1
 fi
+export TASK_LOSS_STRICT=1
+export TASK_LOSS_NPROC="${TASK_LOSS_NPROC:-${NPROC}}"
 
 export PYTHONPATH="${REPO_PY}${PYTHONPATH:+:$PYTHONPATH}"
 export TOKEN_SELECTION_SKIP_IDLE_CHECK="${TOKEN_SELECTION_SKIP_IDLE_CHECK:-${SLURM_JOB_ID:+1}}"
@@ -124,7 +123,10 @@ PY
   local resume_flag=()
   if [[ "$RESUME" == "1" || "$RESUME" == "true" ]]; then
     resume_flag=(--resume)
-    log "RESUME=1 — train_olmo_template fetches durable ckpts from S3 if local save_folder empty"
+    log "RESUME=1 — restoring from local scratch or WANDB_RESUME_ARTIFACT"
+  fi
+  if [[ -n "${WANDB_RESUME_ARTIFACT:-}" ]]; then
+    resume_flag+=(--wandb-resume-artifact "$WANDB_RESUME_ARTIFACT")
   fi
   log "torchrun nproc=$NPROC cfg=$CFG"
   _MIDDLE_PPL_TOKEN_RUN_NAME="${WANDB_RUN_NAME:-$(python -c "import yaml; from pathlib import Path; print(yaml.safe_load(Path('${CFG}').read_text(encoding='utf-8'))['run_id'])")}"

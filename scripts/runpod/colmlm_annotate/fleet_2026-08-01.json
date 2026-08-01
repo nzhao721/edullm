@@ -1,0 +1,103 @@
+﻿{
+    "s3Prefix":  "s3://edullm-checkpoints/runpod/colmlm-annotate",
+    "gpuType":  "NVIDIA A100-SXM4-80GB",
+    "launchedAt":  "2026-08-01T20:42:31Z",
+    "awsSessionExpiry":  "2026-08-01T22:31:17+00:00",
+    "workers":  [
+                    {
+                        "workerIndex":  0,
+                        "shard":  "train-00000.jsonl.gz",
+                        "podId":  "gt1jygk31vxqww"
+                    },
+                    {
+                        "workerIndex":  1,
+                        "shard":  "train-00001.jsonl.gz",
+                        "podId":  "qwi1xg152qsg7f"
+                    },
+                    {
+                        "workerIndex":  2,
+                        "shard":  "train-00002.jsonl.gz",
+                        "podId":  "r68uh77oqqx55t"
+                    },
+                    {
+                        "workerIndex":  3,
+                        "shard":  "train-00003.jsonl.gz",
+                        "podId":  "wklxju7uoyecyi"
+                    },
+                    {
+                        "workerIndex":  4,
+                        "shard":  "train-00004.jsonl.gz",
+                        "podId":  "79e18yvjnfqz30"
+                    },
+                    {
+                        "workerIndex":  5,
+                        "shard":  "train-00005.jsonl.gz",
+                        "podId":  "jssm78up487ymf"
+                    },
+                    {
+                        "workerIndex":  6,
+                        "shard":  "train-00006.jsonl.gz",
+                        "podId":  "ezrgzpo1k1xlcw"
+                    },
+                    {
+                        "workerIndex":  7,
+                        "shard":  "train-00007.jsonl.gz",
+                        "podId":  "bhfoejv9lhvcpq"
+                    },
+                    {
+                        "workerIndex":  8,
+                        "shard":  "train-00008.jsonl.gz",
+                        "podId":  "rjcvamlfu48rfy"
+                    },
+                    {
+                        "workerIndex":  9,
+                        "shard":  "train-00009.jsonl.gz",
+                        "podId":  "rtoiculck8vub1"
+                    },
+                    {
+                        "workerIndex":  10,
+                        "shard":  "train-00010.jsonl.gz",
+                        "podId":  "sns43qq1dfgb3e"
+                    },
+                    {
+                        "workerIndex":  11,
+                        "shard":  "train-00011.jsonl.gz",
+                        "podId":  "prphlx6p0fq0y1"
+                    },
+                    {
+                        "workerIndex":  12,
+                        "shard":  "train-00012.jsonl.gz",
+                        "podId":  "5v3u3oilyhalxu"
+                    },
+                    {
+                        "workerIndex":  13,
+                        "shard":  "train-00013.jsonl.gz",
+                        "podId":  "13rdp9myzymnch"
+                    },
+                    {
+                        "workerIndex":  14,
+                        "shard":  "train-00014.jsonl.gz",
+                        "podId":  "t8iyhqsvg8x1dw"
+                    },
+                    {
+                        "workerIndex":  15,
+                        "shard":  "train-00015.jsonl.gz",
+                        "podId":  "knp9jy8w42jx3k"
+                    },
+                    {
+                        "workerIndex":  16,
+                        "shard":  "train-00016.jsonl.gz",
+                        "podId":  "t0tn2f6609lw19"
+                    },
+                    {
+                        "workerIndex":  17,
+                        "shard":  "train-00017.jsonl.gz",
+                        "podId":  "48cxtzgur38bgu"
+                    },
+                    {
+                        "workerIndex":  18,
+                        "shard":  "train-00018.jsonl.gz",
+                        "podId":  "o48d1s5hbjy705"
+                    }
+                ]
+}

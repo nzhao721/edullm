@@ -9,10 +9,9 @@
 #
 # Ephemeral runtime: set a fresh job-scoped RUN_DIR (or SAVE_ROOT/PROGRESS_ROOT
 # under it). Scratch starts empty and is wiped after the job. Data stages from
-# s3://edullm-data/; durable checkpoints land on:
-#   s3://edullm-checkpoints/curriculum/<arm_id>/checkpoints
-#   s3://edullm-checkpoints/curriculum/<arm_id>/progress
-# and W&B project "curriculum" (SmolLM protocol; push wandb-session.env to RUN_DIR).
+# s3://edullm-data/. Checkpoints and all other run artifacts stay on scratch and
+# upload to W&B project "curriculum" (push wandb-session.env to RUN_DIR).
+# Production checkpoint uploads are synchronous and fail-closed.
 #
 # Shared env expected by launch_arm.sh (plus per-arm overrides below):
 #   SAVE_ROOT           parent of per-arm dirs; SAVE_FOLDER=$SAVE_ROOT/<arm_id>/checkpoints
@@ -32,7 +31,7 @@
 #   warmup-cr     warmup-flesch     warmup-mtld     warmup-learn
 #   interleave-cr interleave-flesch interleave-mtld interleave-learn
 #
-# Optional post-hoc EMA (after pulling checkpoints from S3 into a work dir):
+# Optional post-hoc EMA (using scratch checkpoints or W&B artifact downloads):
 #   python experiments/curriculum/ema_merge_checkpoints.py \
 #     --checkpoints-root "$SAVE_ROOT/<arm_id>/checkpoints" \
 #     --arm-id <arm_id>
@@ -99,7 +98,7 @@ To drive launches on an ephemeral job scratch (data from edullm-data):
   export SUBMIT_CMD='bash'   # or an AWS/slurm wrapper that runs the given command
   bash experiments/curriculum/launch/submit_matrix.sh
 
-Durable artifacts: s3://edullm-checkpoints/curriculum/<arm_id>/ + W&B project curriculum.
+Artifacts: job scratch + W&B project curriculum. S3 is input staging only.
 
 EOF
   exit 0

@@ -1,6 +1,6 @@
 ---
 name: Token Selection Arms
-overview: Rebuild all RegMix-10B token-selection arms under per-arm directories, with RefHQ-matched OLMo-2 370M architecture, permanent checkpoints every 125 steps, hardware-agnostic single/multi-GPU scripts, and immediate OLMo-ladder task_loss_bpb evals (full 20-label RC 5-shot suite) on every saved checkpoint. Delete/rebuild Control, BLADE, and RHO-1. All checkpoints and experiment results export to s3://edullm-checkpoints/token-sel/<arm>/.
+overview: Rebuild all RegMix-10B token-selection arms under per-arm directories, with RefHQ-matched OLMo-2 370M architecture, permanent checkpoints every 125 steps, hardware-agnostic single/multi-GPU scripts, and immediate OLMo-ladder task_loss_bpb evals (full 20-label RC 5-shot suite) on every saved checkpoint. Checkpoints and results remain on runtime scratch and upload to W&B; S3 is input-only.
 todos:
   - id: layout-dirs
     content: Create per-arm directories under experiments/token-selection/; delete control/, blade/, and rho-1/ then rebuild; add dirs for REL/attention/learnability/middle-ppl variants
@@ -9,7 +9,7 @@ todos:
     content: Codify shared RefHQ-matched architecture + permanent checkpoint ladder (0, every 125 except last grid point if within 125 of final, plus final) for every arm trainer
     status: completed
   - id: s3-token-sel
-    content: "Export all ckpts + results to s3://edullm-checkpoints/token-sel/<arm>/ (YAML prefixes, sync/export helpers, FarmShare/train hooks)"
+    content: "Keep S3 input-only; upload checkpoints, evals, metrics, and progress from runtime scratch to W&B"
     status: completed
   - id: rebuild-control
     content: "control/ rebuilt (code); retrain random-60% control on RegMix 10B still required"
@@ -96,7 +96,7 @@ Example for a 2360-step run (`125 * 18 = 2250`, and `2360 - 2250 = 110 < 125`):
 
 `{0, 125, 250, …, 2125, 2360}` — **omit 2250**
 
-Enforce this in every arm trainer (standalone scripts and the shared `token_selection` spine). Existing control defaults (250 permanent + ephemeral) and middle_ppl YAML (`checkpoint_every_steps: 250`) must be rewritten to this contract.
+Enforce this in every arm trainer (standalone scripts and the shared `token_selection` spine). All arms use this 125-step permanent ladder (no ephemeral checkpoints).
 
 ## Hardware / launch contract (all scripts)
 
@@ -146,9 +146,11 @@ Negative log-likelihood of the **correct answer continuation** under multiple-ch
 
 ### When to run
 
-**Immediately on every permanent checkpoint save** (including step 0 and final): kick off / enqueue the full 20-label suite for that checkpoint as soon as it is written — do not wait until the run finishes. Training may continue while evals run asynchronously (separate process/job), but eval must be triggered at save time.
+**Immediately on every permanent checkpoint save** (including step 0 and final), training pauses until the checkpoint is fully materialized and the full 20-label suite succeeds. The checkpoint, complete eval JSON, progress, and schema-v2 run fingerprint are then uploaded to W&B; production online checkpoint uploads are fail-closed. Only after required uploads succeed may local `last_durable_step.json` advance.
 
-Extend/replace the partial label list in `[scripts/farmshare/task_loss/eval_task_loss_olmo_core.py](scripts/farmshare/task_loss/eval_task_loss_olmo_core.py)` (currently a subset) so the shared evaluator covers all 20 labels. Wire each arm’s checkpointer callback or post-save hook to launch that evaluator against the just-saved step (proxy weights for BLADE).
+Artifacts from the former 10B/2384-step schedule, partial/legacy eval JSON, or standalone checkpoints without a schema-v2 `run_fingerprint.json` are explicitly **out of contract** and must not be imported as resumable state.
+
+The shared evaluator in `scripts/farmshare/task_loss/eval_task_loss_olmo_core.py` covers all 20 raw labels. Each arm’s synchronous post-save callback evaluates the just-saved step (proxy weights for BLADE); partial suites are rejected rather than treated as contract-complete.
 
 Outputs: per-arm `task_loss_results/<arm>/step{N}_task_loss.json` with the full `task_loss_bpb` map.
 
@@ -163,24 +165,19 @@ Outputs: per-arm `task_loss_results/<arm>/step{N}_task_loss.json` with the full 
 - **Learnability early / late**: RefHQ **step250** vs **avg of step1000/1125/1315**
 
 
-## S3 export layout (checkpoints + results)
+## Artifact durability and S3 boundary
 
-All arm **checkpoint saves** and **experiment results** (task-loss JSON, metrics, progress) publish to the `edullm-checkpoints` bucket under a shared root:
+- S3 may only stage/stream published training data and immutable bootstrap references at run start.
+- Checkpoints, progress, metrics, eval JSON, fingerprints, and durable markers stay on runtime scratch and upload to W&B artifacts.
+- Production online runs require W&B and wait for each checkpoint artifact upload; failure aborts before training continues.
+- `--resume` restores `WANDB_RESUME_ARTIFACT` (or the run's `latest` checkpoint artifact) into scratch, then applies the schema-v2 fingerprint guard.
+- `sync_artifacts.py` stages tokens only. The former S3 output helper was removed.
 
-```text
-s3://edullm-checkpoints/token-sel/<arm>/
-  checkpoints/          # permanent ladder (and method subdirs for YAML spine arms)
-  task_loss_results/    # step{N}_task_loss.json
-  metrics/              # optional train metrics
-  progress/             # optional heartbeats / ladder manifests
-```
+### Recovery and runtime dependencies
 
-Arm directory names match `experiments/token-selection/<arm>/`, e.g. `token-sel/blade/`, `token-sel/rho-1/`, `token-sel/rel-ema-exp/`.
-
-- YAML `s3.prefix` **must** be `token-sel/<arm>` (see `token_selection.olmo_ext.s3_layout`).
-- Pre-tokenized train data stays on **`s3://edullm-data/`** (`data.dataset_id`); do not upload tokens into `token-sel/`.
-- Ephemeral jobs: local `output_dir` is a staging area only. Keep `S3_EXPORT=1` so step dirs + `run_fingerprint.json` + metrics land on `edullm-checkpoints`. `--resume` fetches from that prefix when the local save folder is empty — do not rely on scratch-only checkpoints.
-- Helpers: `sync_artifacts.py`, `s3_export.py`; disable live export with `S3_EXPORT=0` / `SKIP_S3_UPLOAD=1` (local smoke only).
+- The YAML spine starts fresh without `--resume`; resume restores a W&B artifact and requires a matching schema-v2 fingerprint. Standalone trainers accept `--wandb-resume-artifact` or an explicit local `--load-path`.
+- `progress/last_durable_step.json` advances only after the checkpoint and complete task-loss suite are locally valid and required W&B uploads succeed.
+- Production online runs require W&B. AWS credentials are only needed for allowed S3 input staging; training code never writes artifacts to S3.
 
 ## Per-arm directory layout
 
@@ -236,7 +233,7 @@ flowchart TB
 
 
 1. **Control**
-   - Selection: none
+   - Selection: uniform random keep 60% (Marion-style; same keep rate as other arms, not “no selection”)
    - Status: Code ready; **GPU retrain required**
    - Action: `control/` rebuilt; new run_id `control-regmix10b-v2`; random 60% keep on RegMix 10B
 2. **REL, no init, α=`1−e^(−t/300)`**
@@ -306,4 +303,4 @@ Default compute path: whatever host the user provides via env/CLI (`torchrun` wo
 - [x] Full 20-label OLMo-ladder `task_loss_bpb` evaluator; triggered immediately on every permanent checkpoint
 - [x] Online selection arms use `t0=0` (no masking warmup); BLADE keeps 500-step proxy warmup only
 - [x] Top-level README arm table updated
-- [x] Shared spine: `z_loss_multiplier=1e-5`, `max_grad_norm=1.0`, `SKIP_S3_UPLOAD`, FA unwrap, matmul precision
+- [x] Shared spine: `z_loss_multiplier=1e-5`, `max_grad_norm=1.0`, scratch + W&B artifact durability, FA unwrap, matmul precision

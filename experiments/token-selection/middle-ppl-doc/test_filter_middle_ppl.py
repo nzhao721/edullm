@@ -55,14 +55,12 @@ class TestMiddleTokenMass(unittest.TestCase):
         ts = Path(__file__).resolve().parents[1]
         sys.path.insert(0, str(ts))
         from token_selection.olmo_ext.checkpoint_ladder import permanent_checkpoint_steps
-        from token_selection.olmo_ext.s3_layout import arm_prefix
 
         steps = permanent_checkpoint_steps(2360, 125)
         self.assertIn(0, steps)
         self.assertIn(2125, steps)
         self.assertIn(2360, steps)
         self.assertNotIn(2250, steps)
-        self.assertEqual(arm_prefix("middle-ppl-doc"), "token-sel/middle-ppl-doc")
 
     def test_trainer_arm_constants(self) -> None:
         # Import constants without pulling heavy CUDA deps at module load —
@@ -88,7 +86,8 @@ class TestMiddleTokenMass(unittest.TestCase):
         self.assertIn('OLMO_ATTN_BACKEND", "torch"', text)
         self.assertIn('--save-interval"', text)
         self.assertIn('method": "plain_ce"', text)
-        self.assertIn("export_arm_checkpoint(ARM, path)", text)
+        self.assertIn("finalize_permanent_checkpoint(", text)
+        self.assertNotIn("sync_to_s3(", text)
         self.assertNotIn("--train-paths-file", text)
         self.assertNotIn("S3 export after checkpoint failed", text)
 
@@ -100,7 +99,8 @@ class TestMiddleTokenMass(unittest.TestCase):
         self.assertNotIn("--train-paths-file", readme)
         self.assertIn("pretrain/middle-ppl-doc-mid60", readme)
         self.assertIn("STAGE_DIR", readme)
-        self.assertIn("edullm-checkpoints", readme)
+        self.assertNotIn("edullm-checkpoints", readme)
+        self.assertIn("WANDB_RESUME_ARTIFACT", readme)
         self.assertIn("Ephemeral runtime", readme)
         self.assertIn("Does **not** read", readme)
         self.assertIn("STAGE_DIR", launch)

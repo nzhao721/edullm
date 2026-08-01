@@ -6,9 +6,11 @@ Merges model weights from steps ``2000, 2125, 2250, 2384`` with the convention::
     avg ← α · avg + (1 − α) · newest
 
 Default ``α=0.8`` (so each update is ``0.8·avg + 0.2·newest``). Checkpoints are
-processed oldest → newest. Writes ``step2384-ema/`` under the checkpoints root
-and by default launches the shared 20-label task_loss eval on the merged
-artifact (``--task-loss`` / ``--no-task-loss``).
+processed oldest → newest. Writes ``step2384-ema/`` under the scratch
+checkpoints root and by default launches the shared 20-label task_loss eval on
+the merged artifact (``--task-loss`` / ``--no-task-loss``). Production then
+uploads the merged checkpoint and eval to W&B and waits for the checkpoint
+artifact commit; S3 is never an artifact destination.
 
 Does **not** use online ``token_selection.olmo_ext.ema.EMAHistory`` (REL history).
 """
@@ -18,11 +20,17 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
 import sys
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, MutableMapping, Optional, Sequence
 
 import torch
+
+try:
+    import wandb
+except ImportError:  # pragma: no cover - optional for local-only tests
+    wandb = None  # type: ignore[assignment]
 
 log = logging.getLogger("ema_merge_checkpoints")
 
@@ -203,9 +211,9 @@ def maybe_task_loss(
     eval_script: Optional[str],
     enabled: bool,
     run_name: str,
-) -> None:
+) -> Path | None:
     if not enabled:
-        return
+        return None
     # Import shared hook from token-selection package.
     ts_root = Path(__file__).resolve().parents[1] / "token-selection"
     if str(ts_root) not in sys.path:
@@ -213,14 +221,90 @@ def maybe_task_loss(
     from token_selection.olmo_ext.task_loss_hook import trigger_task_loss_eval
 
     results_dir.mkdir(parents=True, exist_ok=True)
+    out_path = results_dir / "step2384-ema_task_loss.json"
     trigger_task_loss_eval(
         ckpt_dir,
         run_name=run_name,
-        out_path=results_dir / "step2384-ema_task_loss.json",
+        out_path=out_path,
         eval_script=eval_script,
         enabled=True,
         async_=False,
     )
+    if not out_path.is_file():
+        raise RuntimeError(f"task-loss eval returned without output {out_path}")
+    return out_path
+
+
+def _artifact_name(arm_id: str, suffix: str) -> str:
+    arm = "".join(c if c.isalnum() or c in "-_." else "-" for c in str(arm_id))
+    arm = arm.strip("-_.")
+    if not arm:
+        raise ValueError("arm_id must contain an artifact-name character")
+    return f"{arm}-{suffix}"
+
+
+def upload_ema_artifacts(
+    *,
+    out_dir: Path,
+    eval_path: Path | None,
+    arm_id: str,
+    steps: Sequence[int],
+    alpha: float,
+    project: str,
+    entity: str | None,
+    mode: str,
+    wandb_dir: Path,
+) -> None:
+    """Upload the EMA model/eval to W&B and synchronously confirm the model."""
+    if wandb is None:
+        raise RuntimeError("wandb package is required for production EMA publication")
+    wandb_dir.mkdir(parents=True, exist_ok=True)
+    run = wandb.init(
+        project=project,
+        entity=entity or None,
+        name=f"{arm_id}-ema",
+        mode=mode,
+        dir=str(wandb_dir),
+        config={
+            "arm_id": arm_id,
+            "ema_steps": list(steps),
+            "ema_alpha": float(alpha),
+            "artifact_backend": "wandb",
+        },
+    )
+    try:
+        checkpoint = wandb.Artifact(
+            name=_artifact_name(arm_id, "checkpoint-step2384-ema"),
+            type="model",
+            metadata={"arm_id": arm_id, "steps": list(steps), "alpha": float(alpha)},
+        )
+        checkpoint.add_dir(str(out_dir))
+        logged = run.log_artifact(checkpoint)
+        uploaded = logged if logged is not None else checkpoint
+        wait = getattr(uploaded, "wait", None)
+        if not callable(wait):
+            raise RuntimeError("W&B EMA checkpoint handle has no wait()")
+        wait()
+        if eval_path is not None:
+            evaluation = wandb.Artifact(
+                name=_artifact_name(arm_id, "eval-step2384-ema"),
+                type="eval",
+                metadata={"arm_id": arm_id, "steps": list(steps), "alpha": float(alpha)},
+            )
+            evaluation.add_file(str(eval_path), name=eval_path.name)
+            eval_logged = run.log_artifact(evaluation)
+            eval_uploaded = eval_logged if eval_logged is not None else evaluation
+            eval_wait = getattr(eval_uploaded, "wait", None)
+            if not callable(eval_wait):
+                raise RuntimeError("W&B EMA eval handle has no wait()")
+            eval_wait()
+        run.finish()
+    except Exception:
+        try:
+            run.finish(exit_code=1)
+        except Exception:
+            pass
+        raise
 
 
 def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
@@ -230,7 +314,7 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         type=Path,
         required=True,
         help="Directory containing step{N}/state.pt "
-        "(stage from s3://edullm-checkpoints/curriculum/<arm>/checkpoints into a work dir first)",
+        "(use job scratch or download W&B model artifacts into a scratch work dir first)",
     )
     ap.add_argument("--arm-id", type=str, required=True)
     ap.add_argument(
@@ -260,12 +344,40 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         help="Run task_loss eval on the merged artifact (default: on; use --no-task-loss to skip)",
     )
     ap.add_argument("--task-loss-eval-script", type=str, default=None)
+    ap.add_argument(
+        "--wandb-project",
+        default=os.environ.get("WANDB_PROJECT", "curriculum"),
+    )
+    ap.add_argument(
+        "--wandb-entity",
+        default=os.environ.get("WANDB_ENTITY") or None,
+    )
+    ap.add_argument(
+        "--wandb-mode",
+        choices=("online", "offline", "disabled"),
+        default=os.environ.get("WANDB_MODE", "online"),
+    )
+    ap.add_argument(
+        "--allow-local-only",
+        action="store_true",
+        help="Local-smoke escape hatch: keep EMA artifacts only on scratch",
+    )
     return ap.parse_args(argv)
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
     args = parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    if not args.allow_local_only:
+        if args.wandb_mode != "online":
+            raise SystemExit(
+                "production EMA publication requires --wandb-mode online; "
+                "use --allow-local-only only for local smoke"
+            )
+        if wandb is None or not os.environ.get("WANDB_API_KEY"):
+            raise SystemExit(
+                "production EMA publication requires wandb and WANDB_API_KEY"
+            )
     steps = [int(s) for s in args.steps]
     dirs = resolve_step_dirs(args.checkpoints_root, steps)
     model_sds: List[Dict[str, Any]] = []
@@ -287,14 +399,27 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         arm_id=str(args.arm_id),
     )
     log.info("wrote EMA checkpoint → %s (alpha=%.3f steps=%s)", out_dir, args.alpha, steps)
+    eval_path: Path | None = None
     if args.task_loss:
         results = args.task_loss_results_dir or (args.checkpoints_root.parent / "task_loss_results")
-        maybe_task_loss(
+        eval_path = maybe_task_loss(
             out_dir,
             results_dir=Path(results),
             eval_script=args.task_loss_eval_script,
             enabled=True,
             run_name=f"{args.arm_id}-step2384-ema",
+        )
+    if not args.allow_local_only:
+        upload_ema_artifacts(
+            out_dir=out_dir,
+            eval_path=eval_path,
+            arm_id=str(args.arm_id),
+            steps=steps,
+            alpha=float(args.alpha),
+            project=str(args.wandb_project),
+            entity=args.wandb_entity,
+            mode=str(args.wandb_mode),
+            wandb_dir=args.checkpoints_root.parent / "wandb",
         )
     return 0
 

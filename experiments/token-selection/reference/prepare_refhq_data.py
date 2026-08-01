@@ -223,7 +223,7 @@ def main() -> int:
     summary = {
         "refhq": info,
         "length_tokens": length,
-        "note": "Ephemeral stage only; durable checkpoints live under edullm-checkpoints",
+        "note": "Ephemeral input stage only; durable checkpoints upload to W&B",
     }
     (work / "refhq_data_summary.json").write_text(
         json.dumps(summary, indent=2) + "\n", encoding="utf-8"

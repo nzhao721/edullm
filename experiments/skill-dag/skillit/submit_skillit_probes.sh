@@ -10,9 +10,9 @@
 #
 # Optional:
 #   RUN_DIR      ephemeral run root (default: /scratch/.../skillit-probes-<ts>)
-#   RESULTS_S3   durable upload prefix (default: s3://edullm-checkpoints/skillit/probes)
-#   WANDB_PROJECT default skillit (final probe eval metrics)
-#   WANDB_MODE    online if ${RUN_DIR}/wandb-session.env exists, else disabled
+#   WANDB_PROJECT default skillit
+#   WANDB_MODE    production requires online
+#   ALLOW_LOCAL_ONLY 1 permits disabled/offline W&B for local smoke only
 #
 # Usage:
 #   TRAIN_VENV=/path/to/venv POOL_DIR=$RUN_DIR/pool \
@@ -33,8 +33,9 @@ SKILLIT_ROOT="${SKILLIT_ROOT:-${SCRIPT_DIR}}"
 TRAIN_VENV="${TRAIN_VENV:-${VENV:-${LADDER_VENV:-}}}"
 MAX_PARALLEL="${MAX_PARALLEL:-}"
 ARRAY_TASKS="${ARRAY_TASKS:-0-6}"
-RESULTS_S3="${RESULTS_S3:-s3://edullm-checkpoints/skillit/probes}"
 RECIPE_WORK="${RECIPE_WORK:-${RUN_DIR}/recipe}"
+DATASET_ID="${DATASET_ID:-pretrain/olmo-127b}"
+DATASET_VERSION="${DATASET_VERSION:-v1}"
 
 : "${POOL_DIR:?Set POOL_DIR to an edullm-data staged working pool root}"
 if [[ -z "${TRAIN_VENV}" ]]; then
@@ -45,10 +46,12 @@ if [[ ! -x "${TRAIN_VENV}/bin/python" ]]; then
   echo "missing GPU venv at ${TRAIN_VENV}" >&2
   exit 2
 fi
-if [[ ! -f "${POOL_DIR}/edullm_data_source.json" ]]; then
-  echo "missing ${POOL_DIR}/edullm_data_source.json — stage from edullm-data first" >&2
-  exit 2
-fi
+"${TRAIN_VENV}/bin/python" "${SKILLIT_ROOT}/prepare_skillit_370m_data.py" \
+  --pool-dir "${POOL_DIR}" \
+  --dataset-id "${DATASET_ID}" \
+  --dataset-version "${DATASET_VERSION}" \
+  --pool-layout probe \
+  --validate-pool-only
 if [[ ! -d "${RECIPE_WORK}" ]]; then
   echo "missing recipe sidecars under ${RECIPE_WORK} (run submit_skillit_prepare_probes.sh first)" >&2
   exit 2
@@ -62,10 +65,15 @@ mkdir -p "${RUN_DIR}/logs" "${RUN_DIR}/runs"
 
 WANDB_PROJECT="${WANDB_PROJECT:-skillit}"
 WANDB_ENTITY="${WANDB_ENTITY:-}"
+ALLOW_LOCAL_ONLY="${ALLOW_LOCAL_ONLY:-0}"
 if [[ -f "${RUN_DIR}/wandb-session.env" ]]; then
   WANDB_MODE="${WANDB_MODE:-online}"
 else
   WANDB_MODE="${WANDB_MODE:-disabled}"
+fi
+if [[ "${ALLOW_LOCAL_ONLY}" != "1" && "${WANDB_MODE}" != "online" ]]; then
+  echo "production requires WANDB_MODE=online; set ALLOW_LOCAL_ONLY=1 only for local smoke" >&2
+  exit 2
 fi
 
 cat > "${RUN_DIR}/probe_ids.txt" <<'EOF'
@@ -97,12 +105,14 @@ cat >> "${RUN_DIR}/env.sh" <<EOF
 TRAIN_VENV=${TRAIN_VENV}
 POOL_DIR=${POOL_DIR}
 RECIPE_WORK=${RECIPE_WORK}
-RESULTS_S3=${RESULTS_S3}
 PROBE_ARRAY_TASKS=${ARRAY_TASKS}
 PROBE_MAX_PARALLEL=${MAX_PARALLEL}
 WANDB_PROJECT=${WANDB_PROJECT}
 WANDB_ENTITY=${WANDB_ENTITY}
 WANDB_MODE=${WANDB_MODE}
+ALLOW_LOCAL_ONLY=${ALLOW_LOCAL_ONLY}
+DATASET_ID=${DATASET_ID}
+DATASET_VERSION=${DATASET_VERSION}
 EOF
 
 ARRAY_SPEC="${ARRAY_TASKS}"
@@ -114,7 +124,7 @@ PROBE_JOB=$(sbatch --parsable \
   --array="${ARRAY_SPEC}" \
   --job-name=skillit-probe \
   --chdir="${RUN_DIR}" \
-  --export=ALL,RUN_DIR="${RUN_DIR}",SKILLIT_ROOT="${SKILLIT_ROOT}",MIXLAW_ROOT="${MIXLAW_ROOT}",TRAIN_VENV="${TRAIN_VENV}",VENV="${TRAIN_VENV}",POOL_DIR="${POOL_DIR}",RECIPE_WORK="${RECIPE_WORK}",RESULTS_S3="${RESULTS_S3}",WANDB_PROJECT="${WANDB_PROJECT}",WANDB_ENTITY="${WANDB_ENTITY}",WANDB_MODE="${WANDB_MODE}" \
+  --export=ALL,RUN_DIR="${RUN_DIR}",SKILLIT_ROOT="${SKILLIT_ROOT}",MIXLAW_ROOT="${MIXLAW_ROOT}",TRAIN_VENV="${TRAIN_VENV}",VENV="${TRAIN_VENV}",POOL_DIR="${POOL_DIR}",RECIPE_WORK="${RECIPE_WORK}",WANDB_PROJECT="${WANDB_PROJECT}",WANDB_ENTITY="${WANDB_ENTITY}",WANDB_MODE="${WANDB_MODE}",ALLOW_LOCAL_ONLY="${ALLOW_LOCAL_ONLY}",DATASET_ID="${DATASET_ID}",DATASET_VERSION="${DATASET_VERSION}" \
   "${SKILLIT_ROOT}/skillit_probe.sbatch")
 
 echo "probe_array_job_id=${PROBE_JOB}"

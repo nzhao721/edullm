@@ -16,23 +16,23 @@ if str(_SCRIPTS) not in sys.path:
 
 from build_curriculum_index import (  # noqa: E402
     assign_ranks,
+    build_parent_pool_orders,
     count_doc_chunks,
     join_label_indexes,
+    load_parent_layout,
     planned_upload_keys,
 )
 
 
 def test_count_doc_chunks_exact_multiple_and_remainder():
-    # Exact multiple: must keep the last full chunk (no off-by-one drop).
-    assert count_doc_chunks(2048, 2048) == 1
-    assert count_doc_chunks(4096, 2048) == 2
-    assert count_doc_chunks(0, 2048) == 0
-    # Remainder tokens do not form a chunk.
-    assert count_doc_chunks(2047, 2048) == 0
+    # Match MemmapTokenDataset: each input needs one next-token reserve.
+    assert count_doc_chunks(2048, 2048) == 0
     assert count_doc_chunks(2049, 2048) == 1
+    assert count_doc_chunks(4096, 2048) == 1
+    assert count_doc_chunks(4097, 2048) == 2
+    assert count_doc_chunks(0, 2048) == 0
+    assert count_doc_chunks(2047, 2048) == 0
     assert count_doc_chunks(5000, 2048) == 2
-    # Old formula (n-1)//seq_len wrongly dropped a chunk when n % seq_len == 0.
-    assert count_doc_chunks(4096, 2048) != max(0, (4096 - 1) // 2048)
 
 
 def test_join_on_id_and_coverage():
@@ -92,7 +92,7 @@ def test_planned_upload_keys_dry_run(tmp_path: Path):
 
 
 def test_build_skip_tokenize_end_to_end(tmp_path: Path):
-    """Smoke the CLI with ranks-only (no transformers)."""
+    """Smoke exact parent-coordinate output without tokenization or network."""
     import subprocess
 
     labels = tmp_path / "labels"
@@ -108,8 +108,12 @@ def test_build_skip_tokenize_end_to_end(tmp_path: Path):
         (
             lm,
             [
-                {"id": "a", "domain": "wiki", "learnability_late_minus_early_avg_nll": -1.0},
-                {"id": "b", "domain": "wiki", "learnability_late_minus_early_avg_nll": 0.5},
+                {"id": "a", "domain": "wiki", "source_path": "trim/wiki/wiki-trimmed.json.gz",
+                 "source_doc": 0, "n_tokens": 3,
+                 "learnability_late_minus_early_avg_nll": -1.0},
+                {"id": "b", "domain": "wiki", "source_path": "trim/wiki/wiki-trimmed.json.gz",
+                 "source_doc": 1, "n_tokens": 4,
+                 "learnability_late_minus_early_avg_nll": 0.5},
             ],
         ),
     ):
@@ -119,6 +123,29 @@ def test_build_skip_tokenize_end_to_end(tmp_path: Path):
                 handle.write(json.dumps(r) + "\n")
 
     out = tmp_path / "curriculum"
+    parent_layout = tmp_path / "parent_layout.json"
+    parent_layout.write_text(
+        json.dumps(
+            {
+                "dataset_id": "pretrain/regmix-10b",
+                "version": "v7",
+                "manifest_sha256": "abc123",
+                "seq_len": 4,
+                "tokenizer_id": "allenai/dolma2-tokenizer",
+                "eos_token_id": 100257,
+                "source_total_tokens": {"wiki": 9},
+                "shards": [
+                    {
+                        "path": "tokens/wiki/train-00000.u32le.bin",
+                        "source": "wiki",
+                        "source_token_start": 0,
+                        "count": 9,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
     script = _SCRIPTS / "build_curriculum_index.py"
     proc = subprocess.run(
         [
@@ -130,7 +157,14 @@ def test_build_skip_tokenize_end_to_end(tmp_path: Path):
             str(lm),
             "--out-dir",
             str(out),
-            "--skip-tokenize",
+            "--parent-layout",
+            str(parent_layout),
+            "--parent-version",
+            "v7",
+            "--parent-manifest-sha256",
+            "abc123",
+            "--seq-len",
+            "4",
             "--dry-run-upload",
         ],
         check=True,
@@ -140,4 +174,74 @@ def test_build_skip_tokenize_end_to_end(tmp_path: Path):
     assert (out / "curriculum_manifest.json").is_file()
     assert (out / "doc_manifest.jsonl.gz").is_file()
     assert (out / "coverage.json").is_file()
+    assert (out / "parent_chunk_index.jsonl.gz").is_file()
+    for metric in ("compression_ratio", "flesch", "mtld", "learnability"):
+        import numpy as np
+
+        order = np.load(out / f"ranked_chunks_{metric}.npy")
+        assert sorted(order.tolist()) == [0, 1]
     assert "dry_run" in proc.stdout
+
+
+def test_parent_layout_rejects_missing_source_offsets(tmp_path: Path):
+    layout = tmp_path / "layout.json"
+    layout.write_text(
+        json.dumps(
+            {
+                "dataset_id": "pretrain/regmix-10b",
+                "version": "v1",
+                "manifest_sha256": "hash",
+                "seq_len": 2048,
+                "tokenizer_id": "allenai/dolma2-tokenizer",
+                "eos_token_id": 100257,
+                "source_total_tokens": {"wiki": 10},
+                "shards": [{"path": "tokens/wiki/train-00000.u32le.bin", "count": 10}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    import pytest
+
+    with pytest.raises(SystemExit, match="source_token_start"):
+        load_parent_layout(
+            path=layout,
+            dataset_id="pretrain/regmix-10b",
+            version="v1",
+            manifest_sha256="hash",
+            seq_len=2048,
+        )
+
+
+def test_parent_orders_fail_closed_on_incomplete_metric(tmp_path: Path):
+    rows = [
+        {
+            "id": "a",
+            "domain": "wiki",
+            "source_path": "trim/wiki/wiki-trimmed.json.gz",
+            "source_doc": 0,
+            "n_tokens": 8,
+        },
+    ]
+    ranks = {metric: {} for metric in ("compression_ratio", "flesch", "mtld", "learnability")}
+    layout = {
+        "source_total_tokens": {"wiki": 9},
+        "shards": [
+            {
+                "path": "tokens/wiki/train-00000.u32le.bin",
+                "source": "wiki",
+                "source_token_start": 0,
+                "count": 9,
+                "n_chunks": 2,
+            }
+        ],
+    }
+    import pytest
+
+    with pytest.raises(SystemExit, match="lacks a finite"):
+        build_parent_pool_orders(
+            joined_rows=rows,
+            ranks=ranks,
+            parent_layout=layout,
+            out_dir=tmp_path,
+            seq_len=4,
+        )

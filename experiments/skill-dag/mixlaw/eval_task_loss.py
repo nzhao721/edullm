@@ -18,6 +18,7 @@ Writes ``task_loss_final.json`` next to the checkpoint's progress directory.
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import logging
 import os
@@ -44,6 +45,34 @@ from mixlaw_common import (
 )
 
 log = logging.getLogger("eval_task_loss")
+_SHARED_EVAL = (
+    Path(__file__).resolve().parents[3]
+    / "scripts"
+    / "farmshare"
+    / "task_loss"
+    / "eval_task_loss_olmo_core.py"
+)
+
+
+def load_compatible_train_config(
+    checkpoint: Path,
+    base_config: Path | None = None,
+) -> TrainConfig:
+    """Reuse the shared null/schema-compatible ladder config loader."""
+    if not _SHARED_EVAL.is_file():
+        raise FileNotFoundError(f"shared task-loss evaluator missing: {_SHARED_EVAL}")
+    spec = importlib.util.spec_from_file_location(
+        "shared_eval_task_loss_olmo_core",
+        _SHARED_EVAL,
+    )
+    if spec is None or spec.loader is None:
+        raise ImportError(f"cannot import shared evaluator from {_SHARED_EVAL}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    candidate = base_config
+    if candidate is None and (checkpoint / "config.yaml").is_file():
+        candidate = checkpoint / "config.yaml"
+    return module.build_train_config(candidate)
 
 
 def evaluate_label(
@@ -98,6 +127,12 @@ def main() -> None:
     ap.add_argument("--device-eval-batch-size", type=int, default=32)
     ap.add_argument("--num-workers", type=int, default=4)
     ap.add_argument(
+        "--base-config",
+        type=Path,
+        default=None,
+        help="Optional ladder/OLMo YAML loaded through the shared compatible config loader",
+    )
+    ap.add_argument(
         "--labels",
         nargs="*",
         default=None,
@@ -135,7 +170,7 @@ def main() -> None:
     add_cached_path_clients()
     device = torch.device("cuda")
 
-    cfg = TrainConfig.load(args.checkpoint / "config.yaml")
+    cfg = load_compatible_train_config(args.checkpoint, args.base_config)
     cfg.data.num_workers = args.num_workers
     cfg.device_eval_batch_size = args.device_eval_batch_size
     cfg.evaluators = []

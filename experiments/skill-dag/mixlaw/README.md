@@ -138,6 +138,8 @@ Columns follow `domain_order` in `mixtures.json`. Weights sum to 1.
 | `prepare_validation_370m_data.py` | Per-arm `mix_weights.json` sidecars from recipe |
 | `train_mixlaw_validation_370m.py` | OLMo2-370M CE trainer (streams at recipe weights) |
 | `launch_validation_370m.sh` | One OLMo2-370M CE arm on a recipe mix |
+| `mixlaw_runtime.py` | Pure recovery, dependency, and production contracts |
+| `preflight_validation_370m.py` | OLMES/dependency preflight + version metadata |
 | `submit_mixlaw_validation_pool.sh` | FarmShare: stage peak pool from edullm-data |
 | `stage_validation_pool_from_edullm_data.py` | 370M peak pool download+concat from edullm-data |
 | `submit_mixlaw_validation_370m.sh` | Slurm array over all recipe mixes (`TRAIN_VENV` required) |
@@ -449,6 +451,35 @@ Eight **10B-token** OLMo-370M arms. Domain weights live in `validation_mixtures_
 2. **recipe sidecars** — `prepare_validation_370m_data.py` writes per-arm `mix_weights.json`.
 3. **train** — `submit_mixlaw_validation_370m.sh` → `train_mixlaw_validation_370m.py` (`DomainMixtureStream`).
 
+### Platform seven-arm array
+
+The platform array runs indices `0..6` as `olmo-mix-1124`, `mix07`, `mix18`, `ML-pilot_caps`, `ML-near-opt-4`, `LGB-min1pct`, and `LGB-near-opt-8`. `mix01` is deliberately excluded because its control run is already separate.
+
+- The image is built from `.edullm/Dockerfile` with the platform-supplied digest and `.edullm/requirements-linux-cu128.lock`. Publication is manual through the `Publish platform research image` workflow; implementation does not dispatch it.
+- Submit repository `edullm-p1`, workload `mixlaw-validation-370m-8xa100`, dataset `olmo-127b-v1`, team `pre-training`, W&B project `mixlaw`, and fan-out size/parallelism `7`.
+- Set experiment/fan-out parameter to `370m-validation`/`mixture` and use command `bash -lc 'EDULLM_LAUNCH_CHECK=waived exec python /opt/edullm/experiments/skill-dag/mixlaw/platform_array_entrypoint.py --checkpoint-prefix "$EDULLM_CHECKPOINT_DIR"'`. The explicit launcher waiver is required because admission can inspect the submitted shell command but cannot see that this entrypoint deterministically starts eight `torchrun` ranks.
+- Every child requires the platform-injected `EDULLM_DATASET_ID=pretrain/olmo-127b` and `EDULLM_DATASET_VERSION=v1`; `latest` is refused. It uses `/scratch/$AWS_BATCH_JOB_ID`, stages only its selected arm, and runs eight ranks with two CPU threads each (16 vCPU total).
+- Checkpoints publish beneath `$EDULLM_CHECKPOINT_DIR/array/<index>-<mix>/stepN/`; progress and task loss publish beneath `$EDULLM_OUTPUT_PREFIX/array/<index>-<mix>/`. Checkpoint contents land before `_COMPLETE.json`.
+- Use the platform status/cancel workflow against the parent array or a specific child. Do not use the FarmShare submit scripts to manage Batch.
+- Batch attempts remain `1`. Checkpoints are durable, but automatic restore from platform S3 is not implemented; a replacement run must first restore a checkpoint to local scratch and pass an explicit `--load-path`.
+
+### Recovery, eval, and durability contract
+
+- Set `RECOVERY_MODE=fresh|resume|fail` for every launch. The default is `fail`: clean scratch starts at step 0, but any leftover checkpoint aborts. `fresh` explicitly ignores leftovers. `resume` requires an explicit `--load-path` or a validated `last_durable_step.json`; no mode scans for the newest checkpoint.
+- Production (platform S3 or online W&B durability) requires synchronous all-rank evaluation of all 20 OLMES `*_bpb` labels at every permanent checkpoint. Evaluation failures abort only after the train module has been rebuilt and reloaded. Local smoke runs may explicitly disable task loss.
+- A platform checkpoint becomes durable only after its files and completion sentinel upload successfully; progress and task-loss JSON then publish under the isolated arm output prefix. FarmShare retains its existing local/W&B path.
+- `launch_validation_370m.sh` runs `preflight_validation_370m.py` before training. It requires the complete OLMES label map, a ladder base config, the evaluator, and current dependencies; resolved package and dataset versions are recorded in `run_meta.json`.
+- Install `edullm-data` from the newest release wheel or GitHub `main`; old pins such as `v0.2.0` are rejected.
+
+The checked-in RunPod source bundle is deterministic and local-only:
+
+```bash
+python scripts/runpod/build_mixlaw_bundle.py --sync   # refresh local tree
+python scripts/runpod/build_mixlaw_bundle.py          # parity check only
+```
+
+The builder does not create or upload a tarball and does not touch a pod.
+
 ### Validation scripts
 
 | Script | Role |
@@ -459,6 +490,11 @@ Eight **10B-token** OLMo-370M arms. Domain weights live in `validation_mixtures_
 | `prepare_validation_370m_data.py` | Per-arm `mix_weights.json` sidecars from recipe |
 | `train_mixlaw_validation_370m.py` | OLMo2-370M CE trainer (domain-stratified stream) |
 | `launch_validation_370m.sh` | Train one recipe arm |
+| `mixlaw_runtime.py` | Pure recovery, dependency, and production contracts |
+| `preflight_validation_370m.py` | OLMES/dependency preflight + version metadata |
+| `platform_array_entrypoint.py` | Deterministic seven-arm Batch mapping and platform paths |
+| `platform_artifacts.py` | Fail-closed checkpoint/progress/task-loss S3 publication |
+| `ladder_base_config.yaml` | Checked-in OLMo2-370M OLMES base config |
 | `submit_mixlaw_validation_370m.sh` | Slurm array over all recipe arms |
 | `domain_stream.py` | Shared olmohq domain sampler (also used by skillit) |
 | `check_validation_pool.py` | Peak demand vs olmohq inventory |

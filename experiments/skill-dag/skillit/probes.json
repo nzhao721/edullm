@@ -4,6 +4,7 @@
   "seed": 42,
   "data_source": {
     "dataset_id": "pretrain/olmo-127b",
+    "version": "v1",
     "bucket": "edullm-data",
     "mode": "domain_stratified_stream",
     "reader": "edullm_data.read.dataset_paths"

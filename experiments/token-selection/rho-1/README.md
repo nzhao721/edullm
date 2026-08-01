@@ -16,11 +16,14 @@ Top-60% token selection by RHO-1 excess loss `L_curr − L_ref` on RegMix 10B.
 | Frozen reference | RefHQ 370M **step1315** |
 | `run_id` | `rho-1-regmix10b-v1` |
 | Train corpus | `pretrain/regmix-10b` via `s3://edullm-data/` (stage each job) |
-| S3 prefix | `s3://edullm-checkpoints/token-sel/rho-1/` |
+| Artifact durability | Runtime scratch + W&B |
 
 **Discarded:** `rho-excess-10b-scratch-v1` (~step200). Do not resume it. GPU retrain of the new `run_id` is still required.
 
-**Ephemeral scratch:** start empty; stage tokens from edullm-data; durable checkpoints/metrics/task_loss export to the S3 prefix above. Do not rely on FarmShare/laptop corpora, local venvs, or wiped save folders. `RESUME=1` hydrates from S3 when local is empty.
+**Ephemeral scratch:** start empty; stage tokens from edullm-data; keep run
+artifacts on scratch and upload them to W&B. Do not rely on FarmShare/laptop
+corpora, local venvs, or wiped save folders. For `RESUME=1` on empty scratch,
+set `WANDB_RESUME_ARTIFACT`.
 
 Shared package: [`../token_selection/`](../token_selection/).  
 Config: [`configs/run_rho_10b.yaml`](configs/run_rho_10b.yaml).

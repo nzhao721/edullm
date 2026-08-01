@@ -6,19 +6,19 @@ RefHQ-matched ``olmo2_370M`` stack (same as control / RefHQ):
   * ``TransformerConfig.olmo2_370M`` (full attn, no SWA)
   * ``TransformerTrainModule`` — HSDP bf16, SkipStepAdamW, CosWithWarmup,
     ``compile_model=True``, ``z_loss_multiplier=1e-5``
-  * fused LM-head CE when liger-kernel is available (no full logits)
+  * standard LM-head CE; fused CE stays off pending focused parity proof
   * sequence=2048, global_batch=4_194_304, rank_microbatch=65_536
   * train corpus: published ``pretrain/learnability-doc-top60`` from
     ``s3://edullm-data/`` (upsample to 9.9B / 2360 steps); fail-closed if missing
   * permanent checkpoints ``{0,125,…,2125,2360}`` (omit 2250); no ephemeral prune
   * immediate 20-label ``task_loss_bpb`` via shared ``task_loss_hook`` on each permanent save
   * single- or multi-GPU via ``torchrun`` + HSDP (world size from env)
-  * durable checkpoint/results export to ``s3://edullm-checkpoints/token-sel/learnability-doc/``
-    (upload-before-continue; ``S3_EXPORT=0`` only for intentional local smoke)
+  * checkpoints/results remain on runtime scratch and upload to W&B artifacts
+    (production online checkpoint uploads fail closed)
 
 Ephemeral empty-scratch: stage shards from ``edullm-data`` into ``--stage-dir`` for
 the job; do not assume pre-existing scratch corpora or local checkpoints.
-Resume only via explicit ``--load-path`` (stage that tree from durable storage first).
+Resume via ``--wandb-resume-artifact`` or explicit local ``--load-path``.
 Refuses legacy ``s3://edullm-datasets/`` paths.
 
 W&B: project ``token-selection``, group ``learnability-doc`` (SmolLM2-style soft-skip without API key).
@@ -48,9 +48,13 @@ from token_selection.olmo_ext.wandb_logging import (  # noqa: E402
     ensure_wandb_not_hard_disabled,
     finish_wandb,
     init_wandb_from_args,
+    is_production_run,
     namespace_path_config,
+    require_wandb_for_production,
+    wandb_log_directory_artifact,
     wandb_log_checkpoint,
     wandb_log_train,
+    wandb_mode_from_args,
     wandb_upload_existing,
     WandbEvalPoller,
 )
@@ -61,7 +65,6 @@ from token_selection.olmo_ext.checkpoint_ladder import (  # noqa: E402
     DEFAULT_CHECKPOINT_INTERVAL,
     permanent_checkpoint_steps,
 )
-from token_selection.olmo_ext.task_loss_hook import trigger_task_loss_eval  # noqa: E402
 
 import numpy as np
 import torch
@@ -669,7 +672,9 @@ def build_train_module(
     compile_model: bool,
     rank_microbatch_tokens: int,
 ) -> TransformerTrainModule:
-    fused = try_enable_fused_ce()
+    # Fused CE remains off until focused production-LM-head value/gradient
+    # parity is proven.
+    fused = False
     model_cfg = build_olmo2_config(fused_ce=fused)
     try:
         scheduler = CosWithWarmup(warmup_steps=lr_warmup_steps, alpha_f=alpha_f)
@@ -777,12 +782,8 @@ def save_checkpoint(
     args: argparse.Namespace,
     meta: dict,
 ) -> None:
-    """All ranks must call (HSDP gather); rank 0 writes + durable-exports.
-
-    When S3 export is enabled, export failure aborts every rank (no hang on barrier).
-    """
+    """All ranks gather; rank 0 materializes a complete local checkpoint."""
     train_module_sd = gather_train_module_state_dict(train_module)
-    export_ok = True
     if get_rank() == 0:
         path.mkdir(parents=True, exist_ok=True)
         state = {
@@ -810,38 +811,13 @@ def save_checkpoint(
             n_model,
             train_module_sd.get("optim") is not None,
         )
-        from token_selection.olmo_ext.s3_export import (
-            export_arm_checkpoint,
-            export_arm_task_loss_dir,
-            s3_export_enabled,
+        from token_selection.olmo_ext.permanent_checkpoint import (
+            copy_fingerprint_into_checkpoint,
         )
 
-        if not s3_export_enabled():
-            log.warning(
-                "S3 export disabled (S3_EXPORT=0 / SKIP_S3_UPLOAD=1); checkpoint is local-only "
-                "and will be lost when ephemeral scratch is wiped"
-            )
-        else:
-            export_ok = bool(export_arm_checkpoint(ARM, path))
-            tl = getattr(args, "task_loss_results_dir", None)
-            if export_ok and tl:
-                export_ok = bool(export_arm_task_loss_dir(ARM, tl))
-        wb_run = getattr(args, "_wandb_run", None)
-        if wb_run is not None:
-            tokens_seen = int(step) * int(GLOBAL_BATCH_TOKENS)
-            wandb_log_checkpoint(wb_run, path, step=int(step), tokens_seen=tokens_seen)
-
-    if is_distributed():
-        flag = torch.tensor([1 if export_ok else 0], device=torch.device("cuda"))
-        dist.broadcast(flag, src=0)
-        export_ok = bool(flag.item())
-    if not export_ok:
-        raise SystemExit(
-            f"Durable S3 export failed for checkpoint {path}. "
-            "Fix AWS credentials / aws CLI on the train host, then retry. "
-            "Set S3_EXPORT=0 only for intentional non-durable local smoke runs."
+        copy_fingerprint_into_checkpoint(
+            Path(args.save_folder) / "run_fingerprint.json", path
         )
-
 
 def _checkpoint_step(path: Path) -> int:
     return int(path.name.replace("step", "").split("-")[0])
@@ -862,16 +838,26 @@ def find_latest_checkpoint(save_folder: Path) -> Optional[Path]:
 
 
 def _maybe_task_loss(args: argparse.Namespace, ckpt_dir: Path, step: int) -> None:
-    """Fire shared 20-label task_loss_bpb hook after a permanent save (rank 0)."""
+    """Strict eval/export/marker completion after a permanent save (rank 0)."""
     if get_rank() != 0:
         return
-    results_dir = Path(args.task_loss_results_dir)
-    trigger_task_loss_eval(
-        ckpt_dir,
-        run_name=f"{args.name}-step{step}",
-        out_path=results_dir / f"step{step}_task_loss.json",
-        eval_script=args.task_loss_eval_script,
-        enabled=None if args.task_loss_on_save else False,
+    from token_selection.olmo_ext.permanent_checkpoint import (
+        finalize_permanent_checkpoint,
+    )
+
+    finalize_permanent_checkpoint(
+        arm=ARM,
+        checkpoint_dir=ckpt_dir,
+        step=step,
+        run_name=str(args.name),
+        task_loss_dir=args.task_loss_results_dir,
+        task_loss_enabled=bool(args.task_loss_on_save),
+        task_loss_eval_script=args.task_loss_eval_script,
+        progress_dir=args.progress_dir,
+        fingerprint_path=Path(args.save_folder) / "run_fingerprint.json",
+        wandb_run=getattr(args, "_wandb_run", None),
+        wandb_mode=wandb_mode_from_args(args),
+        production=bool(getattr(args, "_production", False)),
     )
 
 
@@ -1009,8 +995,8 @@ def parse_args() -> argparse.Namespace:
         "--load-path",
         type=str,
         default=None,
-        help="Explicit checkpoint dir to resume (stage from s3://edullm-checkpoints/ first on "
-        "ephemeral scratch). Local save_folder is never auto-resumed.",
+        help="Explicit local checkpoint dir to resume on ephemeral scratch. "
+        "Local save_folder is never auto-resumed.",
     )
     ap.add_argument(
         "--fresh",
@@ -1081,6 +1067,10 @@ def _run(args: argparse.Namespace) -> None:
     seqs_per_rank = GLOBAL_BATCH_TOKENS // (SEQ_LEN * world_size)
     tokens_per_step = GLOBAL_BATCH_TOKENS
     total_steps = int(args.length_tokens) // tokens_per_step
+    production = is_production_run(
+        max_tokens=int(args.length_tokens), total_steps=total_steps
+    )
+    args._production = production
     ladder = permanent_checkpoint_steps(total_steps, int(args.save_interval))
     ladder_set: Set[int] = set(ladder)
     lr = float(PEAK_LR)
@@ -1109,6 +1099,9 @@ def _run(args: argparse.Namespace) -> None:
             alert_title=f"token-selection {ARM} started",
         )
         args._wandb_run = wb_run
+        require_wandb_for_production(
+            wb_run, production=production, mode=wandb_mode_from_args(args)
+        )
         eval_poller = WandbEvalPoller(args.task_loss_results_dir, wb_run)
         if wb_run is not None and bool(getattr(args, "wandb_upload_existing", False)):
             wandb_upload_existing(
@@ -1133,7 +1126,7 @@ def _run(args: argparse.Namespace) -> None:
             "-learnability_late_minus_early_avg_nll; keep top 60% tokens"
         ),
         "train_stack": "TransformerTrainModule HSDP bf16 SkipStepAdamW compile",
-        "loss": "LM-head CE (fused_linear when liger available); no online token masking",
+        "loss": "standard LM-head CE (fused CE off); no online token masking",
         "length_tokens": int(args.length_tokens),
         "global_batch_tokens": GLOBAL_BATCH_TOKENS,
         "sequence_length": SEQ_LEN,
@@ -1156,7 +1149,7 @@ def _run(args: argparse.Namespace) -> None:
         "train_dataset_version": args.dataset_version,
         "train_data_bucket": DATA_BUCKET,
         "stage_dir": args.stage_dir,
-        "s3_export_prefix": f"token-sel/{ARM}",
+        "artifact_store": "wandb",
         "seed": args.seed,
         "task_loss_on_save": bool(args.task_loss_on_save),
         "task_loss_results_dir": args.task_loss_results_dir,
@@ -1168,6 +1161,43 @@ def _run(args: argparse.Namespace) -> None:
         f"s3://{DATA_BUCKET}/{data_prov.get('dataset_id', args.dataset_id)}/"
         f"{data_prov.get('version', args.dataset_version or 'latest')}/"
     )
+    run_identity = {
+        "arm": ARM,
+        "run_id": args.name,
+        "method": "offline_learnability_doc_ce",
+        "seed": int(args.seed),
+        "dataset_id": str(data_prov.get("dataset_id") or args.dataset_id),
+        "dataset_version": str(
+            data_prov.get("version") or args.dataset_version or "local-paths"
+        ),
+        "model": "olmo2_370M",
+        "sequence_length": SEQ_LEN,
+        "global_batch_tokens": GLOBAL_BATCH_TOKENS,
+        "max_tokens": int(args.length_tokens),
+        "total_steps": total_steps,
+        "keep_fraction": 0.6,
+        "selection": "top-60%-documents-by-early-minus-late-refhq-loss",
+        "lr": lr,
+        "lr_warmup_steps": int(args.lr_warmup_steps),
+        "lr_alpha_f": float(args.lr_alpha_f),
+        "fused_ce": False,
+        "task_loss_definition": "olmo-ladder-20-label-macro-bpb",
+    }
+    if args.wandb_resume_artifact:
+        if rank == 0:
+            from token_selection.olmo_ext.wandb_logging import restore_checkpoint_artifact
+
+            restore_checkpoint_artifact(args.wandb_resume_artifact, save_folder)
+        if is_distributed():
+            dist.barrier()
+        restored = find_latest_checkpoint(save_folder)
+        if restored is None:
+            raise SystemExit("W&B checkpoint restore completed without a local step directory")
+        args.load_path = str(restored)
+    if rank == 0 and not args.load_path:
+        from token_selection.olmo_ext.permanent_checkpoint import write_run_fingerprint
+
+        write_run_fingerprint(save_folder, run_identity)
 
     if rank == 0:
         (progress_dir / "run_meta.json").write_text(json.dumps(meta, indent=2) + "\n")
@@ -1193,7 +1223,7 @@ def _run(args: argparse.Namespace) -> None:
                     f"permanent_ladder={ladder}",
                     f"train={meta['train_dataset']}",
                     f"data_source={data_prov.get('source')}",
-                    f"s3_export=s3://edullm-checkpoints/token-sel/{ARM}/",
+                    "artifact_store=wandb (production online uploads fail closed)",
                     "",
                 ]
             )
@@ -1240,6 +1270,14 @@ def _run(args: argparse.Namespace) -> None:
     if args.load_path:
         if args.fresh and rank == 0:
             log.warning("--fresh ignored because --load-path=%s was set", args.load_path)
+        from token_selection.olmo_ext.permanent_checkpoint import (
+            assert_resume_fingerprint,
+            write_run_fingerprint,
+        )
+
+        assert_resume_fingerprint(Path(args.load_path), run_identity)
+        if rank == 0:
+            write_run_fingerprint(save_folder, run_identity)
         start_step = load_checkpoint(Path(args.load_path), train_module)
     elif args.fresh:
         if rank == 0:
@@ -1251,7 +1289,7 @@ def _run(args: argparse.Namespace) -> None:
             raise SystemExit(
                 f"Found local checkpoint {leftover} under --save-folder, but ephemeral "
                 "runs do not auto-resume or clobber scratch trees (scratch may be wiped). "
-                f"Pass --load-path {leftover} after confirming it was staged from durable S3, "
+                f"Pass --load-path {leftover} to resume that explicit local checkpoint, "
                 "or --fresh to start over."
             )
         if rank == 0:
@@ -1267,8 +1305,7 @@ def _run(args: argparse.Namespace) -> None:
             dist.barrier()
         ckpt_dir = save_folder / f"step{step}"
         save_checkpoint(ckpt_dir, step, train_module, args, meta)
-        if args.task_loss_on_save:
-            _maybe_task_loss(args, ckpt_dir, step)
+        _maybe_task_loss(args, ckpt_dir, step)
         if rank == 0 and eval_poller is not None:
             eval_poller.poll()
         if is_distributed():
@@ -1364,30 +1401,25 @@ def _run(args: argparse.Namespace) -> None:
         if eval_poller is not None:
             eval_poller.poll()
         log.info("Training complete at step=%d world_size=%d", total_steps, world_size)
-        from token_selection.olmo_ext.s3_export import (
-            export_arm_task_loss_dir,
-            s3_export_enabled,
-            sync_to_s3,
-        )
-        from token_selection.olmo_ext.s3_layout import arm_uri
+        from token_selection.olmo_ext.wandb_logging import production_online
 
-        if not s3_export_enabled():
-            log.warning(
-                "S3_EXPORT disabled at end of run; local save_folder/progress are not durable"
-            )
-        else:
-            ckpt_ok = sync_to_s3(save_folder, arm_uri(ARM, "checkpoints"))
-            prog_ok = sync_to_s3(progress_dir, arm_uri(ARM, "progress"))
-            tl_ok = True
-            if args.task_loss_results_dir:
-                tl_ok = export_arm_task_loss_dir(ARM, args.task_loss_results_dir)
-            if not (ckpt_ok and prog_ok and tl_ok):
-                raise SystemExit(
-                    "Final durable S3 export failed (checkpoints/progress/task_loss). "
-                    "Local artifacts may be wiped with ephemeral scratch. "
-                    "Fix AWS credentials / aws CLI, or set S3_EXPORT=0 for local-only smoke."
-                )
-            log.info("Final durable export → %s", arm_uri(ARM))
+        strict = production_online(
+            production=production, mode=wandb_mode_from_args(args)
+        )
+        wandb_log_directory_artifact(
+            wb_run,
+            progress_dir,
+            name=f"{args.name}-progress",
+            artifact_type="metrics",
+            strict=strict,
+        )
+        wandb_log_directory_artifact(
+            wb_run,
+            args.task_loss_results_dir,
+            name=f"{args.name}-task-loss",
+            artifact_type="eval",
+            strict=strict,
+        )
         finish_wandb(wb_run)
 
 

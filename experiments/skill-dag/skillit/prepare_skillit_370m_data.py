@@ -2,11 +2,12 @@
 """Prepare Skill-It 370M working pool + per-arm recipe sidecars from edullm-data.
 
 Fetches published+validated domain shards via ``edullm_data.read.dataset_paths`` /
-``resolve_latest`` (default ``pretrain/olmo-original-30b``), stages them under
+``resolve_latest`` (pinned to ``pretrain/olmo-127b/v1``), stages them under
 ``--pool-dir`` on a clean machine, and writes per-arm weight sidecars::
 
     <pool-dir>/tokens/<domain>/train-*.u32le.bin
-    <pool-dir>/_EDULLM_DATA_SOURCE.json
+    <pool-dir>/edullm_data_source.json
+    <pool-dir>/_EDULLM_DATA_SOURCE.json  # compatibility alias
     <work>/<arm_id>/arm_weights.json
     <work>/skillit_arms.json
 
@@ -30,8 +31,10 @@ if str(_MIXLAW) not in sys.path:
 from mixlaw_common import DOMAINS  # noqa: E402
 
 DEFAULT_RECIPE = _SKILLIT / "skillit_train_recipe.json"
-DEFAULT_DATASET_ID = "pretrain/olmo-original-30b"
-SOURCE_MARKER = "_EDULLM_DATA_SOURCE.json"
+DEFAULT_DATASET_ID = "pretrain/olmo-127b"
+DEFAULT_DATASET_VERSION = "v1"
+SOURCE_MARKER = "edullm_data_source.json"
+SOURCE_MARKER_ALIASES = (SOURCE_MARKER, "_EDULLM_DATA_SOURCE.json")
 _S3_URI_RE = re.compile(r"^s3://([^/]+)/(.+)$")
 
 
@@ -63,6 +66,78 @@ def _dtype_nbytes(dtype: str | None) -> int:
     if d in ("uint64", "int64", "<u8", "u8"):
         return 8
     return 4
+
+
+def load_pool_source(pool_dir: Path) -> tuple[dict[str, Any], Path]:
+    """Load either SkillIt/mixlaw provenance marker convention."""
+    found: list[tuple[dict[str, Any], Path]] = []
+    for name in SOURCE_MARKER_ALIASES:
+        path = pool_dir / name
+        if not path.is_file():
+            continue
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            raise SystemExit(f"invalid pool provenance JSON: {path}") from exc
+        if not isinstance(payload, dict):
+            raise SystemExit(f"pool provenance must be an object: {path}")
+        found.append((payload, path))
+    if not found:
+        expected = " or ".join(str(pool_dir / name) for name in SOURCE_MARKER_ALIASES)
+        raise SystemExit(f"missing pool provenance marker: {expected}")
+    first, first_path = found[0]
+    first_identity = (
+        first.get("dataset_id"),
+        first.get("version") or first.get("dataset_version"),
+    )
+    for payload, path in found[1:]:
+        identity = (
+            payload.get("dataset_id"),
+            payload.get("version") or payload.get("dataset_version"),
+        )
+        if identity != first_identity:
+            raise SystemExit(
+                "conflicting pool provenance markers: "
+                f"{first_path}={first_identity!r}, {path}={identity!r}"
+            )
+    return first, first_path
+
+
+def validate_pool_source(
+    pool_dir: Path,
+    *,
+    dataset_id: str = DEFAULT_DATASET_ID,
+    version: str = DEFAULT_DATASET_VERSION,
+    require_370m_layout: bool = False,
+) -> dict[str, Any]:
+    """Fail closed unless a staged pool has the pinned published identity."""
+    source, marker = load_pool_source(pool_dir)
+    got = (
+        source.get("dataset_id"),
+        source.get("version") or source.get("dataset_version"),
+    )
+    expected = (dataset_id, version)
+    if got != expected:
+        raise SystemExit(
+            f"{marker}: staged pool source {got!r} does not match pinned "
+            f"edullm-data source {expected!r}"
+        )
+    if (source.get("data_bucket") or source.get("bucket")) != "edullm-data":
+        raise SystemExit(f"{marker}: pool is not sourced from s3://edullm-data/")
+    if require_370m_layout:
+        missing = [
+            domain
+            for domain in DOMAINS
+            if not any((pool_dir / "tokens" / domain).glob("train-*.u32le.bin"))
+        ]
+        if missing:
+            raise SystemExit(
+                f"{marker}: pool lacks 370M tokens/<domain>/train-*.u32le.bin "
+                f"for {missing}"
+            )
+    source = dict(source)
+    source["version"] = got[1]
+    return source
 
 
 def resolve_dataset(
@@ -170,20 +245,21 @@ def stage_working_pool(
     pool_dir.mkdir(parents=True, exist_ok=True)
     marker_path = pool_dir / SOURCE_MARKER
     ver, s3 = resolve_dataset(dataset_id, version)
+    if dataset_id != DEFAULT_DATASET_ID or ver != DEFAULT_DATASET_VERSION:
+        raise SystemExit(
+            "SkillIt 370M source is pinned to "
+            f"{DEFAULT_DATASET_ID}/{DEFAULT_DATASET_VERSION}; got {dataset_id}/{ver}"
+        )
 
-    if skip_if_complete and marker_path.is_file():
-        try:
-            prev = json.loads(marker_path.read_text(encoding="utf-8"))
-        except json.JSONDecodeError:
-            prev = {}
-        if (
-            prev.get("dataset_id") == dataset_id
-            and prev.get("version") == ver
-            and all((pool_dir / "tokens" / d).is_dir() for d in DOMAINS)
-            and all(any((pool_dir / "tokens" / d).glob("train-*.u32le.bin")) for d in DOMAINS)
-        ):
-            print(f"pool already staged: {marker_path}")
-            return prev
+    if skip_if_complete and any((pool_dir / name).is_file() for name in SOURCE_MARKER_ALIASES):
+        prev = validate_pool_source(
+            pool_dir,
+            dataset_id=dataset_id,
+            version=ver,
+            require_370m_layout=True,
+        )
+        print(f"pool already staged: {marker_path}")
+        return prev
 
     import boto3
 
@@ -223,7 +299,9 @@ def stage_working_pool(
         "domain_meta": domains_meta,
         "reader": "edullm_data.read.dataset_paths + resolve_latest",
     }
-    marker_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    marker_text = json.dumps(payload, indent=2) + "\n"
+    for name in SOURCE_MARKER_ALIASES:
+        (pool_dir / name).write_text(marker_text, encoding="utf-8")
     print(f"wrote {marker_path}")
     return payload
 
@@ -272,7 +350,7 @@ def main() -> int:
         default=DEFAULT_RECIPE,
         help="skillit_train_recipe.json (domain-weight source of truth)",
     )
-    ap.add_argument("--work", type=Path, required=True, help="Output directory for arm sidecars")
+    ap.add_argument("--work", type=Path, default=None, help="Output directory for arm sidecars")
     ap.add_argument(
         "--pool-dir",
         type=Path,
@@ -288,8 +366,8 @@ def main() -> int:
     ap.add_argument(
         "--dataset-version",
         type=str,
-        default=None,
-        help="Pin version (default: resolve_latest)",
+        default=DEFAULT_DATASET_VERSION,
+        help=f"Pinned version (required contract: {DEFAULT_DATASET_VERSION})",
     )
     ap.add_argument(
         "--max-tokens-per-domain",
@@ -308,6 +386,17 @@ def main() -> int:
         default=None,
         help="Optional subset of arm_id values (default: all recipe arms)",
     )
+    ap.add_argument(
+        "--validate-pool-only",
+        action="store_true",
+        help="Validate pinned pool provenance/layout and exit without staging",
+    )
+    ap.add_argument(
+        "--pool-layout",
+        choices=("370m", "probe"),
+        default="370m",
+        help="Expected local payload layout when validating an existing pool",
+    )
     args = ap.parse_args()
 
     recipe = json.loads(args.recipe.read_text(encoding="utf-8"))
@@ -317,18 +406,37 @@ def main() -> int:
         or data_src.get("dataset_id")
         or DEFAULT_DATASET_ID
     )
-    version = args.dataset_version or data_src.get("version")
+    version = args.dataset_version or data_src.get("version") or DEFAULT_DATASET_VERSION
+    if dataset_id != DEFAULT_DATASET_ID or version != DEFAULT_DATASET_VERSION:
+        raise SystemExit(
+            "SkillIt source is pinned to "
+            f"{DEFAULT_DATASET_ID}/{DEFAULT_DATASET_VERSION}; got {dataset_id}/{version}"
+        )
+    if args.validate_pool_only:
+        source = validate_pool_source(
+            args.pool_dir,
+            dataset_id=dataset_id,
+            version=version,
+            require_370m_layout=args.pool_layout == "370m",
+        )
+        print(
+            f"validated pool source {source['dataset_id']}/{source['version']} "
+            f"at {args.pool_dir}"
+        )
+        return 0
+    if args.work is None:
+        raise SystemExit("--work is required unless --validate-pool-only is used")
     max_tok = args.max_tokens_per_domain
     if max_tok is None and recipe.get("budget_tokens") is not None:
         max_tok = int(recipe["budget_tokens"])
 
     if args.skip_stage:
-        marker = args.pool_dir / SOURCE_MARKER
-        if not marker.is_file():
-            raise SystemExit(
-                f"--skip-stage requires {marker} from a prior edullm-data stage"
-            )
-        source = json.loads(marker.read_text(encoding="utf-8"))
+        source = validate_pool_source(
+            args.pool_dir,
+            dataset_id=dataset_id,
+            version=version,
+            require_370m_layout=True,
+        )
     else:
         source = stage_working_pool(
             pool_dir=args.pool_dir,

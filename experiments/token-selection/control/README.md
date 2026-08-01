@@ -27,15 +27,15 @@ positions; the rest are masked out of the CE loss.
 
 Do **not** reuse or append to the old `edullm-370M-ce-regmix10b` or `control-regmix10b-v1` prefixes.
 
-## Ephemeral scratch + durable S3
+## Ephemeral scratch + durable W&B
 
 Designed for a clean machine whose scratch starts empty and is wiped after the job:
 
 - **Train data:** published+validated `pretrain/regmix-10b` on `s3://edullm-data/` via `edullm_data.read` (never `s3://edullm-datasets/`).
 - **Stage OK:** `--stage-dir` / `STAGE_DIR` fetches `.u32le.bin` shards for the job.
-- **Local saves are not durable:** checkpoints/progress under `SAVE_FOLDER` / `PROGRESS_DIR` are job-local.
-- **Durable destination:** `s3://edullm-checkpoints/token-sel/control/` — fail-closed per-save sync + upload-before-end (`S3_EXPORT=0` / `SKIP_S3_UPLOAD=1` disables for local smoke only).
-- **Resume:** stage a checkpoint from S3 into `--load-path` / `LOAD_PATH`. Local auto-resume is off unless `ALLOW_LOCAL_RESUME=1` (same-job only).
+- Checkpoints/progress remain under runtime-scratch `SAVE_FOLDER` / `PROGRESS_DIR`.
+- Each permanent step is synchronously evaluated, uploaded to W&B with its schema-v2 fingerprint, then recorded in local `last_durable_step.json`. Production online uploads fail closed.
+- Resume with `--wandb-resume-artifact` / `WANDB_RESUME_ARTIFACT`, or an explicit local `--load-path`.
 
 ## Data
 

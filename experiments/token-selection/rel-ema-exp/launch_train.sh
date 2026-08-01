@@ -7,10 +7,10 @@
 #   - Set RUN_DIR (or WORK) to a job scratch dir; do not assume prior contents.
 #   - Stage train shards: YAML data.dataset_id → edullm_data.read → s3://edullm-data/
 #   - Never uses s3://edullm-datasets/. Do not assume laptop/FarmShare corpora or venvs.
-#   - Durable saves → s3://edullm-checkpoints/token-sel/rel-ema-exp/ (spine export).
-#   - --resume hydrates empty save_folder from that S3 prefix; S3_EXPORT=0 is local smoke only.
+#   - Artifacts remain on scratch and upload to W&B.
+#   - --resume restores WANDB_RESUME_ARTIFACT when save_folder is empty.
 #
-# W&B (SmolLM2 protocol; additive to S3): project token-selection. Push
+# W&B project token-selection is the artifact store. Push
 # wandb-session.env via scripts/farmshare/push_wandb_session_to_farmshare.sh
 # "$RUN_DIR" (or set WANDB_SESSION_ENV). Local smoke: WANDB_MODE=disabled.
 #
@@ -85,6 +85,8 @@ NUM_GPUS="$(discover_num_gpus)"
 if [[ -z "$NUM_GPUS" || "$NUM_GPUS" -lt 1 ]]; then
   NUM_GPUS=1
 fi
+export TASK_LOSS_STRICT=1
+export TASK_LOSS_NPROC="${TASK_LOSS_NPROC:-${NUM_GPUS}}"
 
 mkdir -p "$WORK/logs" "$WORK/progress" "$WORK/task_loss_results/rel-ema-exp"
 export PYTHONPATH="${TS_ROOT}${PYTHONPATH:+:$PYTHONPATH}"
@@ -197,7 +199,10 @@ train() {
   local resume_flag=()
   if [[ " ${EXTRA_ARGS[*]} " == *" --resume "* ]]; then
     resume_flag=(--resume)
-    log "resume: spine fetches durable ckpts from s3://edullm-checkpoints/token-sel/rel-ema-exp/ if needed"
+    log "resume: spine restores the run's W&B checkpoint artifact if needed"
+  fi
+  if [[ -n "${WANDB_RESUME_ARTIFACT:-}" ]]; then
+    resume_flag+=(--wandb-resume-artifact "$WANDB_RESUME_ARTIFACT")
   fi
   # Fail closed: this arm must stay zero-init EMA + exp α (not RefHQ-seeded).
   python - <<'PY' "$RUNTIME_CFG"

@@ -20,7 +20,7 @@ with dual frozen RefHQ refs; the doc arm filters offline then trains plain CE.
 | Permanent ckpts | `{0, 125, …, 2125, 2360}` — **omit 2250** |
 | Eval | full 20-label `task_loss_bpb` on every permanent save |
 | run_id | `learnability-token-10b-scratch-v1` |
-| S3 export | `s3://edullm-checkpoints/token-sel/learnability-token/` |
+| Artifact durability | Runtime scratch + W&B |
 
 Config: [`configs/run_learnability_10b.yaml`](configs/run_learnability_10b.yaml).
 
@@ -80,8 +80,9 @@ NPROC=1 bash experiments/token-selection/learnability-token/launch.sh
 export CUDA_VISIBLE_DEVICES=0,1
 NPROC=2 bash experiments/token-selection/learnability-token/launch.sh
 
-# Resume (fetches durable ckpts from edullm-checkpoints when local save is empty)
-RESUME=1 NPROC=2 bash experiments/token-selection/learnability-token/launch.sh
+# Resume from W&B when local save is empty
+RESUME=1 WANDB_RESUME_ARTIFACT=entity/project/run-checkpoint:latest \
+  NPROC=2 bash experiments/token-selection/learnability-token/launch.sh
 ```
 
 Equivalent direct torchrun:
@@ -95,6 +96,6 @@ CUDA_VISIBLE_DEVICES=0,1 python -m torch.distributed.run --standalone --nproc_pe
 
 Task-loss outputs: `task_loss_results/learnability-token/step{N}_task_loss.json`
 (or disable with `TASK_LOSS_EVAL=0`). Durable checkpoints live under
-`s3://edullm-checkpoints/token-sel/learnability-token/` — do not rely on scratch.
+W&B checkpoint artifacts — do not rely on scratch surviving across jobs.
 
 Do **not** submit AWS training from this arm without an explicit authorized workload.

@@ -7,9 +7,8 @@ Late: mean of RefHQ step1000 / step1125 / step1315 parameter tensors.
 Reuses ``reference/export_refhq_reference.py`` for DistCP download + unshard,
 then averages the late exports with ``average_reference_state_dicts``.
 
-Does not start training. Safe to run on CPU. Does not mutate AWS state beyond
-whatever the caller already authorized for ``aws s3 sync`` (same as the RHO
-export helper). Prefer running where the RefHQ DistCP shards are already local
+Does not start training. Safe to run on CPU. S3 access is read-only bootstrap
+input download. Prefer running where the RefHQ DistCP shards are already local
 (``--skip-download``) when possible.
 """
 from __future__ import annotations

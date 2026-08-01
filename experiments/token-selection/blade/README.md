@@ -16,7 +16,7 @@ the shared RefHQ-matched OLMo-2 370M contract.
 | Train | `pretrain/regmix-10b` (`s3://edullm-data/`, `resolve_latest`) |
 | Val / HQ (K updates) | `pretrain/refhq-regmix-5p5b` (`s3://edullm-data/`, `resolve_latest`) |
 | Run id (example) | `blade-regmix10b-v2` |
-| Durable export | `s3://edullm-checkpoints/token-sel/blade/` (**fail-closed**; `S3_EXPORT=0` = local smoke only) |
+| Artifact durability | Runtime scratch + W&B (**fail-closed for production online checkpoint uploads**) |
 
 ## Ephemeral-machine contract
 
@@ -24,16 +24,16 @@ Scratch starts empty and is wiped after the job:
 
 1. Stage corpora each run from `s3://edullm-data` via `prepare_blade_data.py` (`BLADE_WORK`).
 2. Write checkpoints / progress / task_loss JSON under job-scoped scratch paths.
-3. Permanent saves **fail-closed** on S3 export failure (all ranks exit). `S3_EXPORT=0` is only for intentional non-durable local smoke.
+3. Permanent saves upload to W&B; production online checkpoint uploads fail closed.
 4. Never use legacy dataset buckets or pre-staged FarmShare/laptop corpora.
-5. Cross-job resume: `--fetch-checkpoints-from-s3` (optional `--load-path …/stepN`) pulls from the arm S3 prefix into scratch before load.
+5. Cross-job resume: `--wandb-resume-artifact entity/project/name:alias` restores into scratch before load.
 
 ## Files
 
 | File | Role |
 |------|------|
 | [`prepare_blade_data.py`](prepare_blade_data.py) | Resolve + stage edullm-data shards → local path lists |
-| [`train_blade_olmo_370m.py`](train_blade_olmo_370m.py) | Trainer (1..N GPU via `torchrun`) |
+| [`train_blade_olmo_370m.py`](train_blade_olmo_370m.py) | Trainer (1..N GPU via `torchrun`); permanent steps complete checkpoint → synchronous 20-label eval → strict export → durable marker |
 | [`launch_train.sh`](launch_train.sh) | Thin `torchrun` wrapper (`NPROC_PER_NODE`, requires `BLADE_WORK` or path lists) |
 
 ## Sync / checkpoint / resume design
@@ -75,7 +75,7 @@ reference the original run would have used next.
 
 On every permanent save, rank 0 may spawn async `task_loss_bpb` eval against **proxy**
 weights via `token_selection.olmo_ext.task_loss_hook`. Results land under
-`<progress-dir>/task_loss_results/` (job-scoped) and sync to S3 with progress.
+`<progress-dir>/task_loss_results/` (job-scoped) and upload to W&B with progress.
 Set `TASK_LOSS_EVAL_SCRIPT` if the eval entrypoint is not on the machine; disable with
 `--no-task-loss-eval` or `TASK_LOSS_EVAL=0` (missing script skips eval without failing train).
 
@@ -129,14 +129,14 @@ Cross-job resume on wiped scratch:
 
 ```bash
 BLADE_WORK=/scratch/$USER/blade-work \
-FETCH_CHECKPOINTS_FROM_S3=1 \
+WANDB_RESUME_ARTIFACT=<entity/project/blade-regmix10b-v2-checkpoint:step-0001250> \
 LOAD_PATH=/scratch/$USER/ckpts/blade-regmix10b-v2/step1250 \
 bash experiments/token-selection/blade/launch_train.sh \
   --name blade-regmix10b-v2 \
   --save-folder /scratch/$USER/ckpts/blade-regmix10b-v2 \
   --progress-dir /scratch/$USER/runs/blade-regmix10b-v2
-# omit --fresh; FETCH pulls step1250 (or all step* if LOAD_PATH unset) from
-# s3://edullm-checkpoints/token-sel/blade/checkpoints/
+# omit --fresh and set WANDB_RESUME_ARTIFACT to restore a checkpoint
 ```
 
-Does **not** submit AWS jobs. Staging + fail-closed S3 export need credentials / `aws` CLI on the train host.
+Does **not** submit AWS jobs. S3 credentials are needed only for input staging;
+run artifacts stay on scratch and are uploaded to W&B.

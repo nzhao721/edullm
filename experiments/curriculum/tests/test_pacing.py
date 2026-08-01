@@ -13,10 +13,13 @@ if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
 from curriculum_pacing import (
+    CURRICULUM_DATASET_ID,
+    CURRICULUM_ORDER_GROUP_FOR_METRIC,
     N_BUCKETS,
     SEGMENT_BOUNDARIES,
     TOTAL_STEPS,
     CurriculumChunkStream,
+    curriculum_order_group,
     expanding_eligible_fraction,
     interleave_subbucket_durations,
     interleave_subbucket_index,
@@ -25,6 +28,22 @@ from curriculum_pacing import (
     segment_range,
     split_equal_mass,
 )
+
+
+def test_curriculum_dataset_id_and_groups():
+    assert CURRICULUM_DATASET_ID == "curriculum/regmix-370m"
+    assert set(CURRICULUM_ORDER_GROUP_FOR_METRIC.values()) == {
+        "compression",
+        "flesch",
+        "mtld",
+        "learnability",
+    }
+    assert curriculum_order_group("compression_ratio") == "compression"
+    assert curriculum_order_group("flesch") == "flesch"
+    assert curriculum_order_group("mtld") == "mtld"
+    assert curriculum_order_group("learnability") == "learnability"
+    with pytest.raises(ValueError, match="unknown difficulty metric"):
+        curriculum_order_group("not_a_metric")
 
 
 def test_segment_boundaries_align_to_checkpoints():

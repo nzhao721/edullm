@@ -3,13 +3,8 @@
 
 Thin CLI over ``token_selection.olmo_ext.refhq_materialize.export_distcp_to_pt``.
 
-Default source is the durable reference-arm layout written by
-``train_olmo3_370m_refhq.py`` / ``launch_train.sh``::
-
-  s3://edullm-checkpoints/token-sel/reference/checkpoints/refhq-regmix-5p5b-v1/step1313/
-
 Prefer letting ``--launch`` auto-materialize from YAML ``reference.s3_uri``; use
-this script for a one-shot offline export.
+this script for a one-shot bootstrap-input conversion.
 
 Does not start training. Safe to run on CPU.
 """
@@ -24,21 +19,15 @@ _TS_ROOT = Path(__file__).resolve().parents[1]
 if str(_TS_ROOT) not in sys.path:
     sys.path.insert(0, str(_TS_ROOT))
 
-from token_selection.olmo_ext.refhq_materialize import (  # noqa: E402
-    DEFAULT_REFERENCE_ARM_FINAL,
-    export_distcp_to_pt,
-)
+from token_selection.olmo_ext.refhq_materialize import export_distcp_to_pt  # noqa: E402
 
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument(
         "--s3-uri",
-        default=DEFAULT_REFERENCE_ARM_FINAL,
-        help=(
-            "Checkpoint directory containing model_and_optim/ "
-            f"(default: {DEFAULT_REFERENCE_ARM_FINAL})"
-        ),
+        required=True,
+        help="Bootstrap checkpoint directory containing model_and_optim/",
     )
     ap.add_argument(
         "--work-dir",

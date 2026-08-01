@@ -20,8 +20,8 @@ todos:
   - id: train-370m
     content: "train_skillit_370m.py + launch_arm.sh: OLMo2-370M 10B curriculum contract; updates at 500/875/1250/1625/2000; two A_MODE arms"
     status: completed
-  - id: docs-s3
-    content: "README: architectures, schedules, local paths, S3 prefixes for probes/A/arms; platform-agnostic launch notes"
+  - id: docs-artifacts
+    content: "README: architectures, schedules, scratch paths, W&B artifact policy; platform-agnostic launch notes"
     status: completed
 isProject: false
 ---
@@ -38,7 +38,7 @@ isProject: false
 - **Skill-It:** eta=0.2, w=1; start at RegMix weights; updates at steps **500, 875, 1250, 1625, 2000**
 - **Full runs:** OLMo2-370M, 10B tokens, curriculum-matching hparams; stream from **published edullm-data** with time-varying domain weights
 - **Platform:** no AWS/FarmShare/GPU SKU hardcoding; `NPROC=1` → python, `NPROC>1` → `torchrun`
-- **Ephemeral scratch:** empty run dirs OK; stage pools from `edullm-data`; require `TRAIN_VENV` (prebuilt GPU env / image with torch + olmo-core); durable saves → `s3://edullm-checkpoints/skillit/`
+- **Ephemeral scratch:** empty run dirs OK; stage pools from `edullm-data`; require `TRAIN_VENV` (prebuilt GPU env / image with torch + olmo-core); checkpoints/progress/evals remain on scratch and upload to W&B
 
 ## Mixing-law derivative (Skill-It-compatible)
 
@@ -84,7 +84,7 @@ New code under `[experiments/skill-dag/skillit/](experiments/skill-dag/skillit/)
 - `skillit/train_skillit_370m.py` — OLMo2-370M trainer (fork of curriculum control path)
 - `skillit/launch_probe.sh` — Platform-agnostic probe launcher
 - `skillit/launch_arm.sh` — Platform-agnostic 370M arm launcher
-- `skillit/README.md` — Contract, schedules, S3 layout
+- `skillit/README.md` — Contract, schedules, artifact policy
 
 Reuse from sibling `[experiments/skill-dag/mixlaw/](experiments/skill-dag/mixlaw/)` (import or subprocess; do not duplicate):
 
@@ -126,10 +126,10 @@ No uniform 1/7 probe: offline **A** compares each one-hot domain to **RegMix** v
 
 ### Data
 
-- Source: published `s3://edullm-data/pretrain/olmo-127b` (via `edullm_data.read`; never `edullm-datasets`)
+- Source: published `s3://edullm-data/pretrain/olmo-127b/v1` (via `edullm_data.read`; never `edullm-datasets`)
 - Recipe sidecars: `prepare_skillit_probe_data.py` → `<work>/<probe_id>/mix_weights.json`
 - Train: `POOL_DIR` (must include `edullm_data_source.json`) + `MIX_WEIGHTS_JSON` via `launch_probe.sh`
-- Progress/logs: `s3://edullm-checkpoints/skillit/probes/<probe_id>/` (optional sync via `RESULTS_S3`)
+- Checkpoints/progress/evals: runtime scratch, uploaded synchronously to the probe's W&B run
 - GPU env: set `TRAIN_VENV` explicitly — no hardcoded ladder scratch venv
 
 ### Evals (exact mixlaw pilot match)
@@ -178,7 +178,7 @@ flowchart LR
 3. `skillit/build_adjacency.py`:
   - `A_ij = max(0, L_j(r_RegMix) - L_j(i))` for domains i, families j
   - Write `skillit/artifacts/A_offline.npy` (shape 7x6), `adjacency.json` (named rows/cols + reference losses)
-4. Publish: `s3://edullm-checkpoints/skillit/artifacts/A_offline.json` (+ npy)
+4. Preserve the generated JSON/NPY on runtime scratch and upload it to W&B with the probe-analysis run.
 
 ### Measured A matrices (7 one-hot probes, Chinchilla step 5806)
 
@@ -230,17 +230,18 @@ From `[train_curriculum_regmix_370m.py](experiments/curriculum/train_curriculum_
 - Optim: SkipStepAdamW, LR **4e-4**, warmup **24**, `alpha_f=1.0` (constant after warmup)
 - Seed: **42**
 - Checkpoints: every **125** steps + 0 + 2384; omit 2375
-- Task loss: **all 20** ladder bpb labels at every permanent checkpoint
+- Task loss: **all 20** ladder bpb labels at every permanent checkpoint, synchronously on every rank via pause/free/eval/reload. Production is fail-closed.
 
 ### Domain sampling (edullm-data recipe + live reweight)
 
 Do **not** use fixed RegMix-10B concat shuffle (weights baked into corpus sizes).
 
-- **Recipe:** `skillit_train_recipe.json` — RegMix initial weights, two arms (`skillit-probe`, `skillit-deriv`), `data_source.dataset_id=pretrain/olmo-original-30b`.
+- **Recipe:** `skillit_train_recipe.json` — RegMix initial weights, two arms (`skillit-probe`, `skillit-deriv`), pinned source `pretrain/olmo-127b/v1` (the same published source family as the MixLaw reference).
+- **Provenance:** staged pools and arm/probe sidecars must record exactly `pretrain/olmo-127b/v1`. Both `edullm_data_source.json` and the older `_EDULLM_DATA_SOURCE.json` marker name are accepted only when their identities agree.
 - **Pool:** stage once via `submit_skillit_train_pool.sh` or let `submit_skillit_370m.sh` submit a CPU stage job into `${RUN_DIR}/pool` from edullm-data. No assumed persistent scratch pool.
 - **Env:** set `TRAIN_VENV` to a prebuilt GPU Python with torch + olmo-core (this repo does not bake a CUDA install into the submit script).
 - **Stream:** `DomainMixtureStream` over the pool; at each step draw domain ~ `p_t`, then a random 2048-token chunk. Mid-run Skill-It updates call `set_weights(p)` — no new corpora.
-- **Artifacts:** `s3://edullm-checkpoints/skillit/<arm_id>/` (live sync when `S3_EXPORT` enabled)
+- **Artifacts:** runtime scratch plus the arm's W&B run; SkillIt does not write checkpoints, progress, evals, or analysis artifacts to S3
 
 ### Arms (only A differs)
 
@@ -280,7 +281,7 @@ eta = 0.2
     - `progress/skillit_updates/step{N}_A.json` — full A with named rows/cols
     - `progress/skillit_updates/step{N}_weights.json` — `p_before`, `p_after`, losses
   - At step 0 (train start), write the initial RegMix `p` once to the same JSONL / `step0_weights.json` (A may be the offline matrix or the derivative at RegMix `r`, recorded for baseline comparison even though no weight change occurs yet)
-2. Sync `progress/skillit_updates.jsonl` and `progress/skillit_updates/` with other arm artifacts to `s3://edullm-checkpoints/skillit/<arm_id>/` when live S3 upload is enabled (see **S3 export** below)
+2. Upload `progress/skillit_updates.jsonl` and `progress/skillit_updates/` with the other arm artifacts to W&B; the local copies remain on runtime scratch.
 
 ### Trainer hook
 
@@ -292,18 +293,22 @@ eta = 0.2
 # 1. Optional: stage pool alone (or skip — submit_skillit_370m.sh can stage)
 bash experiments/skill-dag/skillit/submit_skillit_train_pool.sh
 
-# 2. Train both arms (requires TRAIN_VENV with torch + olmo-core)
-TRAIN_VENV=/path/to/gpu-venv \
+# 2. Train both arms (explicit recovery mode + eval config required)
+RESUME_MODE=fresh TRAIN_VENV=/path/to/gpu-venv \
+  LADDER_BASE_CONFIG=/path/to/compatible-config.yaml \
   bash experiments/skill-dag/skillit/submit_skillit_370m.sh
 
 # Single arm, local (auto-stages pool into sibling of PROGRESS_DIR if missing)
-NPROC=1 ARM_ID=skillit-probe A_MODE=probe \
+NPROC=1 RESUME_MODE=fresh ARM_ID=skillit-probe A_MODE=probe \
   ARM_WEIGHTS_JSON=$WORK/skillit-probe/arm_weights.json \
+  LADDER_BASE_CONFIG=/path/to/compatible-config.yaml \
   POOL_DIR=... SAVE_FOLDER=... PROGRESS_DIR=... \
   bash experiments/skill-dag/skillit/launch_arm.sh
 ```
 
 Slurm submit scripts: `submit_skillit_train_pool.sh`, `submit_skillit_370m.sh`. Recipe prep: `prepare_skillit_370m_data.py`. Offline A default: `artifacts/probes_full/A_offline.npy`.
+
+Resume is never inferred from local scratch. Set `RESUME_MODE=resume` and provide a local `LOAD_PATH`, or for the dual-arm submitter a `LOAD_PATH_TEMPLATE` containing `{arm_id}`. A legacy S3 step path under `s3://edullm-checkpoints/skillit/<arm>/checkpoints/stepN` may be read once as a bootstrap input at run start; it stages both checkpoint and progress history locally and never writes artifacts back to S3. Prefer restoring a downloaded W&B checkpoint artifact to scratch and passing its local path.
 
 ---
 
@@ -326,20 +331,17 @@ Slurm submit scripts: `submit_skillit_train_pool.sh`, `submit_skillit_370m.sh`. 
 2. Run 7 one-hot probes via `mixlaw/train_datadecide_60m.py`; extrapolate via `mixlaw/extrapolate_chinchilla.py`; `skillit/build_adjacency.py` → offline A vs RegMix
 3. `skillit/skillit_math.py` (update + derivative A from `mixlaw/mixlaw_fit_chinchilla.json`) unit-tested against toy numbers
 4. `skillit/domain_stream.py` + `skillit/train_skillit_370m.py` + launch scripts
-5. Update `experiments/skill-dag/README.md`; launch two 370M arms; sync artifacts to S3 prefixes above
+5. Update `experiments/skill-dag/README.md`; launch two 370M arms; upload scratch artifacts to W&B
 
 ---
 
-## S3 export (`S3_EXPORT`)
+## Artifact durability and S3 boundary
 
-`S3_EXPORT` is **not** a Skill-It-specific concept — it is an env var used by the token-selection trainers ([`token_selection/olmo_ext/s3_export.py`](experiments/token-selection/token_selection/olmo_ext/s3_export.py)) to control whether the training host automatically runs `aws s3 sync` after checkpoint saves.
+S3 is restricted to staging or streaming published training data and optional bootstrap inputs at run start. SkillIt never writes checkpoints, progress, evals, logs, or analysis artifacts to S3.
 
-- **unset or `1` (default):** Sync checkpoints/progress to S3 when `aws` CLI is on PATH and credentials exist
-- **`0`, `false`, `no`, `off`:** Disable live S3 uploads (artifacts stay local only)
+Production runs require `WANDB_MODE=online`, a valid `WANDB_API_KEY`, and the `wandb` package. Every permanent checkpoint is uploaded as a W&B model artifact and the trainer waits for W&B acknowledgement before advancing; an upload failure terminates all ranks. Eval JSON and Skill-It update snapshots are also W&B artifacts, and the final non-W&B scratch tree is uploaded as `runtime-artifacts`.
 
-Also disabled when `SKIP_S3_UPLOAD=1`. The Skill-It 370M trainer should reuse this helper (or equivalent) for optional artifact sync — it is **not required** for training to work.
-
-Probe runs: progress/logs may sync to `s3://edullm-checkpoints/skillit/probes/` via `RESULTS_S3` in `run_mixture.sh` style, or stay local; 60M weight checkpoints are not uploaded (same as mixlaw pilot).
+`ALLOW_LOCAL_ONLY=1` is an explicit smoke-test escape hatch that permits offline or disabled W&B. It does not change the scientific schedule or create an S3 artifact path; all outputs remain on runtime scratch.
 
 ---
 

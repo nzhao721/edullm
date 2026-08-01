@@ -8,8 +8,7 @@ CE stack is a near-clone of [`control/`](../control/) (RefHQ-matched OLMo-2 370M
 permanent ladder, task-loss hook). Only the data path differs.
 
 **Train data:** published `s3://edullm-data/pretrain/middle-ppl-doc-mid60` (fail-closed
-if unpublished). **Durable artifacts:**
-`s3://edullm-checkpoints/token-sel/middle-ppl-doc/`.
+if unpublished). Artifacts remain on runtime scratch and upload to W&B.
 
 ## Ephemeral runtime
 
@@ -18,13 +17,12 @@ Training is meant for a machine whose scratch starts empty and is wiped after th
 | Path | Role |
 |------|------|
 | `STAGE_DIR` | Job-scoped; trainer fetches shards from `edullm-data` here |
-| `SAVE_FOLDER` | Job-scoped local ckpt scratch; each permanent save is uploaded to S3 before continuing |
-| `PROGRESS_DIR` | Job-scoped metrics; uploaded with checkpoints and again at end |
+| `SAVE_FOLDER` | Job-scoped checkpoint scratch; each permanent save uploads to W&B |
+| `PROGRESS_DIR` | Job-scoped metrics; uploaded to W&B |
 
 - Do **not** assume pre-staged FarmShare/laptop corpora or leftover checkpoint trees.
-- Resume only via explicit `LOAD_PATH` after staging a durable S3 checkpoint into scratch.
+- Resume via `WANDB_RESUME_ARTIFACT` or an explicit local `LOAD_PATH`.
 - Default `FRESH=1`. Local auto-resume of `SAVE_FOLDER` is refused.
-- `S3_EXPORT=0` / `SKIP_S3_UPLOAD=1` are refused unless `ALLOW_LOCAL_ONLY=1` (debug only).
 
 Does **not** read `s3://edullm-datasets/`.
 
@@ -76,7 +74,7 @@ Default `run_id`: **`edullm-370M-middle-ppl-doc-ladder125-v1`**
 | `filter_middle_ppl_docs.py` | Rank + keep middle 60% token mass |
 | `build_filtered_corpus.py` | Materialize docs + tokenize memmaps |
 | `prepare_data.py` | Offline helper for local path lists (publish pipeline) |
-| `train_ce_middle_ppl_doc.py` | Control-matched CE trainer + durable S3 ladder |
+| `train_ce_middle_ppl_doc.py` | Control-matched CE trainer; each permanent step is synchronously evaluated, strictly exported with its resume fingerprint, then marked durable |
 | `launch_train.sh` | Ephemeral-scratch launcher (prefer this) |
 | `run_train.sh` | Thin wrapper → `launch_train.sh` |
 | `test_filter_middle_ppl.py` | Unit tests for filter + trainer contract |
@@ -118,15 +116,14 @@ Resume (stage durable ckpt into scratch first, then):
 
 ```bash
 export FRESH=0
-export LOAD_PATH="$SAVE_FOLDER/step125"   # previously synced from S3
+export WANDB_RESUME_ARTIFACT="entity/token-selection/run-checkpoint:step-0000125"
 bash experiments/token-selection/middle-ppl-doc/launch_train.sh
 ```
 
 ## Checkpoint + eval contract
 
 - Permanent saves: `{0, 125, …, 2125, 2360}` for a 2360-step run (**omit 2250**)
-- Each permanent save uploads to `s3://edullm-checkpoints/token-sel/middle-ppl-doc/checkpoints/`
-  (fail-closed unless `--allow-local-only` / `ALLOW_LOCAL_ONLY=1`)
-- Progress uploaded with checkpoints and again at train end
+- Each permanent save uploads to W&B (fail-closed for production online runs)
+- Progress uploads to W&B with checkpoints and again at train end
 - On every permanent save, rank 0 may spawn `task_loss_bpb` (disable with
   `--no-task-loss-on-save` or `TASK_LOSS_EVAL=0`)

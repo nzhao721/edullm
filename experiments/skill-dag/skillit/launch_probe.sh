@@ -3,16 +3,16 @@
 #
 # Required:
 #   PROBE_ID           e.g. probe_dclm
-#   POOL_DIR           working pool with edullm_data_source.json (from edullm-data)
+#   POOL_DIR           working pool pinned to pretrain/olmo-127b/v1
 #   MIX_WEIGHTS_JSON   per-probe sidecar from prepare_skillit_probe_data.py
-#   SAVE_FOLDER        checkpoint directory (ephemeral OK; sync via RESULTS_S3)
+#   SAVE_FOLDER        checkpoint directory on runtime scratch
 #
 # Optional:
 #   PROGRESS_DIR       default: sibling of SAVE_FOLDER
-#   RESULTS_S3         durable upload prefix for progress/
 #   NPROC              ranks (default 1)
-#   WANDB_PROJECT      default skillit (final eval metrics only; mixlaw trainer untouched)
-#   WANDB_MODE          online|offline|disabled (default: online if WANDB_API_KEY set)
+#   WANDB_PROJECT      default skillit
+#   WANDB_MODE         production requires online
+#   ALLOW_LOCAL_ONLY   1 permits offline/disabled W&B for local smoke only
 #
 # Example:
 #   PROBE_ID=probe_dclm POOL_DIR=$WORK/pool \
@@ -38,16 +38,32 @@ DEVICE_EVAL_BATCH_SIZE="${DEVICE_EVAL_BATCH_SIZE:-32}"
 EVAL_INTERVAL=120
 EVAL_SUBSET_BATCHES=4
 NUM_WORKERS="${NUM_WORKERS:-6}"
+DATASET_ID="${DATASET_ID:-pretrain/olmo-127b}"
+DATASET_VERSION="${DATASET_VERSION:-v1}"
 SEED="${SEED:-6198}"
 WARMUP_MODE="${WARMUP_MODE:-capped}"
-RESULTS_S3="${RESULTS_S3:-}"
 WANDB_PROJECT="${WANDB_PROJECT:-skillit}"
+ALLOW_LOCAL_ONLY="${ALLOW_LOCAL_ONLY:-0}"
 if [[ -z "${WANDB_MODE:-}" ]]; then
   if [[ -n "${WANDB_API_KEY:-}" ]]; then
     WANDB_MODE="online"
   else
     WANDB_MODE="disabled"
   fi
+fi
+if [[ "${ALLOW_LOCAL_ONLY}" != "1" && "${WANDB_MODE}" != "online" ]]; then
+  echo "[launch_probe] production requires WANDB_MODE=online; set ALLOW_LOCAL_ONLY=1 only for local smoke" >&2
+  exit 2
+fi
+if [[ "${WANDB_MODE}" == "online" ]]; then
+  test -n "${WANDB_API_KEY:-}" || {
+    echo "[launch_probe] WANDB_API_KEY is required for production online runs" >&2
+    exit 2
+  }
+  "${PYTHON}" -c "import wandb" >/dev/null 2>&1 || {
+    echo "[launch_probe] wandb is required for production artifact durability" >&2
+    exit 2
+  }
 fi
 if [[ -n "${EXTRA_TRAIN_ARGS:-}" || "${SKIP_EVAL:-0}" == "1" ]]; then
   echo "[launch_probe] probe eval contract does not allow EXTRA_TRAIN_ARGS or SKIP_EVAL" >&2
@@ -66,10 +82,20 @@ if [[ ! -f "${MIX_WEIGHTS_JSON}" ]]; then
   echo "[${PROBE_ID}] missing MIX_WEIGHTS_JSON=${MIX_WEIGHTS_JSON}" >&2
   exit 2
 fi
-if [[ ! -f "${POOL_DIR}/edullm_data_source.json" ]]; then
-  echo "[${PROBE_ID}] missing ${POOL_DIR}/edullm_data_source.json — stage from edullm-data first" >&2
-  exit 2
-fi
+"${PYTHON}" "${SKILLIT_ROOT}/prepare_skillit_370m_data.py" \
+  --pool-dir "${POOL_DIR}" \
+  --dataset-id "${DATASET_ID}" \
+  --dataset-version "${DATASET_VERSION}" \
+  --pool-layout probe \
+  --validate-pool-only
+"${PYTHON}" - "${MIX_WEIGHTS_JSON}" "${DATASET_ID}" "${DATASET_VERSION}" <<'PY'
+import json, sys
+payload = json.load(open(sys.argv[1], encoding="utf-8"))
+got = (payload.get("dataset_id"), payload.get("dataset_version"))
+expected = (sys.argv[2], sys.argv[3])
+if got != expected:
+    raise SystemExit(f"{sys.argv[1]} source {got!r} != pinned source {expected!r}")
+PY
 
 mkdir -p "${SAVE_FOLDER}" "${PROGRESS_DIR}"
 FINAL_JSON="${PROGRESS_DIR}/task_loss_final.json"
@@ -101,7 +127,7 @@ ARGS=(
   --seed "${SEED}"
 )
 
-echo "[launch_probe] PROBE_ID=${PROBE_ID} POOL_DIR=${POOL_DIR} NPROC=${NPROC} WANDB_PROJECT=${WANDB_PROJECT} WANDB_MODE=${WANDB_MODE}"
+echo "[launch_probe] PROBE_ID=${PROBE_ID} POOL_DIR=${POOL_DIR} NPROC=${NPROC} WANDB_PROJECT=${WANDB_PROJECT} WANDB_MODE=${WANDB_MODE} ALLOW_LOCAL_ONLY=${ALLOW_LOCAL_ONLY}"
 
 run_train() {
   if [[ "${NPROC}" -eq 1 ]]; then
@@ -122,6 +148,9 @@ run_eval() {
     --device-eval-batch-size "${DEVICE_EVAL_BATCH_SIZE}"
     --num-workers "${NUM_WORKERS}"
   )
+  if [[ -n "${LADDER_BASE_CONFIG:-}" ]]; then
+    eval_args+=(--base-config "${LADDER_BASE_CONFIG}")
+  fi
   MASTER_ADDR=127.0.0.1 MASTER_PORT="${MASTER_PORT}" RANK=0 WORLD_SIZE=1 LOCAL_RANK=0 \
     "${PYTHON}" "${EVAL_SCRIPT}" "${eval_args[@]}"
 }
@@ -152,17 +181,11 @@ url = log_probe_final_eval(
     project=r'''${WANDB_PROJECT}''',
     entity=(r'''${WANDB_ENTITY:-}''' or None),
     mode=r'''${WANDB_MODE}''',
+    save_folder=Path(r'''${SAVE_FOLDER}'''),
+    progress_dir=Path(r'''${PROGRESS_DIR}'''),
 )
 print(f'[launch_probe] wandb probe eval url={url}', flush=True)
 "
-fi
-
-if [[ -n "${RESULTS_S3}" ]]; then
-  if command -v aws >/dev/null 2>&1; then
-    aws s3 sync "${PROGRESS_DIR}" "${RESULTS_S3}/${PROBE_ID}/progress" --only-show-errors || true
-  else
-    echo "[launch_probe] aws CLI missing; skip RESULTS_S3 sync" >&2
-  fi
 fi
 
 echo "[launch_probe] ${PROBE_ID} done"

@@ -3,8 +3,8 @@
 #
 # Required env (job-scoped scratch; no host-persistent defaults):
 #   STAGE_DIR         — empty-ok local/scratch staging root for edullm-data shards
-#   SAVE_FOLDER       — job-scoped checkpoint scratch (uploaded to S3 after each save)
-#   PROGRESS_DIR      — job-scoped metrics / run_meta (uploaded with checkpoints)
+#   SAVE_FOLDER       — job-scoped checkpoint scratch (uploaded to W&B after each save)
+#   PROGRESS_DIR      — job-scoped metrics / run_meta (uploaded to W&B)
 #
 # Optional:
 #   DATASET_ID        — edullm-data id (default: pretrain/middle-ppl-doc-mid60; fail-closed)
@@ -15,16 +15,17 @@
 #   NAME              — run id (default: edullm-370M-middle-ppl-doc-ladder125-v1)
 #   LENGTH_TOKENS     — default 9900000000 → 2360 steps
 #   FRESH             — 1 to pass --fresh (default: 1; ephemeral starts clean)
-#   LOAD_PATH         — explicit ckpt dir already staged from s3://edullm-checkpoints/
-#   ALLOW_LOCAL_ONLY  — 1 to allow debug runs without durable S3 export (not for real jobs)
+#   LOAD_PATH         — explicit local checkpoint directory
+#   WANDB_RESUME_ARTIFACT — checkpoint artifact ref for an empty scratch resume
+#   ALLOW_LOCAL_ONLY  — 1 to allow debug runs without W&B durability
 #   TASK_LOSS_EVAL    — 0 to disable post-save evals (default: enabled by trainer)
 #   EXTRA_ARGS        — extra flags forwarded to the trainer
 #
 # Resolves train shards from s3://edullm-data/ via edullm_data.read; stages into STAGE_DIR.
-# Durable artifacts land under s3://edullm-checkpoints/token-sel/middle-ppl-doc/.
+# Durable artifacts stay on scratch and upload to W&B.
 # Does not read edullm-datasets or assume pre-existing scratch corpora/checkpoints.
 #
-# W&B (SmolLM2 protocol; additive to S3): project token-selection. Push
+# W&B project token-selection is the artifact and metrics store. Push
 # wandb-session.env via scripts/farmshare/push_wandb_session_to_farmshare.sh
 # "$RUN_DIR" (or set WANDB_SESSION_ENV). Local smoke: WANDB_MODE=disabled.
 set -euo pipefail
@@ -56,20 +57,16 @@ if ! [[ "${NPROC_PER_NODE}" =~ ^[1-9][0-9]*$ ]]; then
   exit 1
 fi
 
-if [[ -n "${LOAD_PATH:-}" && "${FRESH}" == "1" ]]; then
-  echo "Refusing FRESH=1 together with LOAD_PATH=${LOAD_PATH}" >&2
+export TASK_LOSS_STRICT=1
+export TASK_LOSS_NPROC="${TASK_LOSS_NPROC:-${NPROC_PER_NODE}}"
+if [[ "${TASK_LOSS_EVAL:-1}" == "0" && "${ALLOW_LOCAL_ONLY:-0}" != "1" ]]; then
+  echo "TASK_LOSS_EVAL=0 is permitted only with ALLOW_LOCAL_ONLY=1 smoke runs." >&2
   exit 1
 fi
 
-if [[ "${ALLOW_LOCAL_ONLY:-0}" != "1" ]]; then
-  if [[ "${S3_EXPORT:-1}" =~ ^(0|false|no|off)$ ]]; then
-    echo "Durable S3 export required for ephemeral jobs (S3_EXPORT is off). Unset it or set ALLOW_LOCAL_ONLY=1." >&2
-    exit 1
-  fi
-  if [[ "${SKIP_S3_UPLOAD:-}" =~ ^(1|true|yes|on)$ ]]; then
-    echo "Durable S3 export required for ephemeral jobs (SKIP_S3_UPLOAD is set). Unset it or set ALLOW_LOCAL_ONLY=1." >&2
-    exit 1
-  fi
+if [[ -n "${LOAD_PATH:-}" && "${FRESH}" == "1" ]]; then
+  echo "Refusing FRESH=1 together with LOAD_PATH=${LOAD_PATH}" >&2
+  exit 1
 fi
 
 TRAINER="${SCRIPT_DIR}/train_ce_middle_ppl_doc.py"
@@ -99,11 +96,17 @@ fi
 if [[ -n "${TASK_LOSS_EVAL_SCRIPT:-}" ]]; then
   EXTRA+=(--task-loss-eval-script "${TASK_LOSS_EVAL_SCRIPT}")
 fi
+if [[ "${TASK_LOSS_EVAL:-1}" == "0" ]]; then
+  EXTRA+=(--no-task-loss-on-save)
+fi
 if [[ "${FRESH}" == "1" ]]; then
   EXTRA+=(--fresh)
 fi
 if [[ -n "${LOAD_PATH:-}" ]]; then
   EXTRA+=(--load-path "${LOAD_PATH}")
+fi
+if [[ -n "${WANDB_RESUME_ARTIFACT:-}" ]]; then
+  EXTRA+=(--wandb-resume-artifact "${WANDB_RESUME_ARTIFACT}")
 fi
 if [[ "${ALLOW_LOCAL_ONLY:-0}" == "1" ]]; then
   EXTRA+=(--allow-local-only)

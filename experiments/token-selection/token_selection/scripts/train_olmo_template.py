@@ -10,9 +10,8 @@ Ephemeral empty-scratch contract:
 
 * Stage train shards from published ``s3://edullm-data/`` (never ``edullm-datasets``).
 * Do not assume FarmShare/laptop corpora, local venvs, or prior save folders.
-* Durable artifacts (permanent step dirs, ``run_fingerprint.json``, metrics,
-  task_loss JSON) export to ``s3://edullm-checkpoints/token-sel/<arm>/``.
-* ``--resume`` hydrates an empty save folder from that durable prefix first.
+* Checkpoints, progress, and evals remain on runtime scratch and upload to W&B.
+* ``--resume`` hydrates an empty save folder from a W&B checkpoint artifact.
 """
 
 from __future__ import annotations
@@ -43,7 +42,6 @@ from token_selection.scripts import (
     resolve_output_dir,
     resolve_tokens_s3,
     resolve_train_dataset,
-    s3_uri,
 )
 from token_selection.scripts.edullm_data_tokens import (
     ensure_order_contract,
@@ -390,9 +388,7 @@ def build_plan(
         "metrics_dir": str(out / "metrics" / method),
         "s3_tokens": resolve_tokens_s3(cfg),
         "dataset_id": str((cfg.get("data") or {}).get("dataset_id") or ""),
-        "s3_checkpoints": s3_uri(
-            cfg, "checkpoints", method, bucket_key="checkpoint_bucket"
-        ),
+        "checkpoint_artifact_store": "wandb",
         "torchrun_example": (
             "CUDA_VISIBLE_DEVICES=<gpus> python -m torch.distributed.run --standalone "
             "--nproc_per_node=<N> -m token_selection.scripts.train_olmo_template "
@@ -406,9 +402,9 @@ def build_plan(
             "Tokens resolve from data.dataset_id via edullm_data.read (s3://edullm-data/); "
             "--launch stages them onto the run dir on a clean machine.",
             "Scratch initialization never resumes an existing save folder or loads optimizer/trainer state.",
-            "Durable saves: permanent step dirs + run_fingerprint.json + metrics export to "
-            "s3://edullm-checkpoints/token-sel/<arm>/ (do not rely on scratch persistence).",
-            "--resume fetches those durable artifacts when the local save folder is empty.",
+            "Permanent step dirs, run_fingerprint.json, metrics, and evals stay on runtime "
+            "scratch and upload to W&B artifacts.",
+            "--resume restores a W&B checkpoint artifact when the local save folder is empty.",
             "Launch pins train.cuda_visible_devices (single index or comma list) and refuses busy devices.",
             "Global batch size is world-size invariant; set nproc_per_node to match the pin length.",
         ],
@@ -463,6 +459,7 @@ def _run_fingerprint(plan: Dict[str, Any]) -> Dict[str, Any]:
         plan.get("ema_seed_mode") or ts_cfg.get("ema_seed_mode") or "zero"
     ).lower()
     fingerprint: Dict[str, Any] = {
+        "fingerprint_schema_version": 2,
         "run_id": str(plan["run_id"]),
         "method": str(plan["method"]),
         "seed": int(plan["seed"]),
@@ -483,6 +480,10 @@ def _run_fingerprint(plan: Dict[str, Any]) -> Dict[str, Any]:
         "alpha_schedule": str(ts_cfg.get("alpha_schedule") or "linear"),
         "alpha_tau": float(ts_cfg.get("alpha_tau") or 300.0),
         "ema_seed_mode": ema_seed_mode,
+        # Pin the complete scorer/EMA configuration, not a hand-picked subset.
+        # This covers method-specific seeds, schedules, reference semantics, and
+        # future scorer fields without weakening old explicit keys above.
+        "scorer_config": json.loads(json.dumps(ts_cfg, sort_keys=True)),
         "reference_load_path": ref_path,
         "early_reference_load_path": early_path,
         "late_reference_load_path": late_path,
@@ -553,19 +554,11 @@ def _fingerprint_path(plan: Dict[str, Any]) -> Path:
 
 
 def _resolve_arm_name(cfg: Mapping[str, Any]) -> str:
-    """Return the arm directory name used under ``token-sel/<arm>/`` on S3."""
+    """Return the arm name used for logs and W&B metadata."""
     arm = str(cfg.get("arm") or "").strip()
     if arm:
         return arm
-    from token_selection.olmo_ext.s3_layout import arm_from_prefix
-
-    prefix = str((cfg.get("s3") or {}).get("prefix") or "").strip()
-    if not prefix:
-        raise SystemExit(
-            "cfg.arm or s3.prefix (token-sel/<arm>) is required for durable "
-            "checkpoint export / ephemeral resume fetch"
-        )
-    return arm_from_prefix(prefix)
+    raise SystemExit("cfg.arm is required for W&B artifact metadata")
 
 
 def _ensure_resume_artifacts(
@@ -573,15 +566,10 @@ def _ensure_resume_artifacts(
     cfg: Mapping[str, Any],
     method: MethodName,
 ) -> None:
-    """Fetch durable checkpoints (+ metrics) from S3 when local save_folder is empty.
-
-    Ephemeral FarmShare/AWS scratch does not retain a prior job's tokens, order,
-    checkpoints, or venvs. ``--resume`` must not assume a local save folder; it
-    pulls ``run_fingerprint.json`` and step dirs from ``edullm-checkpoints``.
-    """
-    from token_selection.olmo_ext.s3_export import (
-        fetch_arm_method_checkpoints,
-        fetch_arm_method_metrics,
+    """Restore a W&B checkpoint artifact when runtime scratch is empty."""
+    from token_selection.olmo_ext.wandb_logging import (
+        checkpoint_artifact_ref,
+        restore_checkpoint_artifact,
     )
 
     save_folder = Path(plan["save_folder"])
@@ -589,15 +577,18 @@ def _ensure_resume_artifacts(
     if fingerprint_path.is_file():
         return
 
-    arm = _resolve_arm_name(cfg)
-    remote = s3_uri(cfg, "checkpoints", method, bucket_key="checkpoint_bucket")
+    explicit = os.environ.get("WANDB_RESUME_ARTIFACT", "").strip()
+    artifact_ref = explicit or checkpoint_artifact_ref(
+        run_name=str(plan["run_id"]),
+        project=os.environ.get("WANDB_PROJECT", "token-selection"),
+        entity=os.environ.get("WANDB_ENTITY") or None,
+    )
     print(
         json.dumps(
             {
-                "event": "resume_fetch_checkpoints",
-                "arm": arm,
+                "event": "resume_restore_checkpoint",
                 "method": method,
-                "remote": remote,
+                "artifact": artifact_ref,
                 "local": str(save_folder),
             },
             indent=2,
@@ -605,25 +596,18 @@ def _ensure_resume_artifacts(
         flush=True,
     )
     try:
-        fetch_arm_method_checkpoints(
-            arm, save_folder, method=method, raise_on_error=True
-        )
+        restore_checkpoint_artifact(artifact_ref, save_folder)
     except Exception as exc:  # noqa: BLE001
         raise SystemExit(
-            f"--resume: failed to fetch durable checkpoints from {remote}/: {exc}"
+            f"--resume: failed to restore W&B checkpoint artifact {artifact_ref!r}: {exc}"
         ) from exc
 
     if not fingerprint_path.is_file():
         raise SystemExit(
             f"--resume set but no run_fingerprint.json under {save_folder} after "
-            f"syncing {remote}/. Ephemeral scratch does not persist checkpoints; "
-            "keep S3_EXPORT enabled during training so fingerprints + step dirs "
-            "land under s3://edullm-checkpoints/token-sel/<arm>/checkpoints/, "
-            "then resume on a clean machine. Launch without --resume to start fresh."
+            f"restoring {artifact_ref!r}. The W&B artifact is out of contract; "
+            "launch without --resume to start fresh."
         )
-
-    metrics_dir = Path(plan["metrics_dir"])
-    fetch_arm_method_metrics(arm, metrics_dir, method=method)
 
 
 def _export_durable_run_state(
@@ -631,55 +615,8 @@ def _export_durable_run_state(
     cfg: Mapping[str, Any],
     method: MethodName,
 ) -> None:
-    """Push fingerprint / metrics / method checkpoints to S3 (upload-before-end).
-
-    Mid-run permanent steps also export via ``TaskLossEvalCallback`` (even when
-    task-loss eval is disabled). This path covers pre-fit fingerprint + post-fit
-    catch-up so ephemeral scratch wipe cannot erase the only copy.
-    """
-    from token_selection.olmo_ext.s3_export import (
-        export_arm_metrics_dir,
-        export_arm_run_fingerprint,
-        s3_export_enabled,
-        sync_to_s3,
-    )
-    from token_selection.olmo_ext.s3_layout import arm_uri
-
-    try:
-        arm = _resolve_arm_name(cfg)
-    except SystemExit:
-        return
-    if not s3_export_enabled():
-        print(
-            json.dumps(
-                {
-                    "event": "s3_export_disabled",
-                    "warning": (
-                        "S3_EXPORT=0 / SKIP_S3_UPLOAD=1 — checkpoints stay local-only "
-                        "and will be lost when ephemeral scratch is wiped"
-                    ),
-                },
-                indent=2,
-            ),
-            flush=True,
-        )
-        return
-    ok = True
-    fp = _fingerprint_path(plan)
-    if fp.is_file():
-        ok = bool(export_arm_run_fingerprint(arm, fp, method=method)) and ok
-    metrics_dir = Path(plan["metrics_dir"])
-    if metrics_dir.exists() and any(metrics_dir.iterdir()):
-        ok = bool(export_arm_metrics_dir(arm, metrics_dir, method=method)) and ok
-    save_folder = Path(plan["save_folder"])
-    if save_folder.exists() and any(save_folder.iterdir()):
-        ok = bool(sync_to_s3(save_folder, arm_uri(arm, "checkpoints", str(method)))) and ok
-    if not ok:
-        raise SystemExit(
-            "Durable S3 export failed for fingerprint/metrics/checkpoints under "
-            f"token-sel/{arm}/. Fix AWS credentials / aws CLI on the train host, then retry. "
-            "Set S3_EXPORT=0 only for intentional non-durable local smoke runs."
-        )
+    """Compatibility no-op: callbacks own local + W&B artifact durability."""
+    del plan, cfg, method
 
 
 def _prepare_run_dir(plan: Dict[str, Any], *, resume: bool) -> None:
@@ -691,7 +628,7 @@ def _prepare_run_dir(plan: Dict[str, Any], *, resume: bool) -> None:
     would then block a clean relaunch.
 
     Callers that pass ``resume=True`` must run ``_ensure_resume_artifacts`` first so
-    ephemeral hosts can hydrate the save folder from ``edullm-checkpoints``.
+    ephemeral hosts can hydrate the save folder from W&B.
     """
     save_folder = Path(plan["save_folder"])
     fingerprint_path = _fingerprint_path(plan)
@@ -700,8 +637,8 @@ def _prepare_run_dir(plan: Dict[str, Any], *, resume: bool) -> None:
         if not fingerprint_path.exists():
             raise SystemExit(
                 f"--resume set but no run_fingerprint.json under {save_folder}; there is "
-                "nothing to resume. On ephemeral scratch, durable checkpoints must exist "
-                "under s3://edullm-checkpoints/ (fetched before this check). "
+                "nothing to resume. On ephemeral scratch, a W&B checkpoint artifact must "
+                "be restored before this check. "
                 "Launch without --resume to start the run."
             )
         prior = json.loads(fingerprint_path.read_text(encoding="utf-8"))
@@ -790,6 +727,11 @@ def build_trainer(plan: Dict[str, Any], cfg: Dict[str, Any], method: MethodName,
     gbs = int(plan["global_batch_size"])
     seed = int(plan["seed"])
     total_steps = int(plan["total_steps"])
+    from token_selection.olmo_ext.wandb_logging import is_production_run
+
+    production = is_production_run(
+        max_tokens=int(plan["max_tokens"]), total_steps=total_steps
+    )
 
     try:
         # --- data --------------------------------------------------------------------
@@ -863,6 +805,11 @@ def build_trainer(plan: Dict[str, Any], cfg: Dict[str, Any], method: MethodName,
         rank_mbz = int(cfg.get("train", {}).get("rank_microbatch_size", seq_len))
         compile_model = bool(cfg.get("train", {}).get("compile_model", False))
         train_cfg = cfg.get("train", {})
+        if bool(train_cfg.get("fused_ce", False)):
+            raise SystemExit(
+                "train.fused_ce=true is out of contract: fused CE remains off until "
+                "a focused value-and-gradient parity test covers the production LM head"
+            )
         # RefHQ / control controlled knobs — YAML spines declare these; do not leave
         # TransformerTrainModuleConfig defaults (None) for spine arms.
         max_grad_norm = float(train_cfg.get("max_grad_norm", 1.0))
@@ -910,22 +857,33 @@ def build_trainer(plan: Dict[str, Any], cfg: Dict[str, Any], method: MethodName,
             train_cfg.get("checkpoint_every_steps", DEFAULT_CHECKPOINT_INTERVAL)
         )
         total_steps = int(plan["total_steps"])
+        if bool(train_cfg.get("save_async", False)):
+            raise SystemExit(
+                "train.save_async=true is out of contract: permanent checkpoints must "
+                "finish materializing before synchronous eval/export"
+            )
         ckpt_kwargs = checkpointer_kwargs_for_ladder(
             total_steps,
             interval,
-            # Default False so the task_loss post-save hook sees a complete step dir.
-            save_async=bool(train_cfg.get("save_async", False)),
+            save_async=False,
         )
         # Explicit max_checkpoints=None wins over OLMo-core's default of 3.
-        if "checkpoint_keep_last" in train_cfg:
-            ckpt_kwargs["max_checkpoints"] = train_cfg.get("checkpoint_keep_last")
-        # Opt-in ephemeral only when YAML sets it (plan default: none).
-        ephemeral_interval = train_cfg.get("ephemeral_checkpoint_every_steps")
-        if ephemeral_interval is not None:
-            ckpt_kwargs["ephemeral_save_interval"] = int(ephemeral_interval)
+        if train_cfg.get("checkpoint_keep_last") is not None:
+            raise SystemExit(
+                "checkpoint_keep_last is out of contract: every permanent ladder "
+                "checkpoint must be retained"
+            )
+        if train_cfg.get("ephemeral_checkpoint_every_steps") is not None:
+            raise SystemExit(
+                "ephemeral checkpoints are out of contract for token-selection arms"
+            )
         milestone_steps = train_cfg.get("checkpoint_milestone_steps")
-        if milestone_steps is not None:
-            ckpt_kwargs["fixed_steps"] = [int(step) for step in milestone_steps]
+        if milestone_steps is not None and sorted(map(int, milestone_steps)) != list(
+            ckpt_kwargs["fixed_steps"]
+        ):
+            raise SystemExit(
+                "checkpoint_milestone_steps does not match the shared permanent ladder"
+            )
         if train_cfg.get("pre_train_checkpoint") is not None:
             ckpt_kwargs["pre_train_checkpoint"] = bool(
                 train_cfg.get("pre_train_checkpoint")
@@ -1036,19 +994,24 @@ def build_trainer(plan: Dict[str, Any], cfg: Dict[str, Any], method: MethodName,
                 command_template=eval_cfg.get("command_template"),
                 eval_script=eval_cfg.get("eval_script"),
                 arm=cfg.get("arm") or None,
-                s3_prefix=str((cfg.get("s3") or {}).get("prefix") or "") or None,
-                s3_export=bool(eval_cfg.get("s3_export", True)),
+                progress_dir=Path(plan["metrics_dir"]).parent,
+                method=str(method),
+                task_loss_nproc=eval_cfg.get("nproc"),
+                strict=bool(eval_cfg.get("strict", True)),
+                production=production,
+                wandb_mode=os.environ.get("WANDB_MODE", "online"),
             ),
         )
 
         # W&B: train scalars via olmo_core WandBCallback; ckpt/eval artifacts via side channel.
-        # Soft-skip without WANDB_API_KEY (SmolLM2); never weakens S3 fail-closed export.
+        # Production online runs require W&B; local/offline smoke may soft-disable it.
         from token_selection.olmo_ext.wandb_logging import (
             apply_wandb_env_defaults,
             ensure_wandb_not_hard_disabled,
             make_wandb_artifacts_callback,
             wandb_callback_kwargs_from_env,
             wandb_enabled,
+            production_online,
         )
 
         arm_name = str(cfg.get("arm") or plan.get("arm") or method)
@@ -1062,6 +1025,13 @@ def build_trainer(plan: Dict[str, Any], cfg: Dict[str, Any], method: MethodName,
         wb_enabled = wandb_enabled(is_main=True)
         if "enabled" in wb_cfg:
             wb_enabled = bool(wb_cfg["enabled"]) and wb_enabled
+        if production_online(
+            production=production, mode=os.environ.get("WANDB_MODE", "online")
+        ) and not wb_enabled:
+            raise SystemExit(
+                "production online runs require wandb, WANDB_API_KEY, and checkpoint "
+                "artifact uploads; durability is fail-closed"
+            )
         try:
             from olmo_core.train.callbacks import WandBCallback  # type: ignore
 
@@ -1075,7 +1045,7 @@ def build_trainer(plan: Dict[str, Any], cfg: Dict[str, Any], method: MethodName,
                     "run_id": plan["run_id"],
                     "max_tokens": plan["max_tokens"],
                     "total_steps": total_steps,
-                    "s3_prefix": (cfg.get("s3") or {}).get("prefix"),
+                    "artifact_store": "wandb",
                 },
                 enabled=wb_enabled,
             )
@@ -1092,12 +1062,19 @@ def build_trainer(plan: Dict[str, Any], cfg: Dict[str, Any], method: MethodName,
                     total_steps=total_steps,
                     interval=interval,
                     tokens_per_step=int(plan.get("global_batch_size") or gbs),
-                    upload_checkpoint_artifacts=bool(
-                        wb_cfg.get("upload_checkpoint_artifacts", True)
-                    ),
+                    # TaskLossEvalCallback uploads complete checkpoints in strict order.
+                    upload_checkpoint_artifacts=False,
+                    progress_dir=Path(plan["metrics_dir"]).parent,
+                    production=production,
+                    wandb_mode=os.environ.get("WANDB_MODE", "online"),
+                    run_name=str(plan["run_id"]),
                 ),
             )
         except ImportError:
+            if production_online(
+                production=production, mode=os.environ.get("WANDB_MODE", "online")
+            ):
+                raise
             print(
                 json.dumps(
                     {
@@ -1216,8 +1193,6 @@ def try_launch(plan: Dict[str, Any], cfg: Dict[str, Any], method: MethodName, *,
         # Only now that the trainer is known to build do we pin the fresh-run identity,
         # so a failed build cannot leave a stale fingerprint that blocks relaunch.
         _commit_run_fingerprint(plan, resume=resume)
-        # Durable copy: ephemeral scratch is not the source of truth for resume.
-        _export_durable_run_state(plan, cfg, method)
         print(
             json.dumps(
                 {
@@ -1226,7 +1201,7 @@ def try_launch(plan: Dict[str, Any], cfg: Dict[str, Any], method: MethodName, *,
                     "init_mode": plan["init_mode"],
                     "resume": resume,
                     "save_folder": plan["save_folder"],
-                    "s3_checkpoints": plan.get("s3_checkpoints"),
+                    "checkpoint_artifact_store": "wandb",
                     "max_tokens": plan["max_tokens"],
                     "total_steps": plan["total_steps"],
                     "num_visible_gpus": len(visible),
@@ -1236,8 +1211,6 @@ def try_launch(plan: Dict[str, Any], cfg: Dict[str, Any], method: MethodName, *,
             )
         )
         trainer.fit()
-        # Final metrics push after fit (checkpoints already exported per permanent save).
-        _export_durable_run_state(plan, cfg, method)
     finally:
         teardown_training_environment()
 
@@ -1277,12 +1250,20 @@ def main() -> None:
         action="store_true",
         help=(
             "Resume from the latest checkpoint iff its run fingerprint "
-            "(init/order/batching/budget) matches. On ephemeral scratch, fetches "
-            "fingerprints + step dirs from s3://edullm-checkpoints/token-sel/<arm>/ "
-            "when the local save folder is empty. Do not rely on scratch-only ckpts."
+            "(init/order/batching/budget) matches. On empty runtime scratch, restores "
+            "WANDB_RESUME_ARTIFACT (or the run's latest W&B checkpoint artifact)."
         ),
     )
+    ap.add_argument(
+        "--wandb-resume-artifact",
+        default=os.environ.get("WANDB_RESUME_ARTIFACT") or None,
+        help="Explicit W&B checkpoint artifact ref for --resume on empty scratch",
+    )
     args = ap.parse_args()
+    if args.wandb_resume_artifact and not args.resume:
+        ap.error("--wandb-resume-artifact requires --resume")
+    if args.wandb_resume_artifact:
+        os.environ["WANDB_RESUME_ARTIFACT"] = str(args.wandb_resume_artifact)
     cfg = load_config(args.config)
     out = resolve_output_dir(cfg, ROOT)
     try:

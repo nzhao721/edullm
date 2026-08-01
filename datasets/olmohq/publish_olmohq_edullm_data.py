@@ -101,7 +101,7 @@ class ShardWriter:
         if shard_bytes > MAX_SHARD_BYTES:
             raise ValueError(f"shard_bytes {shard_bytes} exceeds max {MAX_SHARD_BYTES}")
         self.shard_bytes = _align_shard_bytes(shard_bytes)
-        self.out_dir = out_di
+        self.out_dir = out_dir
         self.out_dir.mkdir(parents=True, exist_ok=True)
         self.shard_idx = 0
         self.current_path: Path | None = None
@@ -642,7 +642,7 @@ def stage_publish_layout(
     for source in sorted(manifest["domains"]):
         meta = manifest["domains"][source]
         rel_dir = Path("tokens") / source
-        out_dir = out_root / rel_di
+        out_dir = out_root / rel_dir
         if resume and _source_complete(out_dir, int(meta["bytes"])):
             shards = sorted(out_dir.glob("train-*.u32le.bin"))
             staged[source] = [str(rel_dir / p.name) for p in shards]
@@ -763,6 +763,13 @@ def main() -> int:
     parser.add_argument("--val-fraction", type=float, default=VAL_FRACTION)
     parser.add_argument("--hash-workers", type=int, default=16)
     parser.add_argument("--copy-workers", type=int, default=16)
+    parser.add_argument(
+        "--text-run-dir",
+        type=Path,
+        default=None,
+        help="FarmShare run dir with trim/<source>/*-trimmed.json.gz (or out/<source>/…)",
+    )
+    parser.add_argument("--skip-text-stage", action="store_true")
     parser.add_argument("--skip-stage", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--force", action="store_true")
@@ -772,6 +779,10 @@ def main() -> int:
         help="keep existing stage-dir; skip complete sources; restage incomplete ones",
     )
     args = parser.parse_args()
+
+    _datasets_root = Path(__file__).resolve().parents[1]
+    if str(_datasets_root) not in sys.path:
+        sys.path.insert(0, str(_datasets_root))
 
     manifest = load_shard_manifest(args.manifest)
     print(
@@ -795,6 +806,20 @@ def main() -> int:
         )
     elif not args.stage_dir.is_dir():
         raise SystemExit(f"--skip-stage but stage-dir missing: {args.stage_dir}")
+
+    if args.text_run_dir and not args.skip_text_stage:
+        from edullm_text_companion import stage_text_companion
+
+        stage_text_companion(
+            sources=sorted(manifest["domains"]),
+            run_dir=args.text_run_dir,
+            out_root=args.stage_dir,
+            shard_bytes=args.shard_bytes,
+        )
+    elif not args.skip_text_stage:
+        raise SystemExit(
+            "companion text requires --text-run-dir (FarmShare trim/out tree) or --skip-text-stage"
+        )
 
     if args.dry_run:
         print(f"dry-run: staged under {args.stage_dir}", flush=True)
@@ -830,7 +855,8 @@ def main() -> int:
     notes = (
         f"Validation split: {args.val_fraction:.4%} of each source carved into "
         f"tokens/<source>/val-00000.u32le.bin so val source weights match the full mix. "
-        f"Legacy path: {legacy}"
+        f"Companion raw documents live under text/<source>/ (text-corpus/v1) as the complete "
+        f"selected document stream. Legacy path: {legacy}"
     )
 
     # Stamp source URIs from the actual S3 prefix used for this publish.
@@ -847,12 +873,15 @@ def main() -> int:
     created_at = datetime.now(timezone.utc).isoformat()
     # Rotate STS from laptop-pushed aws-session.env across multi-hour upload+hash.
     s3 = RefreshingBoto3S3(session_env if session_env.is_file() else None)
+    from edullm_text_companion import PUBLISH_PROFILE, TEXT_GROUP_META
+
     plan = publish(
         args.stage_dir,
         dataset_id=args.dataset_id,
         purpose=args.purpose,
-        profile="pretrain-tokens/v1",
+        profile=PUBLISH_PROFILE,
         tokenizer=args.tokenizer,
+        group_meta=TEXT_GROUP_META,
         s3=s3,
         created_at=created_at,
         hash_workers=args.hash_workers,

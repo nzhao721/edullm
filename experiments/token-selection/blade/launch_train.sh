@@ -3,13 +3,12 @@
 # World size comes from torchrun / env — never hardcode GPUs.
 #
 # Scratch starts empty: stage train+RefHQ from s3://edullm-data (prepare_blade_data.py).
-# Durable artifacts fail-closed-export to s3://edullm-checkpoints/token-sel/blade/
-# (S3_EXPORT=0 = intentional local-smoke opt-out only; otherwise export failure aborts).
+# Artifacts remain on scratch and upload to W&B; production online uploads fail closed.
 #
-# W&B (SmolLM2 protocol; additive to S3): project token-selection. Push
+# W&B project token-selection is the artifact store. Push
 # wandb-session.env via scripts/farmshare/push_wandb_session_to_farmshare.sh
 # "$RUN_DIR" (or set WANDB_SESSION_ENV). Local smoke: WANDB_MODE=disabled.
-# Cross-job resume: FETCH_CHECKPOINTS_FROM_S3=1 (optional LOAD_PATH=.../stepN).
+# Cross-job resume: WANDB_RESUME_ARTIFACT=entity/project/name:alias.
 # Do not assume FarmShare/laptop corpora, old run dirs, or legacy edullm-datasets.
 #
 # Required:
@@ -39,9 +38,8 @@
 #   MASTER_ADDR / MASTER_PORT
 #   TASK_LOSS_EVAL=0 to disable post-save eval spawn
 #   TASK_LOSS_EVAL_SCRIPT / TASK_LOSS_DIR
-#   S3_EXPORT=0              local smoke only (checkpoints not durable)
-#   FETCH_CHECKPOINTS_FROM_S3=1  pull durable ckpts before resume
-#   LOAD_PATH                explicit step dir (local or fetched)
+#   WANDB_RESUME_ARTIFACT    restore a checkpoint artifact into scratch
+#   LOAD_PATH                explicit local step dir
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -58,6 +56,9 @@ elif [[ -n "${CUDA_VISIBLE_DEVICES:-}" ]]; then
 else
   NPROC=1
 fi
+
+export TASK_LOSS_STRICT=1
+export TASK_LOSS_NPROC="${TASK_LOSS_NPROC:-${NPROC}}"
 
 MASTER_ADDR="${MASTER_ADDR:-127.0.0.1}"
 MASTER_PORT="${MASTER_PORT:-29501}"
@@ -120,8 +121,8 @@ fi
 if [[ -n "${LOAD_PATH:-}" ]] && ! has_flag "--load-path"; then
   ARGS+=(--load-path "${LOAD_PATH}")
 fi
-if [[ "${FETCH_CHECKPOINTS_FROM_S3:-0}" == "1" ]] && ! has_flag "--fetch-checkpoints-from-s3"; then
-  ARGS+=(--fetch-checkpoints-from-s3)
+if [[ -n "${WANDB_RESUME_ARTIFACT:-}" ]] && ! has_flag "--wandb-resume-artifact"; then
+  ARGS+=(--wandb-resume-artifact "${WANDB_RESUME_ARTIFACT}")
 fi
 
 _BLADE_RUN_NAME="${NAME:-}"

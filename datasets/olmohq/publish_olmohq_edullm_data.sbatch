@@ -24,12 +24,13 @@ source "${RUN_DIR}/venv/bin/activate"
 # shellcheck disable=SC1090
 source "${AWS_SESSION_ENV:?}"
 
-export PATH="${HOME}/.local/bin:${HOME}/tools/aws/bin:${PATH}"
+export PATH="${PATH}:${HOME}/.local/bin:${HOME}/tools/aws/bin"
 export AWS_DEFAULT_REGION="${AWS_DEFAULT_REGION:-us-east-1}"
 
-SCRIPTS="${SCRIPTS:-${RUN_DIR}/scripts/olmohq}"
+SCRIPTS="${SCRIPTS:-${EDULLM_ROOT}/datasets/olmohq}"
 BUCKET="${BUCKET:-edullm-datasets}"
 PREFIX="${PREFIX:-olmo100b/olmo-mix-1124-30b}"
+TEXT_RUN_DIR="${TEXT_RUN_DIR:-/scratch/users/nzhao2/agent-runs/olmo-mix-upsample-20260723-103547}"
 CACHE_DIR="${CACHE_DIR:-${RUN_DIR}/cache}"
 MANIFEST_LOCAL="${MANIFEST_LOCAL:-${CACHE_DIR}/plan/tokenized_manifest.json}"
 EDULLM_DATA_DIR="${EDULLM_DATA_DIR:-${RUN_DIR}/edullm-data}"
@@ -49,6 +50,7 @@ python "${SCRIPTS}/publish_olmohq_edullm_data.py" \
   --manifest "${MANIFEST_LOCAL}" \
   --s3-bucket "${BUCKET}" \
   --s3-tokenized-prefix "${PREFIX}/tokenized" \
+  --text-run-dir "${TEXT_RUN_DIR}" \
   --stage-dir "${STAGE_DIR}" \
   --dataset-id pretrain/olmo-127b \
   --shard-bytes 1073741824 \

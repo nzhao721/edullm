@@ -9,10 +9,13 @@
 #   CONFIG or CFG                — override YAML path
 #   RESUME=1                     — resume from latest matching fingerprint
 #
-# Prerequisites: export early/late .pt (export_learnability_refs.py) and set
-# reference.early/late.load_path in the YAML (null until then; fail-closed).
+# Reference prerequisites: existing early/late .pt paths or the YAML's pinned
+# S3 provenance. With --launch, null load_path fields are materialized from the
+# pinned URIs into TOKEN_SELECTION_REF_CACHE; missing local paths without S3
+# provenance fail before dataset resolution. This requires job-provided
+# credentials and the pinned olmo-core revision; the launcher never mints them.
 #
-# W&B (SmolLM2 protocol; additive to S3): project token-selection. Push
+# W&B project token-selection is the artifact and metrics store. Push
 # wandb-session.env via scripts/farmshare/push_wandb_session_to_farmshare.sh
 # "$RUN_DIR" (or set WANDB_SESSION_ENV). Local smoke: WANDB_MODE=disabled.
 #
@@ -49,6 +52,8 @@ if [[ "${NPROC}" -lt 1 ]]; then
   echo "NPROC must be >= 1 (got ${NPROC})" >&2
   exit 1
 fi
+export TASK_LOSS_STRICT=1
+export TASK_LOSS_NPROC="${TASK_LOSS_NPROC:-${NPROC}}"
 
 if [[ -n "${SLURM_JOB_ID:-}" ]]; then
   export TOKEN_SELECTION_SKIP_IDLE_CHECK="${TOKEN_SELECTION_SKIP_IDLE_CHECK:-1}"
@@ -57,6 +62,9 @@ fi
 LAUNCH_ARGS=(--config "${CONFIG}" --method "${METHOD}" --olmo-root "${OLMO_ROOT}" --launch)
 if [[ "${RESUME:-0}" == "1" ]]; then
   LAUNCH_ARGS+=(--resume)
+fi
+if [[ -n "${WANDB_RESUME_ARTIFACT:-}" ]]; then
+  LAUNCH_ARGS+=(--wandb-resume-artifact "${WANDB_RESUME_ARTIFACT}")
 fi
 
 echo "[learnability-token] nproc=${NPROC} config=${CONFIG} method=${METHOD}"

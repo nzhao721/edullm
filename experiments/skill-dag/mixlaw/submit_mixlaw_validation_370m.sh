@@ -21,6 +21,9 @@
 #   POOL_DIR         pre-staged working pool; else stage into ${RUN_DIR}/pool
 #   DATASET_ID       default pretrain/olmo-127b
 #   DATASET_VERSION  pin; default resolve_latest
+#   RECOVERY_MODE    fresh|resume|fail (default fail; per-arm resume needs
+#                    EXTRA_ARGS with --load-path or staged durable metadata)
+#   LADDER_BASE_CONFIG required OLMo2-370M ladder config for strict eval
 #   RECIPE           path to validation_mixtures_10b.json
 #   NPROC            GPUs per mix (default 1)
 #   ARRAY_TASKS      override Slurm array (default 0..(n_mixes-1))
@@ -42,7 +45,7 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
 EDULLM_ROOT="${EDULLM_ROOT:-${REPO_ROOT}}"
 RECIPE="${RECIPE:-${SCRIPT_DIR}/validation_mixtures_10b.json}"
 DATASET_ID="${DATASET_ID:-pretrain/olmo-127b}"
-EDULLM_DATA_PKG="${EDULLM_DATA_PKG:-edullm-data @ git+https://github.com/edu-llm/edullm-data@v0.2.0}"
+EDULLM_DATA_PKG="${EDULLM_DATA_PKG:-edullm-data @ git+https://github.com/edu-llm/edullm-data@main}"
 
 TRAIN_VENV="${TRAIN_VENV:-${LADDER_VENV:-}}"
 if [[ -z "${TRAIN_VENV}" ]]; then
@@ -61,10 +64,12 @@ RUN_DIR="${RUN_DIR:-/scratch/users/${SUNET}/agent-runs/${RUN_NAME}}"
 SAVE_ROOT="${SAVE_ROOT:-${RUN_DIR}/save}"
 PROGRESS_ROOT="${PROGRESS_ROOT:-${RUN_DIR}/progress}"
 BUILD_WORKERS="${BUILD_WORKERS:-4}"
-S3_EXPORT="${S3_EXPORT:-1}"
+S3_EXPORT="${S3_EXPORT:-0}"
 WANDB_PROJECT="${WANDB_PROJECT:-mixlaw}"
 WANDB_ENTITY="${WANDB_ENTITY:-}"
 WANDB_GROUP="${WANDB_GROUP:-370m-validation}"
+RECOVERY_MODE="${RECOVERY_MODE:-fail}"
+: "${LADDER_BASE_CONFIG:?Set LADDER_BASE_CONFIG to the OLMo2-370M ladder config}"
 if [[ -f "${RUN_DIR}/wandb-session.env" ]]; then
   WANDB_MODE="${WANDB_MODE:-online}"
 else
@@ -76,6 +81,8 @@ cp -a "${RECIPE}" "${RUN_DIR}/validation_mixtures_10b.json"
 cp -a "${SCRIPT_DIR}/prepare_validation_370m_data.py" \
   "${SCRIPT_DIR}/launch_validation_370m.sh" \
   "${SCRIPT_DIR}/train_mixlaw_validation_370m.py" \
+  "${SCRIPT_DIR}/mixlaw_runtime.py" \
+  "${SCRIPT_DIR}/preflight_validation_370m.py" \
   "${SCRIPT_DIR}/mixlaw_wandb.py" \
   "${SCRIPT_DIR}/stage_validation_pool_from_edullm_data.py" \
   "${SCRIPT_DIR}/domain_stream.py" \
@@ -194,9 +201,11 @@ WANDB_PROJECT=${WANDB_PROJECT}
 WANDB_ENTITY=${WANDB_ENTITY}
 WANDB_GROUP=${WANDB_GROUP}
 WANDB_MODE=${WANDB_MODE}
+RECOVERY_MODE=${RECOVERY_MODE}
+LADDER_BASE_CONFIG=${LADDER_BASE_CONFIG}
 # Ephemeral RUN_DIR copies trainers; curriculum/token-selection stay in the checkout.
 PYTHONPATH=${RUN_DIR}:${EDULLM_ROOT}/experiments/curriculum:${EDULLM_ROOT}/experiments/token-selection
-export PYTHONPATH EDULLM_ROOT
+export PYTHONPATH EDULLM_ROOT LADDER_BASE_CONFIG
 EOF
 
 cat > "${RUN_DIR}/train_one.sh" <<'EOF'
@@ -218,6 +227,7 @@ export PROGRESS_DIR="${PROGRESS_ROOT}/${MIX_NAME}/progress"
 export NPROC S3_EXPORT
 export EDULLM_ROOT PYTHONPATH
 export WANDB_PROJECT WANDB_ENTITY WANDB_GROUP WANDB_MODE
+export RECOVERY_MODE LADDER_BASE_CONFIG
 export RUN_DIR
 # Pool staged by dependency job (or provided); refuse GPU-job re-fetch.
 # Do not auto-pass --fresh: empty scratch starts clean; leftover local ckpts

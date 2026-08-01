@@ -31,7 +31,7 @@ def _plan(save_folder) -> dict:
         "olmo_revision": "99e0009ed67679c90da970ec5ba439c9459e3757",
         "tokenizer": "allenai/OLMo-2-0425-1B",
         "sequence_length": 2048,
-        "max_tokens": 10_000_000_000,
+        "max_tokens": 9_900_000_000,
         "global_batch_size": 4_194_304,
         "lr": 4.0e-4,
         "warmup_steps": 24,
@@ -74,6 +74,18 @@ def test_matching_resume_is_allowed(tmp_path):
     _prepare_run_dir(plan, resume=True)  # must not raise
 
 
+def test_legacy_yaml_fingerprint_is_out_of_contract(tmp_path):
+    save = tmp_path / "rho_excess"
+    plan = _plan(save)
+    _launch_fresh(plan)
+    path = save / "run_fingerprint.json"
+    prior = json.loads(path.read_text(encoding="utf-8"))
+    prior.pop("fingerprint_schema_version")
+    path.write_text(json.dumps(prior), encoding="utf-8")
+    with pytest.raises(SystemExit, match="Refusing to resume"):
+        _prepare_run_dir(plan, resume=True)
+
+
 def test_resume_allows_max_tokens_extension(tmp_path):
     """A finished 5B segment can continue by raising max_tokens and --resume."""
     save = tmp_path / "rho_excess"
@@ -82,11 +94,11 @@ def test_resume_allows_max_tokens_extension(tmp_path):
     _launch_fresh(plan)
 
     extended = copy.deepcopy(plan)
-    extended["max_tokens"] = 10_000_000_000
+    extended["max_tokens"] = 9_900_000_000
     _prepare_run_dir(extended, resume=True)
     _commit_run_fingerprint(extended, resume=True)
     prior = json.loads((save / "run_fingerprint.json").read_text(encoding="utf-8"))
-    assert prior["max_tokens"] == 10_000_000_000
+    assert prior["max_tokens"] == 9_900_000_000
 
 
 def test_resume_refuses_max_tokens_decrease(tmp_path):
@@ -216,16 +228,16 @@ def test_ensure_resume_artifacts_skips_when_fingerprint_local(tmp_path, monkeypa
         raise AssertionError("should not fetch when local fingerprint exists")
 
     monkeypatch.setattr(
-        "token_selection.olmo_ext.s3_export.fetch_arm_method_checkpoints",
+        "token_selection.olmo_ext.wandb_logging.restore_checkpoint_artifact",
         _boom,
     )
-    cfg = {"arm": "rho-1", "s3": {"prefix": "token-sel/rho-1", "checkpoint_bucket": "edullm-checkpoints"}}
+    cfg = {"arm": "rho-1", "s3": {"dataset_bucket": "edullm-data"}}
     plan["metrics_dir"] = str(tmp_path / "metrics" / "rho_excess")
     _ensure_resume_artifacts(plan, cfg, "rho_excess")
     assert called["n"] == 0
 
 
-def test_ensure_resume_artifacts_fetches_from_s3_when_empty(tmp_path, monkeypatch):
+def test_ensure_resume_artifacts_restores_from_wandb_when_empty(tmp_path, monkeypatch):
     from token_selection.scripts.train_olmo_template import _ensure_resume_artifacts
 
     save = tmp_path / "rho_excess"
@@ -233,43 +245,30 @@ def test_ensure_resume_artifacts_fetches_from_s3_when_empty(tmp_path, monkeypatc
     plan["metrics_dir"] = str(tmp_path / "metrics" / "rho_excess")
     cfg = {
         "arm": "rho-1",
-        "s3": {
-            "prefix": "token-sel/rho-1",
-            "checkpoint_bucket": "edullm-checkpoints",
-        },
+        "s3": {"dataset_bucket": "edullm-data"},
     }
-    fetches = {"ckpt": 0, "metrics": 0}
+    restores = {"ckpt": 0}
 
-    def _fetch_ckpt(arm, local, *, method=None, enabled=None, raise_on_error=True):
-        fetches["ckpt"] += 1
-        assert arm == "rho-1"
-        assert method == "rho_excess"
+    def _restore(ref, local):
+        restores["ckpt"] += 1
+        assert ref.endswith("rho-excess-10b-scratch-v1-checkpoint:latest")
         Path(local).mkdir(parents=True, exist_ok=True)
         (Path(local) / "run_fingerprint.json").write_text(
             json.dumps(_run_fingerprint(plan)), encoding="utf-8"
         )
         (Path(local) / "step125").mkdir()
-        return True
-
-    def _fetch_metrics(*_a, **_k):
-        fetches["metrics"] += 1
-        return True
+        return Path(local) / "step125"
 
     monkeypatch.setattr(
-        "token_selection.olmo_ext.s3_export.fetch_arm_method_checkpoints",
-        _fetch_ckpt,
-    )
-    monkeypatch.setattr(
-        "token_selection.olmo_ext.s3_export.fetch_arm_method_metrics",
-        _fetch_metrics,
+        "token_selection.olmo_ext.wandb_logging.restore_checkpoint_artifact",
+        _restore,
     )
     _ensure_resume_artifacts(plan, cfg, "rho_excess")
-    assert fetches["ckpt"] == 1
-    assert fetches["metrics"] == 1
+    assert restores["ckpt"] == 1
     assert (save / "run_fingerprint.json").is_file()
 
 
-def test_ensure_resume_artifacts_fails_closed_without_remote_fingerprint(
+def test_ensure_resume_artifacts_fails_closed_without_artifact_fingerprint(
     tmp_path, monkeypatch
 ):
     from token_selection.scripts.train_olmo_template import _ensure_resume_artifacts
@@ -279,22 +278,18 @@ def test_ensure_resume_artifacts_fails_closed_without_remote_fingerprint(
     plan["metrics_dir"] = str(tmp_path / "metrics" / "rho_excess")
     cfg = {
         "arm": "rho-1",
-        "s3": {"prefix": "token-sel/rho-1", "checkpoint_bucket": "edullm-checkpoints"},
+        "s3": {"dataset_bucket": "edullm-data"},
     }
 
-    def _fetch_empty(arm, local, *, method=None, enabled=None, raise_on_error=True):
+    def _restore_empty(_ref, local):
         Path(local).mkdir(parents=True, exist_ok=True)
-        return True
+        return Path(local) / "step125"
 
     monkeypatch.setattr(
-        "token_selection.olmo_ext.s3_export.fetch_arm_method_checkpoints",
-        _fetch_empty,
+        "token_selection.olmo_ext.wandb_logging.restore_checkpoint_artifact",
+        _restore_empty,
     )
-    monkeypatch.setattr(
-        "token_selection.olmo_ext.s3_export.fetch_arm_method_metrics",
-        lambda *_a, **_k: True,
-    )
-    with pytest.raises(SystemExit, match="Ephemeral scratch"):
+    with pytest.raises(SystemExit, match="out of contract"):
         _ensure_resume_artifacts(plan, cfg, "rho_excess")
 
 
@@ -309,8 +304,6 @@ def _experiment_cfg() -> dict:
         "arm": "rho-1",
         "s3": {
             "dataset_bucket": "edullm-data",
-            "checkpoint_bucket": "edullm-checkpoints",
-            "prefix": "token-sel/rho-1",
         },
         "data": {
             "dataset_id": "pretrain/regmix-10b",

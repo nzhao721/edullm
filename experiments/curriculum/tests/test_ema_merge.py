@@ -26,13 +26,27 @@ def test_ema_steps_match_plan():
     assert DEFAULT_ALPHA == 0.8
 
 
-def test_task_loss_default_on():
+def test_task_loss_default_on(monkeypatch):
+    monkeypatch.delenv("WANDB_MODE", raising=False)
     args = parse_args(["--checkpoints-root", "/tmp/ckpts", "--arm-id", "control"])
     assert args.task_loss is True
+    assert args.wandb_mode == "online"
+    assert args.allow_local_only is False
     args_off = parse_args(
         ["--checkpoints-root", "/tmp/ckpts", "--arm-id", "control", "--no-task-loss"]
     )
     assert args_off.task_loss is False
+
+
+def test_ema_checkpoint_publication_is_wandb_only_and_awaited():
+    source = (_ROOT / "ema_merge_checkpoints.py").read_text(encoding="utf-8")
+    assert "def upload_ema_artifacts" in source
+    assert "checkpoint.add_dir" in source
+    assert "wait()" in source
+    assert "WANDB_API_KEY" in source
+    assert "--allow-local-only" in source
+    assert "sync_to_s3" not in source
+    assert "edullm-checkpoints" not in source
 
 
 def test_closed_form_weights_four_checkpoints():

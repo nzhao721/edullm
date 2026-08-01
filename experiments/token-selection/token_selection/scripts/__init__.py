@@ -28,7 +28,6 @@ __all__ = [
     "resolve_train_dataset_id",
     "resolve_train_dataset_version",
     "resolve_train_split",
-    "s3_uri",
 ]
 
 
@@ -75,28 +74,3 @@ def derive_steps(cfg: Dict[str, Any]) -> Tuple[int, int]:
             t0_steps = max(1, int(round(total_steps * t0_frac)))
     t0_steps = min(t0_steps, total_steps)
     return total_steps, t0_steps
-
-
-def s3_uri(
-    cfg: Dict[str, Any],
-    *parts: str,
-    bucket_key: str = "checkpoint_bucket",
-    prefix_key: str = "prefix",
-) -> str:
-    """Build an S3 URI for per-run outputs (metrics / checkpoints).
-
-    Defaults to ``checkpoint_bucket`` so callers never accidentally target the
-    locked ``edullm-data`` bucket. Tokenized training inputs are *not* composed
-    here — use ``resolve_tokens_s3`` / ``resolve_train_dataset``.
-    """
-    s3 = cfg["s3"]
-    bucket = s3.get(bucket_key) or s3.get("checkpoint_bucket") or s3.get("dataset_bucket")
-    if not bucket:
-        raise ValueError(
-            f"s3.{bucket_key} (or s3.checkpoint_bucket) is required to build output URIs"
-        )
-    prefix = str(s3.get(prefix_key) or s3["prefix"]).rstrip("/")
-    rest = "/".join(p.strip("/") for p in parts if p)
-    if rest:
-        return f"s3://{bucket}/{prefix}/{rest}"
-    return f"s3://{bucket}/{prefix}"
