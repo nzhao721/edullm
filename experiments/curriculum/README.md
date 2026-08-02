@@ -18,16 +18,16 @@ Instance type, GPU model, and GPU count are **not chosen in this plan** — scri
 - `--device-batch-size` and grad accumulation are CLI parameters; derive steps from global batch `4_194_304` and discovered `world_size`
 - Curriculum index build is a CPU job; runnable locally, on AWS, or any host with S3 access — not tied to training hardware
 
-Label **generation** lives in **`datasets/regmix/`**; publish token corpora / curriculum orders via the `edullm-data` package. Training code in `experiments/curriculum/` consumes published `edullm-data` artifacts only (legacy dataset buckets are refused).
+Label **generation** lives in `datasets/regmix/`; publish token corpora / curriculum orders via the `edullm-data` package. Training code in `experiments/curriculum/` consumes published `edullm-data` artifacts only (legacy dataset buckets are refused).
 
 ## Training contract
 
-Fork [`experiments/token-selection/control/train_ce_regmix_olmo_370m.py`](experiments/token-selection/control/train_ce_regmix_olmo_370m.py) and reuse shared helpers from [`experiments/token-selection/token_selection/olmo_ext/`](experiments/token-selection/token_selection/olmo_ext/) for the checkpoint ladder and task-loss wiring. Curriculum artifact publication is W&B-only.
+Fork `[experiments/token-selection/control/train_ce_regmix_olmo_370m.py](experiments/token-selection/control/train_ce_regmix_olmo_370m.py)` and reuse shared helpers from `[experiments/token-selection/token_selection/olmo_ext/](experiments/token-selection/token_selection/olmo_ext/)` for the checkpoint ladder and task-loss wiring. Curriculum artifact publication is W&B-only.
 
 ### Architecture
 
 - **Config factory**: `TransformerConfig.olmo2_370M` (not `olmo3_370M` / SWA)
-- **`d_model` / layers / heads**: 1024 / 16 / 16
+- `d_model` **/ layers / heads**: 1024 / 16 / 16
 - **Block**: `reordered_norm`
 - **MLP**: gated SiLU FFN, hidden 4096
 - **Attention**: full (no sliding window); QK-RMSNorm; RoPE θ = 500_000
@@ -36,13 +36,13 @@ Fork [`experiments/token-selection/control/train_ce_regmix_olmo_370m.py`](experi
 - **Global batch tokens**: `4_194_304`
 - **Rank microbatch tokens**: `65_536` default (32 seqs at seq 2048); override via `--device-batch-size`
 - **Optim**: SkipStepAdamW
-- **`z_loss_multiplier`**: `1e-5`
-- **`max_grad_norm`**: 1.0
+- `z_loss_multiplier`: `1e-5`
+- `max_grad_norm`: 1.0
 - **Compile**: `compile_model=True`
 - **Init**: from scratch
 - **DP**: HSDP bf16 train module
 
-Reference implementation: [`experiments/token-selection/reference/train_olmo3_370m_refhq.py`](experiments/token-selection/reference/train_olmo3_370m_refhq.py).
+Reference implementation: `[experiments/token-selection/reference/train_olmo3_370m_refhq.py](experiments/token-selection/reference/train_olmo3_370m_refhq.py)`.
 
 ### Hyperparameters
 
@@ -57,7 +57,7 @@ Control arm reads flat token memmaps from `pretrain/regmix-10b`; curriculum arms
 
 ### Checkpoint saving
 
-Ladder via `permanent_checkpoint_steps()` from [`token_selection.olmo_ext.checkpoint_ladder`](experiments/token-selection/token_selection/olmo_ext/checkpoint_ladder.py):
+Ladder via `permanent_checkpoint_steps()` from `[token_selection.olmo_ext.checkpoint_ladder](experiments/token-selection/token_selection/olmo_ext/checkpoint_ladder.py)`:
 
 - Step **0** (pre-train snapshot)
 - Every **125** steps: 125, 250, …, `125 * floor(total_steps / 125)`
@@ -67,6 +67,8 @@ Ladder via `permanent_checkpoint_steps()` from [`token_selection.olmo_ext.checkp
 - Checkpoint format `model_and_optim` / `full_state_dict_v1`
 - After each permanent save: synchronous, fail-closed W&B model artifact upload; progress/eval/metrics snapshots are W&B run-state artifacts
 
+
+
 ### Task-loss eval
 
 - Metric: `task_loss_bpb` = `-log2 p(gold continuation | context) / utf8_bytes(continuation)`
@@ -74,7 +76,7 @@ Ladder via `permanent_checkpoint_steps()` from [`token_selection.olmo_ext.checkp
 - Trigger synchronously on every permanent checkpoint save (step 0 + each ladder step + final)
 - All ranks pause, release the HSDP train module, evaluate in lockstep through the shared `pause_eval_reload_distributed` helper, then rebuild/reload the saved checkpoint
 - Production is strict and requires `LADDER_BASE_CONFIG`; local smoke may explicitly use `--no-task-loss-on-save`
-- Evaluator script: [`scripts/farmshare/task_loss/eval_task_loss_olmo_core.py`](scripts/farmshare/task_loss/eval_task_loss_olmo_core.py) (repo path only; runs on the training/eval worker)
+- Evaluator script: `[scripts/farmshare/task_loss/eval_task_loss_olmo_core.py](scripts/farmshare/task_loss/eval_task_loss_olmo_core.py)` (repo path only; runs on the training/eval worker)
 - Outputs: job-local `$PROGRESS_DIR/task_loss_results/step{N}_task_loss.json` → W&B eval and run-state artifacts
 
 Post-hoc EMA merge runs the 20-label eval on the merged artifact in addition to per-checkpoint evals.
@@ -86,6 +88,8 @@ Post-hoc EMA merge runs the 20-label eval on the merged artifact in addition to 
 - Global batch `4_194_304`; per-rank microbatch / grad-accum from `world_size` and `--device-batch-size`; fail-fast if not divisible
 - Eval scripts: 1+ GPU compatible on the same worker policy as training
 
+
+
 ### Artifact layout
 
 Runtime scratch contains `checkpoints/`, `progress/`, `metrics/`, and
@@ -95,6 +99,8 @@ run-state artifacts containing progress, task-loss, and train-metric files.
 Production calls `Artifact.wait()` before advancing past each checkpoint.
 
 ## Local repo layout (`C:\alpha_ai\edullm`)
+
+
 
 ### `datasets/regmix/` — labeling and publish inputs
 
@@ -111,6 +117,8 @@ datasets/regmix/
 ├── finalize_regmix_labels_upload.py
 └── submit_regmix_labels_upload.sh
 ```
+
+
 
 ### `experiments/curriculum/` — training experiment code
 
@@ -133,23 +141,39 @@ experiments/curriculum/
 
 **Dependencies** (existing code, imported — not duplicated):
 
-- [`experiments/token-selection/control/train_ce_regmix_olmo_370m.py`](experiments/token-selection/control/train_ce_regmix_olmo_370m.py) — trainer fork source
-- [`experiments/token-selection/token_selection/olmo_ext/`](experiments/token-selection/token_selection/olmo_ext/) — checkpoint ladder and task_loss
-- [`datasets/regmix/`](datasets/regmix/) — labeling (no duplicate upload scripts under `experiments/curriculum/`)
+- `[experiments/token-selection/control/train_ce_regmix_olmo_370m.py](experiments/token-selection/control/train_ce_regmix_olmo_370m.py)` — trainer fork source
+- `[experiments/token-selection/token_selection/olmo_ext/](experiments/token-selection/token_selection/olmo_ext/)` — checkpoint ladder and task_loss
+- `[datasets/regmix/](datasets/regmix/)` — labeling (no duplicate upload scripts under `experiments/curriculum/`)
 
 Published training inputs are `edullm-data` dataset IDs (`pretrain/regmix-10b`, `curriculum/regmix-370m`), not paths under a legacy datasets bucket.
 
 ## Data on S3 (`edullm-data`)
 
-- **`pretrain/regmix-10b`**: tokenized parent pool (control + curriculum arms)
-- **`curriculum/regmix-370m`**: four `token-order/v1` groups (`compression`, `flesch`, `mtld`, `learnability`) over `pretrain/regmix-10b` (fail closed if missing from `_catalog/`)
+- `pretrain/regmix-10b`: tokenized parent pool (control + curriculum arms)
+- `curriculum/regmix-370m`: four `token-order/v1` groups (`compression`, `flesch`, `mtld`, `learnability`) over `pretrain/regmix-10b` (fail closed if missing from `_catalog/`)
 
-| `--difficulty-metric` | order group |
-|-----------------------|-------------|
-| `compression_ratio`   | `compression` |
-| `flesch`              | `flesch` |
-| `mtld`                | `mtld` |
+
+| `--difficulty-metric` | order group    |
+| --------------------- | -------------- |
+| `compression_ratio`   | `compression`  |
+| `flesch`              | `flesch`       |
+| `mtld`                | `mtld`         |
 | `learnability`        | `learnability` |
+
+### Metric correlations (RegMix labels)
+
+Pairwise linear regression on the inner-joined RegMix label indexes (`labels/` + `lm_labels/labels/`; **4,748,990** documents). Learnability column is `learnability_late_minus_early_avg_nll` (late − early avg NLL; lower = easier). Reproduce: `scripts/farmshare/regmix_metric_correlations.py`.
+
+| Pair | Pearson *r* | R² |
+| --- | ---: | ---: |
+| compression_ratio ~ learnability | −0.500 | 0.250 |
+| flesch ~ learnability | +0.095 | 0.009 |
+| compression_ratio ~ flesch | −0.066 | 0.004 |
+| compression_ratio ~ mtld | −0.033 | 0.001 |
+| flesch ~ mtld | −0.031 | 0.001 |
+| mtld ~ learnability | +0.029 | 0.001 |
+
+The three heuristic metrics (compression, Flesch, MTLD) are nearly independent on this corpus. Compression ratio and learnability share the most signal (~25% variance explained) but are far from redundant.
 
 Trainers resolve `curriculum/regmix-370m` with `dataset_paths(..., group=<name>, split=train)`. The group defaults from `--difficulty-metric`; override with `--curriculum-order-group` when needed. The order group must bind the exact staged parent dataset version and `manifest_sha256`; a same-length order for another parent version is rejected.
 
@@ -170,10 +194,14 @@ Production order vectors are complete permutations of the exact chunks exposed b
 
 ## Phases
 
+
+
 ### Phase 0: Label + publish (`datasets/regmix/` → `edullm-data`)
 
 - Label runs produce `labels/` and `lm_labels/`
 - Publish validated corpora / curriculum orders into `s3://edullm-data/` via the `edullm-data` package
+
+
 
 ### Phase 1: Build curriculum index (`experiments/curriculum/`)
 
@@ -182,9 +210,13 @@ Production order vectors are complete permutations of the exact chunks exposed b
 - `datasets/regmix/submit_publish_regmix_curriculum_edullm_data.sh` — FarmShare Slurm publish (after index build)
 - CPU job; local staging only by default; publish resulting token-order dataset into `edullm-data`
 
+
+
 ### Phase 2: Pacing library
 
 - `experiments/curriculum/curriculum_pacing.py` + `tests/test_pacing.py`
+
+
 
 ### Phase 3: Shared trainer
 
@@ -192,11 +224,15 @@ Production order vectors are complete permutations of the exact chunks exposed b
 - Checkpoint ladder via `permanent_checkpoint_steps()`; fail-closed W&B checkpoint artifacts; task loss via shared `pause_eval_reload_distributed`
 - `experiments/curriculum/tests/test_training_defaults.py` — ladder `{0,125,…,2250,2384}` omits 2375; GBS/microbatch defaults; edullm-data binding
 
+
+
 ### Phase 4: Post-hoc EMA
 
 - `experiments/curriculum/ema_merge_checkpoints.py` — merge steps 2000/2125/2250/2384, α=0.8
 - Use checkpoints still on job scratch or download the required W&B model artifact versions into a scratch work dir first
 - Production uploads the merged checkpoint and EMA task-loss result to W&B and awaits both artifact commits; `--allow-local-only` is for local smoke only
+
+
 
 ### Phase 5: Launch matrix
 
@@ -204,30 +240,34 @@ Production order vectors are complete permutations of the exact chunks exposed b
 - `experiments/curriculum/launch/submit_matrix.sh` — thin wrapper for job submission (service chosen at launch time)
 - Arm matrix: see [Arm matrix (17 arms)](#arm-matrix-17-arms) below
 
+
+
 ### Phase 6: Smoke test → full runs
 
 - Short smoke (single rank) for control + one curriculum arm on empty scratch
 - Full 17-arm matrix after `pretrain/regmix-10b` and curriculum orders are published on `edullm-data`
 
+
+
 ## Arm matrix (17 arms)
 
-- **`control`**: pacing `control`; difficulty metric —
-- **`linear10-cr`**: pacing `linear_n10`; difficulty metric `compression_ratio`
-- **`linear10-flesch`**: pacing `linear_n10`; difficulty metric `flesch`
-- **`linear10-mtld`**: pacing `linear_n10`; difficulty metric `mtld`
-- **`linear10-learn`**: pacing `linear_n10`; difficulty metric `learnability`
-- **`expand-cr`**: pacing `expanding_25_1000`; difficulty metric `compression_ratio`
-- **`expand-flesch`**: pacing `expanding_25_1000`; difficulty metric `flesch`
-- **`expand-mtld`**: pacing `expanding_25_1000`; difficulty metric `mtld`
-- **`expand-learn`**: pacing `expanding_25_1000`; difficulty metric `learnability`
-- **`warmup-cr`**: pacing `warmup_1000`; difficulty metric `compression_ratio`
-- **`warmup-flesch`**: pacing `warmup_1000`; difficulty metric `flesch`
-- **`warmup-mtld`**: pacing `warmup_1000`; difficulty metric `mtld`
-- **`warmup-learn`**: pacing `warmup_1000`; difficulty metric `learnability`
-- **`interleave-cr`**: pacing `interleave_i10_linear`; difficulty metric `compression_ratio`
-- **`interleave-flesch`**: pacing `interleave_i10_linear`; difficulty metric `flesch`
-- **`interleave-mtld`**: pacing `interleave_i10_linear`; difficulty metric `mtld`
-- **`interleave-learn`**: pacing `interleave_i10_linear`; difficulty metric `learnability`
+- `control`: pacing `control`; difficulty metric —
+- `linear10-cr`: pacing `linear_n10`; difficulty metric `compression_ratio`
+- `linear10-flesch`: pacing `linear_n10`; difficulty metric `flesch`
+- `linear10-mtld`: pacing `linear_n10`; difficulty metric `mtld`
+- `linear10-learn`: pacing `linear_n10`; difficulty metric `learnability`
+- `expand-cr`: pacing `expanding_25_1000`; difficulty metric `compression_ratio`
+- `expand-flesch`: pacing `expanding_25_1000`; difficulty metric `flesch`
+- `expand-mtld`: pacing `expanding_25_1000`; difficulty metric `mtld`
+- `expand-learn`: pacing `expanding_25_1000`; difficulty metric `learnability`
+- `warmup-cr`: pacing `warmup_1000`; difficulty metric `compression_ratio`
+- `warmup-flesch`: pacing `warmup_1000`; difficulty metric `flesch`
+- `warmup-mtld`: pacing `warmup_1000`; difficulty metric `mtld`
+- `warmup-learn`: pacing `warmup_1000`; difficulty metric `learnability`
+- `interleave-cr`: pacing `interleave_i10_linear`; difficulty metric `compression_ratio`
+- `interleave-flesch`: pacing `interleave_i10_linear`; difficulty metric `flesch`
+- `interleave-mtld`: pacing `interleave_i10_linear`; difficulty metric `mtld`
+- `interleave-learn`: pacing `interleave_i10_linear`; difficulty metric `learnability`
 
 Print the matrix: `bash experiments/curriculum/launch/submit_matrix.sh --print-only`
 
@@ -265,13 +305,17 @@ python experiments/curriculum/ema_merge_checkpoints.py \
   --arm-id linear10-cr
 ```
 
+
+
 ### W&B naming
 
-| Field | Default |
-| --- | --- |
-| Project | `curriculum` |
-| Entity | unset (W&B account default; same as SmolLM — set `WANDB_ENTITY` only if needed) |
-| Run name | `ARM_ID`, or `ARM_ID-SLURM_JOB_ID` when Slurm sets `SLURM_JOB_ID` |
+
+| Field    | Default                                                                         |
+| -------- | ------------------------------------------------------------------------------- |
+| Project  | `curriculum`                                                                    |
+| Entity   | unset (W&B account default; same as SmolLM — set `WANDB_ENTITY` only if needed) |
+| Run name | `ARM_ID`, or `ARM_ID-SLURM_JOB_ID` when Slurm sets `SLURM_JOB_ID`               |
+
 
 Logged: `train/loss`, `train/lr`, throughput; task-loss eval metrics + artifacts; checkpoint artifacts on each permanent ladder save.
 
@@ -284,3 +328,4 @@ Logged: `train/loss`, `train/lr`, throughput; task-loss eval metrics + artifacts
 5. `train_curriculum_regmix_370m.py` (ephemeral scratch + fail-closed W&B artifacts)
 6. `ema_merge_checkpoints.py` + launch scripts
 7. Smoke → full 17-arm matrix
+

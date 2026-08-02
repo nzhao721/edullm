@@ -36,6 +36,17 @@ source "${VENV}/bin/activate"
 export PYTHONUNBUFFERED=1
 export WANDB_DISABLED=1
 export WANDB_MODE=disabled
+# Optional HF auth for OLMES / tokenizer downloads (MixLaw-parity evals).
+if [[ -f "${RUN_DIR}/hf-session.env" ]]; then
+  # shellcheck disable=SC1091
+  source "${RUN_DIR}/hf-session.env"
+fi
+if [[ -n "${HF_TOKEN:-}${HUGGING_FACE_HUB_TOKEN:-}" ]]; then
+  export HF_TOKEN="${HF_TOKEN:-${HUGGING_FACE_HUB_TOKEN}}"
+  export HUGGING_FACE_HUB_TOKEN="${HUGGING_FACE_HUB_TOKEN:-${HF_TOKEN}}"
+  mkdir -p "${HOME}/.cache/huggingface"
+  printf '%s' "${HF_TOKEN}" > "${HOME}/.cache/huggingface/token"
+fi
 export HF_HOME="${HF_HOME:-${RUN_DIR}/hf_cache}"
 export OLMES_DATA_DIR="${OLMES_DATA_DIR:-${RUN_DIR}/olmes_cache}"
 mkdir -p "${HF_HOME}" "${OLMES_DATA_DIR}"
@@ -48,9 +59,38 @@ DEVICE_BS="${DEVICE_EVAL_BATCH_SIZE:-4}"
 ckpt="${CHECKPOINT_DIR}"
 out="${RUN_DIR}/eval/${MODEL_NAME}/step${STEP}_task_loss.json"
 
+# Skip only when the existing JSON is a complete 20-label MixLaw-comparable suite.
 if [[ -f "${out}" ]]; then
-  echo "SKIP ${MODEL_NAME} step${STEP} (exists ${out})"
-  exit 0
+  if python - "${out}" <<'PY'
+import json, sys
+from pathlib import Path
+RAW = {
+    "arc_challenge_val_rc_5shot_bpb","arc_challenge_test_rc_5shot_bpb",
+    "arc_easy_val_rc_5shot_bpb","arc_easy_test_rc_5shot_bpb",
+    "boolq_val_rc_5shot_bpb","csqa_val_rc_5shot_bpb","hellaswag_val_rc_5shot_bpb",
+    "openbookqa_val_rc_5shot_bpb","openbookqa_test_rc_5shot_bpb","piqa_val_rc_5shot_bpb",
+    "socialiqa_val_rc_5shot_bpb","winogrande_val_rc_5shot_bpb",
+    "mmlu_stem_val_rc_5shot_bpb","mmlu_stem_test_rc_5shot_bpb",
+    "mmlu_humanities_val_rc_5shot_bpb","mmlu_humanities_test_rc_5shot_bpb",
+    "mmlu_social_sciences_val_rc_5shot_bpb","mmlu_social_sciences_test_rc_5shot_bpb",
+    "mmlu_other_val_rc_5shot_bpb","mmlu_other_test_rc_5shot_bpb",
+}
+d = json.loads(Path(sys.argv[1]).read_text())
+vals = {}
+for field in ("labels", "task_loss_bpb"):
+    src = d.get(field) or {}
+    if isinstance(src, dict):
+        for k, v in src.items():
+            if isinstance(v, (int, float)) and not isinstance(v, bool):
+                vals[str(k)] = float(v)
+sys.exit(0 if RAW.issubset(vals) else 1)
+PY
+  then
+    echo "SKIP ${MODEL_NAME} step${STEP} (complete 20-label suite exists ${out})"
+    exit 0
+  fi
+  echo "RE-EVAL ${MODEL_NAME} step${STEP} (incomplete/legacy suite at ${out})"
+  rm -f "${out}"
 fi
 
 echo "model=${MODEL_NAME} step=${STEP} format=${CKPT_FORMAT} ckpt=${ckpt}"

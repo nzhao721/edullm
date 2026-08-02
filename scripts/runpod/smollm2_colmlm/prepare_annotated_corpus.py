@@ -118,7 +118,11 @@ class ShardWriter:
         self.shard_index = 0
         self.shards: list[PackedShard] = []
 
-    def add_document(self, token_ids: list[int], mask: np.ndarray, eos_id: int) -> None:
+    @property
+    def packed_tokens(self) -> int:
+        return sum(s.tokens_count for s in self.shards) + len(self.pending_tokens)
+
+    def add_document(self, token_ids: list[int], mask: np.ndarray, eos_id: int) -> bool:
         if len(token_ids) != len(mask):
             raise ValueError("token/mask length mismatch")
         self.pending_tokens.extend(int(v) for v in token_ids)
@@ -133,6 +137,7 @@ class ShardWriter:
             self.rows += 1
             if self.rows == self.sequences_per_shard:
                 self.flush()
+        return True
 
     def flush(self) -> None:
         if self.rows == 0:
@@ -194,6 +199,7 @@ def prepare(args: argparse.Namespace) -> dict:
         sequences_per_shard=args.sequences_per_shard,
     )
     docs = facts = input_chars = 0
+    done = False
     for file_index, path in enumerate(files, 1):
         file_docs = 0
         for batch in _batched(_iter_jsonl_zst(path), args.tokenizer_batch_size):
@@ -219,10 +225,22 @@ def prepare(args: argparse.Namespace) -> dict:
                 encoded["input_ids"], encoded["offset_mapping"], span_batches
             ):
                 writer.add_document(ids, token_fact_mask(offsets, spans), eos_id)
+                if args.max_tokens and writer.packed_tokens >= args.max_tokens:
+                    done = True
+                    break
+            if done:
+                break
         print(
             f"prepared {file_index}/{len(files)} {path.name}: {file_docs:,} docs",
             flush=True,
         )
+        if done:
+            print(
+                f"reached corpus token cap {args.max_tokens:,} "
+                f"({writer.packed_tokens:,} packed tokens)",
+                flush=True,
+            )
+            break
     writer.flush()
 
     total_tokens = sum(s.tokens_count for s in writer.shards)
@@ -240,6 +258,7 @@ def prepare(args: argparse.Namespace) -> dict:
         "masked_targets": masked,
         "masked_fraction": masked / total_tokens if total_tokens else 0.0,
         "dropped_tail_tokens": len(writer.pending_tokens),
+        "slice_max_tokens": args.max_tokens,
         "shards": [asdict(s) for s in writer.shards],
     }
     tmp = ready.with_suffix(".tmp")
@@ -257,6 +276,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--expected-shards", type=int, default=19)
     parser.add_argument("--tokenizer-batch-size", type=int, default=64)
     parser.add_argument("--sequences-per-shard", type=int, default=4096)
+    parser.add_argument(
+        "--max-tokens",
+        type=int,
+        default=None,
+        help="Stop packing after this many 2048-token training tokens (sequence-aligned).",
+    )
     parser.add_argument("--overwrite", action="store_true")
     return parser.parse_args()
 

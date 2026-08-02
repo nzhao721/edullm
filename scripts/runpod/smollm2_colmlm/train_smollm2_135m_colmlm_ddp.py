@@ -31,6 +31,15 @@ try:
 except ImportError:  # pragma: no cover
     wandb = None
 
+from eval_arc_task_loss_smollm import run_suite
+
+EVAL_TASKS = ("HellaSwag", "PIQA", "OpenBookQA")
+REQUIRED_EVAL_BPB_LABELS = (
+    "hellaswag_val_rc_5shot_bpb",
+    "piqa_val_rc_5shot_bpb",
+    "openbookqa_val_rc_5shot_bpb",
+)
+
 
 class FactMaskedDataset(Dataset):
     def __init__(self, data_dir: Path):
@@ -85,6 +94,53 @@ def world_size() -> int:
     return dist.get_world_size() if dist.is_initialized() else 1
 
 
+def unwrap_model(model: torch.nn.Module) -> torch.nn.Module:
+    """Remove torch.compile and DDP wrappers for save/load operations."""
+    while True:
+        if hasattr(model, "_orig_mod"):
+            model = model._orig_mod
+            continue
+        if isinstance(model, DDP):
+            model = model.module
+            continue
+        return model
+
+
+def resolve_resume_geometry(
+    state: dict,
+    *,
+    world_size: int,
+    per_device_batch_size: int,
+    seq_len: int,
+) -> str:
+    """Return how to resume: ``exact`` or ``same_global_batch``.
+
+    Cross-GPU-count resumes are allowed only when tokens/step stay identical
+    (e.g. 4x40 -> 8x20). Optimizer Adam state is parameter-shaped and still
+    loads; the LR schedule is rebuilt to the resumed step.
+    """
+    old_seq = int(state["seq_len"])
+    if old_seq != seq_len:
+        raise ValueError(
+            f"refusing resume with changed seq_len: checkpoint={old_seq} current={seq_len}"
+        )
+    old_world = int(state["world_size"])
+    old_batch = int(state["per_device_batch_size"])
+    old_global = int(
+        state.get("global_batch_tokens", old_world * old_batch * old_seq)
+    )
+    new_global = world_size * per_device_batch_size * seq_len
+    if old_world == world_size and old_batch == per_device_batch_size:
+        return "exact"
+    if old_global != new_global:
+        raise ValueError(
+            "refusing resume with changed global batch tokens: "
+            f"checkpoint={old_global} (world={old_world} batch={old_batch}) "
+            f"current={new_global} (world={world_size} batch={per_device_batch_size})"
+        )
+    return "same_global_batch"
+
+
 def save_checkpoint(
     output_dir: Path,
     *,
@@ -97,17 +153,19 @@ def save_checkpoint(
 ) -> Path:
     checkpoint = output_dir / "checkpoints" / f"step{step:07d}"
     checkpoint.mkdir(parents=True, exist_ok=True)
-    unwrapped = model.module if hasattr(model, "module") else model
+    unwrapped = unwrap_model(model)
     unwrapped.save_pretrained(checkpoint, safe_serialization=True)
+    size = world_size()
     torch.save(
         {
             "step": step,
             "tokens_seen": tokens_seen,
             "optimizer": optimizer.state_dict(),
             "scheduler": scheduler.state_dict(),
-            "world_size": world_size(),
+            "world_size": size,
             "per_device_batch_size": args.per_device_batch_size,
             "seq_len": args.seq_len,
+            "global_batch_tokens": args.per_device_batch_size * size * args.seq_len,
         },
         checkpoint / "trainer_state.pt",
     )
@@ -124,6 +182,112 @@ def prune_local_checkpoints(output_dir: Path, keep: int) -> None:
         shutil.rmtree(checkpoint)
 
 
+def _is_kept_eval_metric(key: str) -> bool:
+    k = key.lower()
+    if "arc_easy" in k or "arc_challenge" in k or "/arc_" in k:
+        return False
+    return True
+
+
+def wandb_log_eval(
+    run: object | None,
+    payload: dict,
+    *,
+    step: int,
+    eval_path: Path,
+    log_artifacts: bool = True,
+) -> None:
+    if run is None:
+        return
+    metrics: dict[str, float] = {}
+    for k, v in (payload.get("labels") or {}).items():
+        mk = f"eval/bpb/{k}"
+        if _is_kept_eval_metric(mk):
+            metrics[mk] = float(v)
+    for k, v in (payload.get("accuracy_labels") or {}).items():
+        mk = f"eval/acc/{k}"
+        if _is_kept_eval_metric(mk):
+            metrics[mk] = float(v)
+    for k, v in (payload.get("task_families") or {}).items():
+        mk = f"eval/family_bpb/{k}"
+        if _is_kept_eval_metric(mk):
+            metrics[mk] = float(v)
+    for k, v in (payload.get("accuracy_families") or {}).items():
+        mk = f"eval/family_acc/{k}"
+        if _is_kept_eval_metric(mk):
+            metrics[mk] = float(v)
+    fam_bpb = [v for k, v in metrics.items() if k.startswith("eval/family_bpb/")]
+    fam_acc = [v for k, v in metrics.items() if k.startswith("eval/family_acc/")]
+    if fam_bpb:
+        metrics["eval/macro_bpb"] = sum(fam_bpb) / len(fam_bpb)
+    if fam_acc:
+        metrics["eval/macro_acc"] = sum(fam_acc) / len(fam_acc)
+    run.log(metrics, step=step)
+    if log_artifacts:
+        art = wandb.Artifact(name=f"eval-step{step:07d}", type="eval")
+        art.add_file(str(eval_path), name=eval_path.name)
+        run.log_artifact(art)
+
+
+def eval_payload_complete(path: Path) -> bool:
+    if not path.is_file():
+        return False
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    labels = payload.get("labels") or {}
+    return all(label in labels for label in REQUIRED_EVAL_BPB_LABELS)
+
+
+def append_task_loss_curve(progress_dir: Path, step: int, payload_path: Path) -> None:
+    payload = json.loads(payload_path.read_text(encoding="utf-8"))
+    record = {
+        "step": step,
+        "task_loss_bpb": payload["labels"],
+        "accuracy": payload.get("accuracy_labels", {}),
+    }
+    path = progress_dir / "task_loss.jsonl"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    existing: list[dict] = []
+    if path.exists():
+        for line in path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            row = json.loads(line)
+            if int(row.get("step", -1)) != step:
+                existing.append(row)
+    existing.append(record)
+    path.write_text("".join(json.dumps(r) + "\n" for r in existing), encoding="utf-8")
+
+
+def run_task_eval(
+    model: torch.nn.Module,
+    tokenizer: AutoTokenizer,
+    out_path: Path,
+    run_name: str,
+    device: torch.device,
+) -> dict | None:
+    model.eval()
+    payload = run_suite(
+        model,
+        tokenizer,
+        list(EVAL_TASKS),
+        n_shot=5,
+        device=device,
+        seed=42,
+        run_name=run_name,
+        rank=rank(),
+        world_size=world_size(),
+    )
+    if rank() == 0:
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    model.train()
+    return payload if rank() == 0 else None
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--data-dir", type=Path, required=True)
@@ -131,20 +295,61 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--model-id", default="HuggingFaceTB/SmolLM2-135M")
     parser.add_argument("--run-name", default="smollm2-135m-colmlm-20b")
     parser.add_argument("--seq-len", type=int, default=2048)
-    parser.add_argument("--per-device-batch-size", type=int, default=16)
+    parser.add_argument("--per-device-batch-size", type=int, default=40)
     parser.add_argument("--num-epochs", type=int, default=40)
     parser.add_argument("--max-train-tokens", type=int, default=20_000_000_000)
     parser.add_argument("--checkpoint-every-tokens", type=int, default=250_000_000)
+    parser.add_argument("--eval-interval-tokens", type=int, default=250_000_000)
+    parser.add_argument(
+        "--no-eval",
+        action="store_true",
+        help="Disable HellaSwag/PIQA/OpenBookQA task-loss eval.",
+    )
     parser.add_argument("--keep-local-checkpoints", type=int, default=2)
     parser.add_argument("--lr", type=float, default=3e-4)
     parser.add_argument("--weight-decay", type=float, default=0.1)
     parser.add_argument("--warmup-ratio", type=float, default=0.02)
     parser.add_argument("--grad-clip", type=float, default=1.0)
     parser.add_argument("--num-workers", type=int, default=4)
+    parser.add_argument("--prefetch-factor", type=int, default=4)
+    parser.add_argument(
+        "--attn-implementation",
+        choices=("flash_attention_2", "sdpa", "eager"),
+        default="flash_attention_2",
+    )
+    parser.add_argument(
+        "--compile",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Compile the DDP-wrapped model (default: enabled).",
+    )
+    parser.add_argument(
+        "--compile-mode",
+        choices=(
+            "default",
+            "reduce-overhead",
+            "max-autotune",
+            "max-autotune-no-cudagraphs",
+        ),
+        default="max-autotune-no-cudagraphs",
+    )
+    parser.add_argument(
+        "--gradient-checkpointing",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Trade throughput for memory; disabled by default on 48+ GB GPUs.",
+    )
+    parser.add_argument(
+        "--liger",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Fuse Llama layers and linear cross-entropy (default: enabled).",
+    )
+    parser.add_argument("--ddp-bucket-cap-mb", type=int, default=100)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--log-every", type=int, default=20)
     parser.add_argument("--resume-from", type=Path)
-    parser.add_argument("--wandb-project", default="edullm-smollm2")
+    parser.add_argument("--wandb-project", default="edullm-smollm2-colmlm")
     parser.add_argument("--wandb-entity")
     parser.add_argument("--wandb-mode", choices=("online", "offline", "disabled"), default="online")
     parser.add_argument("--no-wandb-artifacts", action="store_true")
@@ -157,6 +362,9 @@ def main() -> None:
     size = int(os.environ.get("WORLD_SIZE", "1"))
     if torch.cuda.is_available():
         torch.cuda.set_device(local_rank)
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32 = True
+        torch.set_float32_matmul_precision("high")
     if size > 1:
         dist.init_process_group(backend="nccl", timeout=timedelta(hours=2))
     device = torch.device(f"cuda:{local_rank}" if torch.cuda.is_available() else "cpu")
@@ -177,6 +385,11 @@ def main() -> None:
         math.ceil(args.max_train_tokens / global_batch_tokens),
     )
     checkpoint_every = max(1, round(args.checkpoint_every_tokens / global_batch_tokens))
+    eval_every = (
+        0
+        if args.no_eval
+        else max(1, round(args.eval_interval_tokens / global_batch_tokens))
+    )
     warmup_steps = max(1, int(total_steps * args.warmup_ratio))
     run_meta = {
         "run_name": args.run_name,
@@ -190,6 +403,8 @@ def main() -> None:
         "steps_per_epoch": steps_per_epoch,
         "total_steps": total_steps,
         "max_train_tokens": args.max_train_tokens,
+        "eval_every_steps": eval_every,
+        "eval_interval_tokens": args.eval_interval_tokens,
     }
     if rank() == 0:
         (args.output_dir / "run_meta.json").write_text(
@@ -207,14 +422,42 @@ def main() -> None:
         pin_memory=True,
         drop_last=True,
         persistent_workers=args.num_workers > 0,
+        prefetch_factor=args.prefetch_factor if args.num_workers > 0 else None,
     )
 
+    if args.liger:
+        from liger_kernel.transformers import apply_liger_kernel_to_llama
+
+        apply_liger_kernel_to_llama(
+            rope=True,
+            rms_norm=True,
+            swiglu=True,
+            cross_entropy=False,
+            fused_linear_cross_entropy=True,
+        )
+
     config = AutoConfig.from_pretrained(args.model_id)
-    model = AutoModelForCausalLM.from_config(config)
-    model.gradient_checkpointing_enable()
+    config.use_cache = False
+    model = AutoModelForCausalLM.from_config(
+        config,
+        attn_implementation=args.attn_implementation,
+        torch_dtype=torch.bfloat16,
+    )
+    if args.gradient_checkpointing:
+        model.gradient_checkpointing_enable()
     model.to(device=device, dtype=torch.bfloat16)
     if size > 1:
-        model = DDP(model, device_ids=[local_rank], output_device=local_rank)
+        model = DDP(
+            model,
+            device_ids=[local_rank],
+            output_device=local_rank,
+            broadcast_buffers=False,
+            gradient_as_bucket_view=True,
+            static_graph=False,
+            bucket_cap_mb=args.ddp_bucket_cap_mb,
+        )
+    if args.compile:
+        model = torch.compile(model, mode=args.compile_mode, fullgraph=False)
     optimizer = torch.optim.AdamW(
         model.parameters(),
         lr=args.lr,
@@ -233,17 +476,37 @@ def main() -> None:
         state = torch.load(
             args.resume_from / "trainer_state.pt", map_location="cpu", weights_only=False
         )
-        if (
-            int(state["world_size"]) != size
-            or int(state["per_device_batch_size"]) != args.per_device_batch_size
-            or int(state["seq_len"]) != args.seq_len
-        ):
-            raise ValueError("refusing resume with changed batch geometry")
+        resume_mode = resolve_resume_geometry(
+            state,
+            world_size=size,
+            per_device_batch_size=args.per_device_batch_size,
+            seq_len=args.seq_len,
+        )
         loaded = AutoModelForCausalLM.from_pretrained(args.resume_from, torch_dtype=torch.bfloat16)
-        (model.module if hasattr(model, "module") else model).load_state_dict(loaded.state_dict())
+        unwrap_model(model).load_state_dict(loaded.state_dict())
         optimizer.load_state_dict(state["optimizer"])
-        scheduler.load_state_dict(state["scheduler"])
         step, tokens_seen = int(state["step"]), int(state["tokens_seen"])
+        if resume_mode == "exact":
+            scheduler.load_state_dict(state["scheduler"])
+        else:
+            # Same tokens/step, different rank count: rebuild cosine schedule at
+            # the resumed step so warmup/total match the new process group.
+            scheduler = get_cosine_schedule_with_warmup(
+                optimizer,
+                num_warmup_steps=warmup_steps,
+                num_training_steps=total_steps,
+                last_epoch=step - 1 if step > 0 else -1,
+            )
+            if rank() == 0:
+                print(
+                    f"resume mode={resume_mode}: "
+                    f"world {int(state['world_size'])}x{int(state['per_device_batch_size'])} "
+                    f"-> {size}x{args.per_device_batch_size} "
+                    f"(global_batch_tokens={global_batch_tokens})",
+                    flush=True,
+                )
+
+    tokenizer = AutoTokenizer.from_pretrained(args.model_id)
 
     wb_run = None
     if rank() == 0 and args.wandb_mode != "disabled" and wandb is not None:
@@ -275,6 +538,34 @@ def main() -> None:
     interval_local_unmasked = 0
     interval_steps = 0
     next_checkpoint = ((step // checkpoint_every) + 1) * checkpoint_every
+    next_eval = ((step // eval_every) + 1) * eval_every if eval_every else 0
+    if eval_every and step > 0:
+        eval_out = args.output_dir / "task_loss" / f"step{step:07d}_task_loss.json"
+        need_eval = False
+        if rank() == 0:
+            need_eval = not eval_payload_complete(eval_out)
+        if size > 1:
+            flag = torch.tensor([1 if need_eval else 0], device=device, dtype=torch.int32)
+            dist.broadcast(flag, src=0)
+            need_eval = bool(int(flag.item()))
+        if need_eval:
+            if rank() == 0:
+                print(f"running sharded task eval at resumed step {step}", flush=True)
+            run_task_eval(unwrap_model(model), tokenizer, eval_out, args.run_name, device)
+            if rank() == 0:
+                append_task_loss_curve(args.output_dir / "progress", step, eval_out)
+                payload = json.loads(eval_out.read_text(encoding="utf-8"))
+                wandb_log_eval(
+                    wb_run,
+                    payload,
+                    step=step,
+                    eval_path=eval_out,
+                    log_artifacts=not args.no_wandb_artifacts,
+                )
+                print(f"task loss eval wrote {eval_out}", flush=True)
+            if size > 1:
+                dist.barrier()
+        next_eval = ((step // eval_every) + 1) * eval_every
     progress_path = args.output_dir / "progress" / "train.jsonl"
     while step < total_steps:
         try:
@@ -290,12 +581,14 @@ def main() -> None:
         loss_mask = batch["loss_mask"].to(device=device, non_blocking=True)
         labels = input_ids.clone()
         labels.masked_fill_(loss_mask, -100)
+        optimizer.zero_grad(set_to_none=True)
         with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
             loss = model(input_ids=input_ids, labels=labels).loss
-        optimizer.zero_grad(set_to_none=True)
         loss.backward()
         if args.grad_clip > 0:
-            torch.nn.utils.clip_grad_norm_(model.parameters(), args.grad_clip)
+            torch.nn.utils.clip_grad_norm_(
+                model.parameters(), args.grad_clip, foreach=True
+            )
         optimizer.step()
         scheduler.step()
 
@@ -373,6 +666,26 @@ def main() -> None:
             if size > 1:
                 dist.barrier()
             next_checkpoint += checkpoint_every
+
+        if eval_every and step >= next_eval:
+            if rank() == 0:
+                print(f"running sharded task eval at step {step}", flush=True)
+            eval_out = args.output_dir / "task_loss" / f"step{step:07d}_task_loss.json"
+            run_task_eval(unwrap_model(model), tokenizer, eval_out, args.run_name, device)
+            if rank() == 0:
+                append_task_loss_curve(args.output_dir / "progress", step, eval_out)
+                payload = json.loads(eval_out.read_text(encoding="utf-8"))
+                wandb_log_eval(
+                    wb_run,
+                    payload,
+                    step=step,
+                    eval_path=eval_out,
+                    log_artifacts=not args.no_wandb_artifacts,
+                )
+                print(f"task loss eval wrote {eval_out}", flush=True)
+            if size > 1:
+                dist.barrier()
+            next_eval += eval_every
 
     if rank() == 0:
         checkpoint = save_checkpoint(

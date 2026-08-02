@@ -12,6 +12,8 @@ const gpuCount = Number(process.argv[4] ?? "4");
 const volumeGb = Number(process.argv[5] ?? "80");
 const publicKeyPath = process.argv[6];
 const cloudType = process.argv[7] ?? "COMMUNITY";
+const createAttempts = Number(process.env.RUNPOD_CREATE_ATTEMPTS ?? "20");
+const createRetryMs = Number(process.env.RUNPOD_CREATE_RETRY_MS ?? "15000");
 
 function readApiKey() {
   const mcpPath = path.join(process.env.USERPROFILE, ".cursor", "mcp.json");
@@ -130,16 +132,21 @@ async function main() {
     env: { PUBLIC_KEY: readPublicKey() },
   };
   let created;
-  for (let attempt = 1; attempt <= 20; attempt += 1) {
+  for (let attempt = 1; attempt <= createAttempts; attempt += 1) {
     try {
       created = await request("POST", "/v1/pods", createBody);
       break;
     } catch (error) {
-      if (!String(error).includes("no instances currently available") || attempt === 20) {
+      if (
+        !String(error).includes("no instances currently available") ||
+        attempt === createAttempts
+      ) {
         throw error;
       }
-      console.error(`capacity unavailable for ${gpuType} x${gpuCount}; retry ${attempt}/20`);
-      await new Promise((resolve) => setTimeout(resolve, 15000));
+      console.error(
+        `capacity unavailable for ${gpuType} x${gpuCount}; retry ${attempt}/${createAttempts}`
+      );
+      await new Promise((resolve) => setTimeout(resolve, createRetryMs));
     }
   }
   const podId = created.id;

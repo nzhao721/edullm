@@ -12,7 +12,11 @@ MODULE_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(MODULE_DIR))
 
 from prepare_annotated_corpus import ShardWriter, annotation_files, token_fact_mask
-from train_smollm2_135m_colmlm_ddp import FactMaskedDataset
+from train_smollm2_135m_colmlm_ddp import (
+    FactMaskedDataset,
+    resolve_resume_geometry,
+    unwrap_model,
+)
 
 
 def test_half_open_boundaries_and_entire_span_are_masked() -> None:
@@ -82,3 +86,67 @@ def test_annotation_inventory_requires_all_shards(tmp_path: Path) -> None:
     assert len(annotation_files(tmp_path, expected_shards=2)) == 2
     with pytest.raises(ValueError, match="expected 3"):
         annotation_files(tmp_path, expected_shards=3)
+
+
+def test_compile_wrapper_is_unwrapped_for_checkpoints() -> None:
+    original = torch.nn.Linear(2, 2)
+
+    class CompiledLike(torch.nn.Module):
+        def __init__(self, module: torch.nn.Module):
+            super().__init__()
+            self._orig_mod = module
+
+    assert unwrap_model(CompiledLike(original)) is original
+
+
+def test_resume_geometry_exact_match() -> None:
+    state = {
+        "world_size": 4,
+        "per_device_batch_size": 40,
+        "seq_len": 2048,
+        "global_batch_tokens": 4 * 40 * 2048,
+    }
+    assert (
+        resolve_resume_geometry(
+            state, world_size=4, per_device_batch_size=40, seq_len=2048
+        )
+        == "exact"
+    )
+
+
+def test_resume_geometry_allows_4x40_to_8x20() -> None:
+    state = {
+        "world_size": 4,
+        "per_device_batch_size": 40,
+        "seq_len": 2048,
+    }
+    assert (
+        resolve_resume_geometry(
+            state, world_size=8, per_device_batch_size=20, seq_len=2048
+        )
+        == "same_global_batch"
+    )
+
+
+def test_resume_geometry_rejects_changed_global_batch() -> None:
+    state = {
+        "world_size": 4,
+        "per_device_batch_size": 40,
+        "seq_len": 2048,
+    }
+    with pytest.raises(ValueError, match="global batch tokens"):
+        resolve_resume_geometry(
+            state, world_size=8, per_device_batch_size=40, seq_len=2048
+        )
+
+
+def test_resume_geometry_rejects_changed_seq_len() -> None:
+    state = {
+        "world_size": 4,
+        "per_device_batch_size": 40,
+        "seq_len": 2048,
+    }
+    with pytest.raises(ValueError, match="seq_len"):
+        resolve_resume_geometry(
+            state, world_size=4, per_device_batch_size=40, seq_len=1024
+        )

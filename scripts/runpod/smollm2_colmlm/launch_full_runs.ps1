@@ -4,14 +4,24 @@ param(
   [string[]]$GpuTypes = @("NVIDIA L40S", "NVIDIA A100-SXM4-80GB"),
   [int]$GpuCount = 4,
   [int]$VolumeGb = 80,
-  [int]$PerDeviceBatchSize = 16,
-  [string]$WandbProject = "edullm-smollm2",
+  # 0 = derive from GlobalBatchSamples / GpuCount (keeps 4x40 == 8x20).
+  [int]$PerDeviceBatchSize = 0,
+  [int]$GlobalBatchSamples = 160,
+  [long]$CorpusMaxTokens = 750000000,
+  [int]$NumEpochs = 27,
+  [string]$WandbProject = "edullm-smollm2-colmlm",
   [ValidateSet("COMMUNITY", "SECURE")]
   [string]$CloudType = "SECURE",
   [string]$SshKeyPath = (Join-Path $HOME ".ssh\edullm_runpod")
 )
 
 $ErrorActionPreference = "Stop"
+if ($PerDeviceBatchSize -le 0) {
+  if ($GlobalBatchSamples % $GpuCount -ne 0) {
+    throw "GlobalBatchSamples=$GlobalBatchSamples not divisible by GpuCount=$GpuCount"
+  }
+  $PerDeviceBatchSize = [int]($GlobalBatchSamples / $GpuCount)
+}
 $repoRoot = Split-Path (Split-Path (Split-Path $PSScriptRoot -Parent) -Parent) -Parent
 $mintScript = Join-Path $repoRoot "scripts\farmshare\mint_aws_session_local.ps1"
 $createPod = Join-Path $PSScriptRoot "create_idle_pod.js"
@@ -133,9 +143,11 @@ try {
       "chmod +x /workspace/edullm-smollm2-colmlm/run_full_training.sh"
       "rm -rf /opt/edullm-venv"
       "python3 -m venv --system-site-packages /opt/edullm-venv"
+      "/opt/edullm-venv/bin/python -c 'import torch; assert tuple(map(int, torch.__version__.split(chr(43))[0].split(chr(46))[:2])) == (2, 8), torch.__version__; assert torch._C._GLIBCXX_USE_CXX11_ABI'"
       "/opt/edullm-venv/bin/python -m pip install -q --no-cache-dir -U pip wheel"
-      "for attempt in 1 2 3; do /opt/edullm-venv/bin/python -m pip install -q --no-cache-dir 'transformers>=4.48,<5' 'wandb>=0.17' numpy zstandard awscli && break; [[ `$attempt -eq 3 ]] && exit 1; sleep 10; done"
-      "/opt/edullm-venv/bin/python -c 'import numpy, torch, transformers, wandb, zstandard'"
+      "for attempt in 1 2 3; do /opt/edullm-venv/bin/python -m pip install -q --no-cache-dir 'transformers>=4.48,<5' 'wandb>=0.17' 'datasets>=3.0' liger-kernel numpy zstandard awscli && break; [[ `$attempt -eq 3 ]] && exit 1; sleep 10; done"
+      "for attempt in 1 2 3; do /opt/edullm-venv/bin/python -m pip install -q --no-cache-dir 'https://github.com/Dao-AILab/flash-attention/releases/download/v2.8.3.post1/flash_attn-2.8.3.post1+cu12torch2.8cxx11abiTRUE-cp312-cp312-linux_x86_64.whl' && break; [[ `$attempt -eq 3 ]] && exit 1; sleep 10; done"
+      "/opt/edullm-venv/bin/python -c 'import flash_attn, liger_kernel, numpy, torch, transformers, wandb, zstandard; print(flash_attn.__version__)'"
       "/opt/edullm-venv/bin/aws --version >/dev/null"
       "echo prepared"
     ) -join "`n"
@@ -160,13 +172,24 @@ try {
     & scp @podScpArgs $wandbEnv "$($pod.target):/workspace/bootstrap/wandb-session.env"
     if ($LASTEXITCODE -ne 0) { throw "W&B session upload failed for $($pod.podId)" }
 
+    # The tested 4xL40S secure host is PCIe-only across two NUMA nodes. NCCL P2P
+    # hangs in the first collective there; socket/shared-memory transport is stable.
+    $ncclFallback = if ($pod.gpuType -eq "NVIDIA L40S") {
+      " NCCL_P2P_DISABLE=1"
+    } else {
+      ""
+    }
     $startRemote = @(
       "set -Eeuo pipefail"
       "chmod 600 /workspace/bootstrap/aws-session.env /workspace/bootstrap/wandb-session.env"
       ("nohup env RUN_NAME=" + (Quote-Bash $pod.runName) +
         " NPROC=" + $GpuCount +
         " PER_DEVICE_BATCH_SIZE=" + $PerDeviceBatchSize +
+        " CORPUS_MAX_TOKENS=" + $CorpusMaxTokens +
+        " NUM_EPOCHS=" + $NumEpochs +
+        " RESUME_FROM=none" +
         " WANDB_PROJECT=" + (Quote-Bash $WandbProject) +
+        $ncclFallback +
         " bash /workspace/edullm-smollm2-colmlm/run_full_training.sh" +
         " > /workspace/bootstrap/full-run.log 2>&1 < /dev/null &")
       "echo `$! > /workspace/bootstrap/full-run.pid"

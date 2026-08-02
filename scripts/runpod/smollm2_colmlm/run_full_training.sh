@@ -19,9 +19,21 @@ DATASET_META_DIR="${RUN_DIR}/fineweb-edu-1b-v6-meta"
 PACKED_DIR="${RUN_DIR}/packed"
 OUTPUT_DIR="${RUN_DIR}/output"
 NPROC="${NPROC:-4}"
-PER_DEVICE_BATCH_SIZE="${PER_DEVICE_BATCH_SIZE:-16}"
+# Keep tokens/step fixed across GPU-count migrations (4x40 == 8x20 == 160).
+GLOBAL_BATCH_SAMPLES="${GLOBAL_BATCH_SAMPLES:-160}"
+if [[ -z "${PER_DEVICE_BATCH_SIZE:-}" ]]; then
+  if (( GLOBAL_BATCH_SAMPLES % NPROC != 0 )); then
+    echo "GLOBAL_BATCH_SAMPLES=${GLOBAL_BATCH_SAMPLES} not divisible by NPROC=${NPROC}" >&2
+    exit 2
+  fi
+  PER_DEVICE_BATCH_SIZE=$((GLOBAL_BATCH_SAMPLES / NPROC))
+fi
+CORPUS_MAX_TOKENS="${CORPUS_MAX_TOKENS:-750000000}"
+NUM_EPOCHS="${NUM_EPOCHS:-27}"
 NUM_WORKERS="${NUM_WORKERS:-4}"
 LOG_EVERY="${LOG_EVERY:-20}"
+ATTN_IMPLEMENTATION="${ATTN_IMPLEMENTATION:-flash_attention_2}"
+COMPILE_MODE="${COMPILE_MODE:-max-autotune-no-cudagraphs}"
 
 mkdir -p "${RUN_DIR}"/{logs,output,hf-cache} "${ANNOTATIONS_DIR}" "${DATASET_META_DIR}"
 export HF_HOME="${RUN_DIR}/hf-cache"
@@ -29,6 +41,13 @@ export TOKENIZERS_PARALLELISM=true
 export PYTHONUNBUFFERED=1
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 export NCCL_DEBUG=WARN
+export TORCH_NCCL_ASYNC_ERROR_HANDLING=1
+export CUDA_MODULE_LOADING=LAZY
+export TORCHINDUCTOR_CACHE_DIR="/opt/torchinductor-${RUN_NAME}"
+export TRITON_CACHE_DIR="/opt/triton-${RUN_NAME}"
+export TORCHINDUCTOR_FX_GRAPH_CACHE=1
+export TORCHINDUCTOR_AUTOGRAD_CACHE=1
+mkdir -p "${TORCHINDUCTOR_CACHE_DIR}" "${TRITON_CACHE_DIR}"
 
 cleanup_aws() {
   rm -f "${AWS_ENV}"
@@ -37,33 +56,47 @@ cleanup_aws() {
 }
 trap cleanup_aws EXIT
 
-if [[ ! -f "${AWS_ENV}" ]]; then
-  echo "missing startup credential file ${AWS_ENV}" >&2
-  exit 2
+python3 -c "import numpy, torch, transformers, wandb, zstandard"
+
+if [[ "${RESUME_LOCAL:-0}" == "1" ]]; then
+  echo "[stage] RESUME_LOCAL=1; skipping S3 download"
+  if [[ -f "${PACKED_DIR}/_READY.json" ]]; then
+    echo "[stage] packed corpus already present; annotation shards not required"
+  else
+    shards_found="$(find "${ANNOTATIONS_DIR}" -name '*.annotations.jsonl.zst' 2>/dev/null | wc -l | tr -d ' ')"
+    if [[ "${shards_found}" != "19" ]]; then
+      echo "RESUME_LOCAL without packed corpus requires 19 annotation shards under ${ANNOTATIONS_DIR}; found ${shards_found}" >&2
+      exit 2
+    fi
+  fi
+else
+  if [[ ! -f "${AWS_ENV}" ]]; then
+    echo "missing startup credential file ${AWS_ENV}" >&2
+    exit 2
+  fi
+  command -v aws >/dev/null
+
+  # The temporary AWS session is used only in this bounded block.
+  # shellcheck disable=SC1090
+  source "${AWS_ENV}"
+  test -n "${AWS_ACCESS_KEY_ID:-}"
+  test -n "${AWS_SECRET_ACCESS_KEY:-}"
+  test -n "${AWS_SESSION_TOKEN:-}"
+  echo "[stage] downloading annotation shards from ${ANNOTATION_S3}"
+  aws s3 sync "${ANNOTATION_S3}/" "${ANNOTATIONS_DIR}/" \
+    --exclude "*" --include "*.annotations.jsonl.zst" --include "*/_manifest.json" \
+    --only-show-errors
+  aws s3api list-objects-v2 \
+    --bucket edullm-checkpoints \
+    --prefix runpod/colmlm-annotate/output/ \
+    --max-keys 100 > "${RUN_DIR}/annotation-s3-inventory.json"
+  for name in dataset.json tokens/manifest.json vendor/manifest.json _VALIDATED.json; do
+    mkdir -p "${DATASET_META_DIR}/$(dirname "${name}")"
+    aws s3 cp "${DATASET_META_S3}/${name}" "${DATASET_META_DIR}/${name}" --only-show-errors
+  done
 fi
 
-python3 -c "import numpy, torch, transformers, wandb, zstandard"
-command -v aws >/dev/null
-
-# The temporary AWS session is used only in this bounded block.
-# shellcheck disable=SC1090
-source "${AWS_ENV}"
-test -n "${AWS_ACCESS_KEY_ID:-}"
-test -n "${AWS_SECRET_ACCESS_KEY:-}"
-test -n "${AWS_SESSION_TOKEN:-}"
-echo "[stage] downloading annotation shards from ${ANNOTATION_S3}"
-aws s3 sync "${ANNOTATION_S3}/" "${ANNOTATIONS_DIR}/" \
-  --exclude "*" --include "*.annotations.jsonl.zst" --include "*/_manifest.json" \
-  --only-show-errors
-aws s3api list-objects-v2 \
-  --bucket edullm-checkpoints \
-  --prefix runpod/colmlm-annotate/output/ \
-  --max-keys 100 > "${RUN_DIR}/annotation-s3-inventory.json"
-for name in dataset.json tokens/manifest.json vendor/manifest.json _VALIDATED.json; do
-  mkdir -p "${DATASET_META_DIR}/$(dirname "${name}")"
-  aws s3 cp "${DATASET_META_S3}/${name}" "${DATASET_META_DIR}/${name}" --only-show-errors
-done
-
+if [[ "${RESUME_LOCAL:-0}" != "1" ]]; then
 python3 - \
   "${ANNOTATIONS_DIR}" \
   "${DATASET_META_DIR}" \
@@ -136,12 +169,13 @@ if env | awk -F= '/^AWS_(ACCESS_KEY_ID|SECRET_ACCESS_KEY|SESSION_TOKEN|SECURITY_
   exit 3
 fi
 echo "[stage] AWS credentials deleted; all remaining work is local scratch + W&B"
+fi
 
 if [[ -f "${WANDB_ENV}" ]]; then
   # shellcheck disable=SC1090
   source "${WANDB_ENV}"
 fi
-export WANDB_PROJECT="${WANDB_PROJECT:-edullm-smollm2}"
+export WANDB_PROJECT="${WANDB_PROJECT:-edullm-smollm2-colmlm}"
 export WANDB_GROUP="${WANDB_GROUP:-colmlm-fact-masked}"
 export WANDB_MODE="${WANDB_MODE:-online}"
 if [[ "${WANDB_MODE}" == "online" ]]; then
@@ -151,13 +185,31 @@ if [[ "${WANDB_MODE}" == "online" ]]; then
   }
 fi
 
-echo "[prepare] tokenizing aligned annotation text and building masks"
+if [[ "${RESUME_LOCAL:-0}" == "1" && -f "${PACKED_DIR}/_READY.json" ]]; then
+  echo "[prepare] packed corpus already ready; skipping"
+else
+echo "[prepare] tokenizing aligned annotation text and building masks (max ${CORPUS_MAX_TOKENS} tokens)"
 python3 "${SCRIPT_DIR}/prepare_annotated_corpus.py" \
   --annotations-dir "${ANNOTATIONS_DIR}" \
   --output-dir "${PACKED_DIR}" \
   --seq-len 2048 \
   --expected-shards 19 \
+  --max-tokens "${CORPUS_MAX_TOKENS}" \
   2>&1 | tee "${RUN_DIR}/logs/prepare.log"
+fi
+
+RESUME_ARGS=()
+if [[ "${RESUME_FROM:-}" == "none" ]]; then
+  echo "[train] fresh run; not resuming from checkpoints"
+elif [[ -n "${RESUME_FROM:-}" ]]; then
+  RESUME_ARGS+=(--resume-from "${RESUME_FROM}")
+elif [[ -f "${OUTPUT_DIR}/latest_checkpoint.txt" ]]; then
+  RESUME_FROM="$(tr -d '\r\n' < "${OUTPUT_DIR}/latest_checkpoint.txt")"
+  if [[ -d "${RESUME_FROM}" ]]; then
+    RESUME_ARGS+=(--resume-from "${RESUME_FROM}")
+    echo "[train] resuming from ${RESUME_FROM}"
+  fi
+fi
 
 nvidia-smi -L
 echo "[train] full run ${RUN_NAME}; nproc=${NPROC} batch_per_device=${PER_DEVICE_BATCH_SIZE}"
@@ -168,11 +220,19 @@ python3 -m torch.distributed.run --standalone --nproc_per_node="${NPROC}" \
   --run-name "${RUN_NAME}" \
   --seq-len 2048 \
   --per-device-batch-size "${PER_DEVICE_BATCH_SIZE}" \
-  --num-epochs 40 \
+  --num-epochs "${NUM_EPOCHS}" \
   --max-train-tokens 20000000000 \
   --checkpoint-every-tokens 250000000 \
+  --eval-interval-tokens 250000000 \
   --num-workers "${NUM_WORKERS}" \
+  --prefetch-factor 4 \
+  --attn-implementation "${ATTN_IMPLEMENTATION}" \
+  --compile \
+  --compile-mode "${COMPILE_MODE}" \
+  --no-gradient-checkpointing \
+  --liger \
   --log-every "${LOG_EVERY}" \
   --wandb-project "${WANDB_PROJECT}" \
   --wandb-mode "${WANDB_MODE}" \
-  2>&1 | tee "${RUN_DIR}/logs/train.log"
+  "${RESUME_ARGS[@]}" \
+  2>&1 | tee -a "${RUN_DIR}/logs/train.log"

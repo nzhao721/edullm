@@ -115,13 +115,55 @@ ${PYTHON} -c "import olmo_core, torch; print('olmo_core ok', 'cuda', torch.cuda.
 MIXLAW_DIR="${REPO_DIR}/experiments/skill-dag/mixlaw"
 RECIPE="${MIXLAW_DIR}/validation_mixtures_10b.json"
 
+STAGE_ARGS=(--recipe "${RECIPE}" --work "${RUN_DIR}/work" --only "${MIX_NAME}" --stage-pool "${RUN_DIR}/pool")
+if ${PYTHON} -c "from pathlib import Path; from stage_validation_pool_from_edullm_data import pool_is_ready; import sys; sys.exit(0 if pool_is_ready(Path('${RUN_DIR}/pool')) else 1)" 2>/dev/null; then
+  echo "[stage] pool already ready; skipping edullm-data resolve"
+  STAGE_ARGS+=(--skip-resolve)
+fi
 echo "[stage] preparing ${MIX_NAME} sidecars + peak pool from edullm-data..."
-${PYTHON} "${MIXLAW_DIR}/prepare_validation_370m_data.py" \
-  --recipe "${RECIPE}" \
-  --work "${RUN_DIR}/work" \
-  --only "${MIX_NAME}" \
-  --stage-pool "${RUN_DIR}/pool" \
+(cd "${MIXLAW_DIR}" && ${PYTHON} prepare_validation_370m_data.py "${STAGE_ARGS[@]}") \
   2>&1 | tee "${RUN_DIR}/logs/stage.log"
+
+prune_old_checkpoints() {
+  local ckpt_root="${RUN_DIR}/save/checkpoints"
+  local meta="${DURABLE_METADATA_PATH:-${RUN_DIR}/progress/last_durable_step.json}"
+  local keep_below="${CHECKPOINT_KEEP_BELOW_DURABLE:-2}"
+  [[ -d "${ckpt_root}" ]] || return 0
+  echo "[disk] rolling checkpoint prune under ${ckpt_root} (keep_below_durable=${keep_below})"
+  DURABLE_META="${meta}" CKPT_ROOT="${ckpt_root}" KEEP_BELOW="${keep_below}" ${PYTHON} - <<'PY'
+import json
+import os
+import re
+import shutil
+from pathlib import Path
+
+ckpt_root = Path(os.environ["CKPT_ROOT"])
+meta_path = Path(os.environ["DURABLE_META"])
+keep_below = int(os.environ.get("KEEP_BELOW", "2"))
+
+durable = 0
+if meta_path.is_file():
+    payload = json.loads(meta_path.read_text(encoding="utf-8"))
+    durable = int(payload.get("last_durable_step", payload.get("step", 0)))
+
+steps = []
+for p in ckpt_root.glob("step*"):
+    m = re.match(r"step(\d+)", p.name)
+    if m:
+        steps.append((int(m.group(1)), p))
+steps.sort()
+
+keep = {s for s, _ in steps if s >= durable}
+below = [(s, p) for s, p in steps if s < durable]
+for s, p in below[:-keep_below]:
+    print(f"[disk] removing old checkpoint step{s} ({p})")
+    shutil.rmtree(p, ignore_errors=True)
+
+freed = sum(1 for s, p in below[:-keep_below])
+print(f"[disk] kept durable+newer={sorted(keep)}; pruned {freed} below durable step {durable}")
+PY
+}
+prune_old_checkpoints
 
 export EDULLM_ROOT="${REPO_DIR}"
 export MIX_NAME
