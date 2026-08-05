@@ -12,10 +12,10 @@ the shared RefHQ-matched OLMo-2 370M contract.
 | `blade_start` | **500** (steps `0..499` proxy-only full CE) |
 | `tau` / `K` / `γ` / `λ` | **375** / **75** / **0.6** / **1.0** |
 | Sync steps | **500, 875, 1250, 1625, 2000** then hold ref → end |
-| Selection score | **`L_ref − L_proxy`**, keep top-γ |
+| Selection score | **`L_proxy − L_ref`**, keep top-γ (equivalent to minimizing `L_ref − L_proxy`) |
 | Train | `pretrain/regmix-10b` (`s3://edullm-data/`, `resolve_latest`) |
-| Val / HQ (K updates) | `pretrain/refhq-regmix-5p5b` (`s3://edullm-data/`, `resolve_latest`) |
-| Run id (example) | `blade-regmix10b-v2` |
+| Val / HQ (K updates) | `pretrain/refhq-instruct/v3` (pinned validated release) |
+| Run id | `blade-regmix10b-refhq-instruct-v3-v1` |
 | Artifact durability | Runtime scratch + W&B (**fail-closed for production online checkpoint uploads**) |
 
 ## Ephemeral-machine contract
@@ -86,7 +86,7 @@ Requires the `edullm-data` package and AWS read access to `s3://edullm-data`.
 ```bash
 python experiments/token-selection/blade/prepare_blade_data.py \
   --work /scratch/$USER/blade-work
-# stages pretrain/regmix-10b + pretrain/refhq-regmix-5p5b (resolve_latest)
+# stages pretrain/regmix-10b + pinned pretrain/refhq-instruct/v3
 # → paths_train.txt, paths_refhq.txt, length_tokens.txt
 ```
 

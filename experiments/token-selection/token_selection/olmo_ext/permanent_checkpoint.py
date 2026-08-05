@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from pathlib import Path
 from typing import Any, Mapping, Optional
 
@@ -47,7 +48,10 @@ def write_run_fingerprint(
     root.mkdir(parents=True, exist_ok=True)
     target = root / RUN_FINGERPRINT_FILENAME
     payload = make_run_fingerprint(identity)
-    tmp = target.with_suffix(".json.tmp")
+    # Every torchrun rank commits the same identity before fit(); use a
+    # process-unique temp path so concurrent atomic replaces cannot steal one
+    # another's temp file.
+    tmp = target.with_suffix(f".json.{os.getpid()}.tmp")
     tmp.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     tmp.replace(target)
     return target

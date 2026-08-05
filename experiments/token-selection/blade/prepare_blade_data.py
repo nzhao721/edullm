@@ -12,7 +12,7 @@ Never reads ``s3://edullm-datasets/``, FarmShare persistent trees, or laptop pat
 Defaults (override with flags)::
 
   train → pretrain/regmix-10b   (latest validated)
-  ref   → pretrain/refhq-regmix-5p5b  (latest validated)
+  ref   → pretrain/refhq-instruct/v3  (pinned validated release)
 
 Writes::
 
@@ -36,7 +36,8 @@ from urllib.parse import urlparse
 
 DEFAULT_LENGTH_TOKENS = 9_900_000_000  # shared one-epoch matrix → 2360 steps
 DEFAULT_TRAIN_DATASET_ID = "pretrain/regmix-10b"
-DEFAULT_REF_DATASET_ID = "pretrain/refhq-regmix-5p5b"
+DEFAULT_REF_DATASET_ID = "pretrain/refhq-instruct"
+DEFAULT_REF_VERSION = "v3"
 DEFAULT_SPLIT = "train"
 LEGACY_DATA_BUCKET = "edullm-datasets"
 DATA_BUCKET = "edullm-data"
@@ -48,8 +49,8 @@ def _ensure_edullm_data() -> None:
     except ImportError as exc:
         raise SystemExit(
             "edullm-data package is required. Install with:\n"
-            '  uv add "edullm-data @ git+https://github.com/edu-llm/edullm-data@v0.2.0"\n'
-            "or: pip install 'edullm-data @ git+https://github.com/edu-llm/edullm-data@v0.2.0'"
+            '  uv add "edullm-data @ git+https://github.com/edu-llm/edullm-data@main"\n'
+            "or: pip install --upgrade 'edullm-data @ git+https://github.com/edu-llm/edullm-data@main'"
         ) from exc
 
 
@@ -181,7 +182,11 @@ def main() -> int:
         help=f"edullm-data dataset id for RefHQ K-updates (default: {DEFAULT_REF_DATASET_ID})",
     )
     ap.add_argument("--train-version", default=None, help="Pin train version (default: resolve_latest)")
-    ap.add_argument("--ref-version", default=None, help="Pin ref version (default: resolve_latest)")
+    ap.add_argument(
+        "--ref-version",
+        default=DEFAULT_REF_VERSION,
+        help=f"Pin reference-update version (default: {DEFAULT_REF_VERSION})",
+    )
     ap.add_argument(
         "--split",
         default=DEFAULT_SPLIT,

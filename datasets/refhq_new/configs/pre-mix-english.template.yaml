@@ -1,0 +1,21 @@
+# refhq-new English pre-mix: keep docs with fastText English doc score >= threshold.
+# No Gopher/C4/toxicity/NSFW — English lang-id only.
+#
+# Tagging writes attributes under attributes/<experiment>/ with keys prefixed
+# by baseline_v1__. Mixer must load that experiment folder and use the full
+# attribute key names for filters.
+stream_template:
+  name: ""
+  documents: []
+  attributes:
+    - baseline-v1
+  output:
+    path: ""
+    max_size_in_bytes: 1073741824
+  filter:
+    include:
+      - "$.attributes[?(@.baseline_v1__ft_lang_id_en_paragraph_with_doc_score_v2__doc_en && @.baseline_v1__ft_lang_id_en_paragraph_with_doc_score_v2__doc_en[0] && @.baseline_v1__ft_lang_id_en_paragraph_with_doc_score_v2__doc_en[0][2] >= ${ENGLISH_SCORE_THRESHOLD})]"
+work_dir:
+  input: "${WORK_DIR}/pre-mix-input"
+  output: "${WORK_DIR}/pre-mix-output"
+processes: ${DOLMA_PROCESSES}

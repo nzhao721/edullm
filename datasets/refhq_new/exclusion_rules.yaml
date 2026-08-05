@@ -1,0 +1,55 @@
+# Metadata exclusion rules for pretrain/refhq-instruct.
+# Applied before Dolma English lang-id. Substring matches are case-insensitive.
+
+sources:
+  tulu-v2:
+    hf_repo: allenai/tulu-v2-sft-mixture
+    # Keep all rows.
+    drop_source_substrings: []
+
+  openhermes-25:
+    hf_repo: teknium/OpenHermes-2.5
+    drop_source_substrings: []
+    # If language is set and not English, drop (null/missing language is kept).
+    drop_non_english_language: true
+    english_language_values:
+      - en
+      - eng
+      - english
+
+  tulu-3:
+    hf_repo: allenai/tulu-3-sft-mixture
+    # Matched against the `source` column (substring, case-insensitive).
+    drop_source_substrings:
+      - wildguardmix
+      - wildjailbreak
+      - coconot
+      - tulu-3-sft-personas-instruction-following
+      - aya
+
+  hermes-3:
+    hf_repo: NousResearch/Hermes-3-Dataset
+    drop_source_substrings: []
+
+  smoltalk:
+    hf_repo: HuggingFaceTB/smoltalk
+    # Skip these HF configs entirely (tool-use + precise IF / constraints).
+    skip_configs:
+      - apigen-80k
+      - smol-constraints
+
+  dolci:
+    hf_repo: allenai/Dolci-Instruct-SFT
+    # Exact match against the `domain` column (case-insensitive).
+    drop_domains:
+      - Safety
+      - Precise IF
+    # Substring match against `source_dataset` (case-insensitive).
+    drop_source_dataset_substrings:
+      - coconot
+      - aya
+      - wildguard
+      - wildjailbreak
+      - tool use
+    # Drop if any message has non-null function_calls or functions.
+    drop_if_function_calls: true

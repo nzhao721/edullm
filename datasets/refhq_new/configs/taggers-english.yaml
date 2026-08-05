@@ -1,0 +1,12 @@
+# refhq-new English path: fastText lang-id only (no Gopher/C4/toxicity/NSFW).
+# Passed to dolma tag after environment substitution.
+documents:
+  - "${DOCUMENTS_GLOB}"
+experiment: "${TAG_EXPERIMENT}"
+taggers:
+  - ft_lang_id_en_paragraph_with_doc_score_v2
+  - ft_lang_id_en_doc_v2
+processes: ${DOLMA_PROCESSES}
+work_dir:
+  input: "${WORK_DIR}/tag-input"
+  output: "${WORK_DIR}/tag-output"

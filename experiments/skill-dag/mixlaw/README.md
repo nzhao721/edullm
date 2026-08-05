@@ -1,264 +1,62 @@
-# Skill-DAG mixing-law pilot
+# MixLaw (Mixing Laws Dataset / OLMoHQ × OLMo-2 370M)
 
-24-mixture probe over 7 OLMoHQ domains, trained with **DataDecide-60M** proxy models,
-evaluated on OLMo-ladder **task loss** (bits-per-byte). Fitted with a regularized
-Ye et al. mixing law and a per-family **LightGBM** model on **Chinchilla-extrapolated**
-targets (step 5806, tpp = 20).
+**Question.** Can a mixing law fitted on cheap short runs predict a domain mixture that beats OLMo Mix 1124 under a matched one-epoch training budget?
 
----
-
-## Proxy model architecture
-
-Each pilot run trains the exact **DataDecide 60M** geometry from
-[allenai/DataDecide-dolma1_7-60M](https://huggingface.co/allenai/DataDecide-dolma1_7-60M)
-(Ye et al., arXiv:2403.16952), with dolma2 tokenization to match the olmohq corpus.
-
-- **Hidden size (`d_model`)**: 384
-- **Layers**: 16
-- **Heads**: 12
-- **MLP ratio**: 8
-- **Sequence length**: 2048
-- **Global batch**: 96 sequences
-- **Learning rate**: 5.8e-3
-- **Tokenizer**: dolma2 (`allenai/dolma2-tokenizer`)
-- **Embedding rows**: 100,352 (vocab 100,278 + specials)
-- **LM head**: Untied
-- **Body params**: 37.8M
-- **Non-embedding params (tokens/param denominator)**: **57.1M**
-- **Total params (this run)**: **114.8M**
-
-**Pilot budget:** tokens/param = 5 → **285M tokens / 1451 steps** per mixture (~30 min on one B200).
-
-**Evaluation:** OLMo-ladder task loss — bits-per-byte on six in-run **ARC + MMLU**
-curve families (val splits). Final eval and mixing-law fits use only these six.
-
-**Chinchilla step-law fitting:** fits use **in-run** `task_loss.jsonl` points only (steps 120–1440,
-`eval_subset_batches=4`). The post-hoc `task_loss_final.json` at step 1451 is retained for
-reporting but **not** appended to the step law — it uses full eval and often disagrees with the
-last in-run point (see `plot_mixlaw_spike_examples.py`). `extrapolate_chinchilla.py` extrapolates
-from the jsonl curve to Chinchilla step **5806** (tpp = 20).
+**Answer.** Yes. Both fitted mixtures beat the OLMo Mix 1124 control on macro task-loss bits-per-byte (bpb), with non-overlapping 95% confidence intervals and two-sided residual-bootstrap $p < 10^{-4}$. The MixLaw optimum is slightly better than the LightGBM optimum.
 
 ---
 
-## Mixture sampling (probe domain weights)
+## 370M validation setup
 
-Mixtures are defined in `mixtures.json` using **Algorithm 2** (double-diminishing grid)
-from Ye et al. (arXiv:2403.16952):
+| Knob | Value |
+|------|-------|
+| Architecture | OLMo-2 370M (full attention) |
+| Train stream | Domain-stratified sampling over 7 OLMoHQ domains at fixed recipe weights |
+| Domains | dclm, arxiv, starcoder, pes2o, open-web-math, algebraic-stack, wiki |
+| Global batch / seq / LR | 4,194,304 tokens / 2048 / $4\times10^{-4}$ cosine ($T_{\max}=2360$, warmup 24, $\alpha_f=0.1$) |
+| Full-run budget | 2360 steps ≈ one epoch (~10B tokens) |
+| FLOPs / full arm | $2.63\times10^{19}$ (measured from W&B) |
+| Primary metric | Macro mean CE bits-per-byte over 20 OLMES-style labels (task-loss) |
 
-1. Set **base mixture** to RegMix proportions (mix01).
-2. Compute **r_max** per domain from olmohq pool availability at a 30B target corpus.
-3. Sample a **double-diminishing grid** with step **δ = 0.05** and **seed 42**.
-4. Apply constraints: wiki floor 0.5% (except wiki-ablation tags), dclm cap 60%,
-   other domains cap 70%.
-5. **Inject 3 extra points** at 50% / 55% / 60% DCLM (tags `C1-dclm50/55/60`) —
-   mid-high DCLM weights the coarse grid cannot reach with all domains positive.
+**Shared recipe across arms:** same architecture, tokenizer, batch, LR schedule, and one-epoch step budget. Arms differ only in **domain mixture weights**.
 
-Result: **24 designed probe points** (not random uniform samples). Tags:
+### Arms actually run (370M)
 
-| Tag | Meaning |
-|-----|---------|
-| `base` | RegMix reference mixture |
-| `C0-wiki0` | Wiki ablation (wiki = 0) |
-| `C0-dclm0` | DCLM ablation (dclm = 0) |
-| `C1-dclm50/55/60` | Injected high-DCLM points |
-| `C1` | Standard grid points |
+| Arm | Role | A100-h | FLOPs |
+|-----|------|-------:|------:|
+| OLMo Mix 1124 | Control — natural OLMo Mix 1124 domain proportions (~95% DCLM) | 47.46 | $2.63\times10^{19}$ |
+| Data Mixing Laws paper | Fixed proportions from the Data Mixing Laws paper (Pilot 01) | 44.11 | $2.63\times10^{19}$ |
+| LightGBM | LightGBM mixing-law optimum | 48.39 | $2.63\times10^{19}$ |
+| MixLaw | Parametric mixing-law optimum | 48.78 | $2.63\times10^{19}$ |
+| **Total** | | **188.74** | **$1.05\times10^{20}$** |
 
-Training realizes those weights **only** via **`DomainMixtureStream`** over a
-shared peak-sized working pool staged from `edullm-data` (domain-stratified
-sampling; see `domain_stream.py` / `olmo_domain_stream_patch.py`). Peak
-per-domain pool sizes use largest-remainder allocation so every recipe mix
-fits. Exact per-mix slice materialization (`build_mixture_data.py`) is
-**not supported** for new work — do not re-materialize slices to bit-match
-checked-in `pilot_runs/` curves.
+A100-hours are the no-waste totals measured for these runs.
+
+Exact domain weights for these four arms are in Validated mixture weights below.
 
 ---
 
-## Pilot mixture domain weights
+## Proxy pilot (DataDecide-60M)
 
-Columns follow `domain_order` in `mixtures.json`. Weights sum to 1.
+24 designed mixtures over the same 7 domains, each trained with a **DataDecide-60M** proxy and scored on OLMo-ladder task-loss (bits-per-byte). Surrogates are fit on **Chinchilla-extrapolated** family losses (step 5806, tokens/param = 20).
 
-| mix | tag | dclm | arxiv | starcoder | pes2o | open-web-math | alg-stack | wiki |
-|-----|-----|------|-------|-----------|-------|---------------|-----------|------|
-| mix01 | base | 0.375 | 0.250 | 0.141 | 0.094 | 0.064 | 0.061 | 0.016 |
-| mix02 | C0-wiki0 | 0.059 | 0.041 | 0.650 | 0.106 | 0.100 | 0.044 | 0.000 |
-| mix03 | C0-wiki0 | 0.059 | 0.650 | 0.041 | 0.106 | 0.100 | 0.044 | 0.000 |
-| mix04 | C0-dclm0 | 0.000 | 0.041 | 0.041 | 0.425 | 0.400 | 0.044 | 0.050 |
-| mix05 | C1-dclm50 | 0.500 | 0.200 | 0.113 | 0.075 | 0.051 | 0.049 | 0.013 |
-| mix06 | C1-dclm55 | 0.550 | 0.180 | 0.101 | 0.068 | 0.046 | 0.044 | 0.011 |
-| mix07 | C1-dclm60 | 0.600 | 0.160 | 0.090 | 0.060 | 0.041 | 0.039 | 0.010 |
-| mix08 | C1 | 0.119 | 0.041 | 0.041 | 0.027 | 0.400 | 0.350 | 0.023 |
-| mix09 | C1 | 0.030 | 0.163 | 0.325 | 0.027 | 0.050 | 0.350 | 0.056 |
-| mix10 | C1 | 0.059 | 0.041 | 0.041 | 0.425 | 0.050 | 0.350 | 0.034 |
-| mix11 | C1 | 0.030 | 0.163 | 0.325 | 0.027 | 0.400 | 0.044 | 0.013 |
-| mix12 | C1 | 0.030 | 0.325 | 0.041 | 0.425 | 0.050 | 0.044 | 0.086 |
-| mix13 | C1 | 0.059 | 0.041 | 0.325 | 0.425 | 0.100 | 0.044 | 0.006 |
-| mix14 | C1 | 0.059 | 0.325 | 0.081 | 0.053 | 0.200 | 0.175 | 0.106 |
-| mix15 | C1 | 0.030 | 0.325 | 0.325 | 0.212 | 0.050 | 0.044 | 0.014 |
-| mix16 | C1 | 0.237 | 0.163 | 0.041 | 0.106 | 0.400 | 0.044 | 0.009 |
-| mix17 | C1 | 0.475 | 0.041 | 0.041 | 0.027 | 0.050 | 0.350 | 0.017 |
-| mix18 | C1 | 0.237 | 0.041 | 0.041 | 0.425 | 0.100 | 0.044 | 0.113 |
-| mix19 | C1 | 0.237 | 0.041 | 0.325 | 0.106 | 0.100 | 0.087 | 0.103 |
-| mix20 | C1 | 0.059 | 0.081 | 0.163 | 0.212 | 0.200 | 0.175 | 0.109 |
-| mix21 | C1 | 0.237 | 0.041 | 0.163 | 0.053 | 0.050 | 0.350 | 0.106 |
-| mix22 | C1 | 0.237 | 0.163 | 0.041 | 0.212 | 0.050 | 0.175 | 0.122 |
-| mix23 | C1 | 0.475 | 0.041 | 0.325 | 0.053 | 0.050 | 0.044 | 0.013 |
-| mix24 | C1 | 0.119 | 0.325 | 0.041 | 0.106 | 0.050 | 0.350 | 0.009 |
+### Proxy architecture
 
----
+- Hidden size 384, 16 layers, 12 heads, MLP ratio 8, sequence length 2048
+- Global batch 96 sequences; learning rate $5.8\times10^{-3}$
+- Tokenizer: dolma2 (100,352 embedding rows); untied LM head
+- Body params 37.8M; **non-embedding params 57.1M** (tokens/param denominator); total ~114.8M with dolma2 vocab
+- **Budget:** tokens/param = 5 → **285M tokens / 1451 steps** per mixture
+- **Pilot FLOPs** (Chinchilla $C\approx 6ND$): $\approx 9.8\times10^{16}$ per mix → **$\approx 2.3\times10^{18}$** for 24
 
-## Script inventory
+### Evaluation and Chinchilla targets
 
-| Script | Role |
-|--------|------|
-| `prepare_data.sh` | Write recipe sidecars after edullm-data pool exists (`prepare_mixlaw_pilot_data.py`) |
-| `submit_mixlaw_pilot_pool.sh` | FarmShare: stage peak pool from edullm-data into ephemeral RUN_DIR |
-| `stage_working_pool_from_edullm_data.py` | Download+concat domain memmaps; write `edullm_data_source.json` |
-| `prepare_mixlaw_pilot_data.py` | Per-mix `mix_weights.json` from `mixtures.json` |
-| `recipe_data.py` / `domain_stream.py` | Shared recipe sidecars + olmohq domain sampler |
-| `olmo_domain_stream_patch.py` | OLMo classic 60M trainer streaming hook |
-| `select_and_fetch_shards.py` | Legacy raw-shard draw (pre-edullm-data); not used by training |
-| `tokenize_working_pool.py` | Legacy tokenize path; not used by training |
-| `build_mixture_data.py` | **Deprecated / do-not-use** — legacy slice materialization; not a supported training path |
-| `budget_calculator.py` | GPU-hour / token budget vs olmohq availability |
-| `train_datadecide_60m.py` | Train one mixture (DataDecide 60M, in-run curve eval) |
-| `run_mixture.sh` | Single-GPU worker: train + full eval + S3 upload-before-end |
-| `eval_task_loss.py` | Task-loss eval on the six curve labels (or `--full-suite` for all 20) |
-| `run_task_loss_eval.py` | Batch re-eval helper for finished checkpoints |
-| `extrapolate_chinchilla.py` | Extrapolate in-run jsonl curves to Chinchilla step (tpp = 20); excludes step-1451 final anchor |
-| `fit_mixing_law.py` | Baseline mixing-law fit + simplex optimization |
-| `fit_chinchilla.py` | Regularized fit on Chinchilla targets + near-optimal sampling |
-| `fit_lightgbm_chinchilla.py` | LightGBM fit on Chinchilla targets + near-optimal sampling |
-| `loo_chinchilla.py` | Leave-one-out cross-validation |
-| `sample_random_simplex.py` | Random-simplex plausibility check |
-| `preflight_checks.py` | Sanity checks on data layout, step law, and simplex optimizer |
-| `mixlaw_common.py` | Shared constants (domains, DataDecide geometry, task labels) |
-| `mixtures.json` | 24 probe mixtures (Algorithm 2 grid + injected points) |
-| `reoptimize_constraints.py` | Re-run optima / near-optimal sampling on saved fits |
-| `write_validation_mixtures.py` | Emit 370M validation recipe (`validation_mixtures_10b.json`) |
-| `prepare_validation_370m_data.py` | Per-arm `mix_weights.json` sidecars from recipe |
-| `train_mixlaw_validation_370m.py` | OLMo2-370M CE trainer (streams at recipe weights) |
-| `launch_validation_370m.sh` | One OLMo2-370M CE arm on a recipe mix |
-| `mixlaw_runtime.py` | Pure recovery, dependency, and production contracts |
-| `preflight_validation_370m.py` | OLMES/dependency preflight + version metadata |
-| `submit_mixlaw_validation_pool.sh` | FarmShare: stage peak pool from edullm-data |
-| `stage_validation_pool_from_edullm_data.py` | 370M peak pool download+concat from edullm-data |
-| `submit_mixlaw_validation_370m.sh` | Slurm array over all recipe mixes (`TRAIN_VENV` required) |
-| `build_working_pool_from_shards.py` | **Deprecated** — peak pool from `tokenized_manifest.json` |
-| `check_validation_pool.py` | Peak demand vs olmohq inventory |
-| `validation_mixtures_10b.json` | Eight 10B-mix recipe for 370M scale-up |
-| `generate_readme.py` | Regenerate this README from JSON artifacts |
+In-run curves use six **ARC + MMLU** val families (subset batches). Step-laws fit **in-run curve points only** (steps 120–1440); a post-hoc full eval at step 1451 is kept for reporting but **not** used in the step law. Curves are extrapolated to Chinchilla step **5806** (tpp = 20). Mixing-law / LightGBM targets are those six extrapolated family losses.
 
----
-
-## S3 artifact paths
-
-| Artifact | Location | Notes |
-|----------|----------|-------|
-| **Training corpus** | `s3://edullm-data/pretrain/olmo-127b` | Published+validated; staged via `stage_*_from_edullm_data.py` |
-| **Pilot results** | `s3://edullm-checkpoints/mixlaw/60m-pilot/mix01` … `mix24` | Checkpoints + progress + logs (upload-before-end) |
-| **370M validation results** | `s3://edullm-checkpoints/mixlaw/370m-validation/<mix>/` | Fail-closed sync from trainer / `train_one.sh` |
-| **370M validation recipe** | `validation_mixtures_10b.json` | Domain weights per arm; training streams from edullm-data pool |
-| **Working pool** | ephemeral `POOL_DIR` (job scratch) | Peak-sized memmap pool staged each job; provenance required |
-| Per-mix progress | `…/mixNN/progress/` | `run_meta.json`, `task_loss_final.json`, `task_loss.jsonl` |
-| Per-mix logs | `…/mixNN/logs/` | `train.log`, `eval.log` |
-| **Local mirror** | `pilot_runs/mixNN/progress/` | Historical progress JSON from the completed (pre-streaming) pilot; not a replay target |
-
-`run_mixture.sh` defaults `RESULTS_S3=s3://edullm-checkpoints/mixlaw/60m-pilot` and
-syncs checkpoints + progress + logs before exit. Set `ALLOW_LOCAL_ONLY=1` only for
-smoke tests on durable local disks.
-
-### Weights & Biases
-
-Trainers log to W&B project **`mixlaw`** (SmolLM-style) when enabled:
-
-- CLI: `--wandb-project mixlaw --wandb-mode online|offline|disabled`
-- FarmShare: push `wandb-session.env` via `scripts/farmshare/push_wandb_session_to_farmshare.sh $RUN_DIR`
-- `run_mixture.sh` / `launch_validation_370m.sh` auto-enable `online` when the session
-  file or `WANDB_API_KEY` is present; otherwise mode stays `disabled` (S3-only).
-- Run names: 60M pilot → `mixNN`; 370M validation → `mixlaw-370m-<MIX_NAME>`
-  (group `60m-pilot` / `370m-validation`).
-- W&B is **additive** — fail-closed S3 export is unchanged.
-
-
----
-
-## Surrogate fits on Chinchilla targets
-
-Two surrogates map 7-domain mixture weights → six Chinchilla-extrapolated curve losses
-(step 5806, tpp = 20) from 24 pilot mixtures. Mixture optima cap **wiki ≤ 30%**
-(olmohq inventory binds below unconstrained optima):
-
-| | Mixing law | LightGBM |
-|---|---|---|
-| Model | Regularized Ye et al. law | One gradient-boosted tree regressor per family |
-| Artifact | `mixlaw_fit_chinchilla.json` | `mixlaw_fit_lightgbm_chinchilla.json` |
-| Fit script | `fit_chinchilla.py` | `fit_lightgbm_chinchilla.py` |
-| LOO artifact | `mixlaw_fit_chinchilla_loo.json` | in-fit LOO per family |
-| Pilot runs | 24 mixtures | 24 mixtures |
-| Chinchilla step | 5806 | 5806 |
-
-### Mixing law
-
-```
-L_i(r) = c_i + k_i * exp( clip( sum_j t_ij * r_j, -60, 60 ) )
-```
-
-- `r` = mixture weights on the 7-domain simplex (sum to 1)
-- More negative `t_ij` → increasing domain j lowers task family i loss
-
-**Regularization** (among multi-start solutions within 1.35× best RMSE, pick parsimonious):
-
-| Parameter | Value |
-|-----------|-------|
-| `t_soft` | 4.0 |
-| `t_hard` | 8.0 |
-| `k_ratio_soft` | 20.0 |
-| `lambda_t` | 0.02 |
-| `lambda_k` | 0.05 |
-| `rmse_slack` | 1.35 |
-| `n_starts` | 128 |
-
-### LightGBM
-
-Features = 7 mixture weights; target = per-family Chinchilla loss. Predicted macro = mean
-over families. Hyperparameters chosen by a **small LOO grid search** (144 configs) minimizing
-macro LOO RMSE. Mixture optima use **50k random simplex samples + SLSQP polish** (non-convex
-surrogate); constrained optima seed the uncapped search.
-
-| Parameter | Value |
-|-----------|-------|
-| `objective` | regression |
-| `metric` | rmse |
-| `verbosity` | -1 |
-| `feature_fraction` | 1.0 |
-| `bagging_fraction` | 1.0 |
-| `seed` | 0 |
-| `num_leaves` | 7 |
-| `max_depth` | 3 |
-| `min_data_in_leaf` | 2 |
-| `learning_rate` | 0.05 |
-| `lambda_l2` | 0.1 |
-| `num_boost_round` | 100 |
-
-**Hyperparameter search** (objective: minimize macro LOO RMSE):
-
-| | Baseline (hand-picked) | Selected (LOO grid) |
-|---|---|---|
-| mean LOO RMSE | 0.0770 | 0.0751 |
-| macro LOO RMSE | 0.0439 | 0.0366 |
-| `num_leaves` | 7 | 7 |
-| `max_depth` | 3 | 3 |
-| `min_data_in_leaf` | 3 | 2 |
-| `learning_rate` | 0.05 | 0.05 |
-| `lambda_l2` | 1.0 | 0.1 |
-| `num_boost_round` | 200 | 100 |
-
-### Observed Chinchilla targets (fit y)
-
-Shared across both fits — per-family Chinchilla-extrapolated loss at step 5806.
+Observed Chinchilla-target range across the 24 pilots:
 
 | family | min | max | std |
-|--------|-----|-----|-----|
+|--------|----:|----:|----:|
 | arc_challenge | 1.5043 | 1.7831 | 0.0790 |
 | arc_easy | 1.8108 | 2.1452 | 0.0878 |
 | mmlu_humanities | 1.6810 | 1.9250 | 0.0678 |
@@ -266,27 +64,105 @@ Shared across both fits — per-family Chinchilla-extrapolated loss at step 5806
 | mmlu_social_sciences | 1.2668 | 1.4775 | 0.0608 |
 | mmlu_stem | 2.1722 | 2.4410 | 0.0805 |
 
-### Leave-one-out cross-validation
+---
 
-| Metric | Mixing law | LightGBM |
-|--------|------------|----------|
-| Mean LOO RMSE | 0.0766 | 0.0751 |
-| Mean LOO RMSE / std | 84.4% | 84.1% |
-| Macro LOO RMSE | 0.0443 | 0.0366 |
+## Mixture sampling
 
-| family | ML LOO | ML % std | LGB LOO | LGB % std | ML in-sample | LGB in-sample |
-|--------|--------|----------|---------|-----------|--------------|---------------|
-| arc_challenge | 0.0774 | 97.9% | 0.0757 | 95.8% | 0.0471 | 0.0079 |
-| arc_easy | 0.1269 | 144.5% | 0.1163 | 132.5% | 0.0887 | 0.0159 |
-| mmlu_humanities | 0.0271 | 40.0% | 0.0288 | 42.4% | 0.0163 | 0.0028 |
-| mmlu_other | 0.1432 | 107.6% | 0.1306 | 98.1% | 0.0951 | 0.0111 |
-| mmlu_social_sciences | 0.0269 | 44.2% | 0.0317 | 52.1% | 0.0198 | 0.0037 |
-| mmlu_stem | 0.0581 | 72.2% | 0.0674 | 83.7% | 0.0433 | 0.0090 |
+Mixtures follow **Algorithm 2** (double-diminishing grid) from [Ye et al., Data Mixing Laws](https://arxiv.org/abs/2403.16952):
 
-### Mixing-law parameters (c_i, k_i, t_ij)
+1. Start from the **Data Mixing Laws paper** mixture (Pilot 01).
+2. Compute per-domain **$r_{\max}$** from OLMoHQ pool availability at a 30B target corpus.
+3. Sample a double-diminishing grid with step **$\delta = 0.05$** and **seed 42**.
+4. Apply Algorithm 2 feasibility constraints from Ye et al. (availability-aware simplex sampling; wiki-ablation tags may zero wiki).
+5. Inject three mid–high DCLM points at 50% / 55% / 60% DCLM that the coarse grid cannot reach with all domains positive.
 
-| family | c_i | k_i | k/std | max\|t\| | in-sample RMSE |
-|--------|-----|-----|-------|---------|----------------|
+Result: **24 designed probe points** (not uniform random simplex samples).
+
+| Tag | Meaning |
+|-----|---------|
+| base | Data Mixing Laws paper reference mixture (Pilot 01) |
+| C0-wiki0 | Wiki ablation (wiki = 0) |
+| C0-dclm0 | DCLM ablation (dclm = 0) |
+| C1-dclm50 / 55 / 60 | Injected high-DCLM points |
+| C1 | Standard grid points |
+
+### $r_{\max}$ at 30B target
+
+| domain | $r_{\max}$ |
+|--------|----------:|
+| dclm | 0.9533 |
+| arxiv | 0.6933 |
+| starcoder | 0.6767 |
+| pes2o | 0.8767 |
+| open-web-math | 0.4067 |
+| algebraic-stack | 0.3933 |
+| wiki | 0.1220 |
+
+### Pilot mixture domain weights
+
+Weights sum to 1.
+
+| mix | tag | dclm | arxiv | starcoder | pes2o | open-web-math | alg-stack | wiki |
+|-----|-----|-----:|------:|----------:|------:|--------------:|----------:|-----:|
+| Pilot 01 | base | 0.375 | 0.250 | 0.141 | 0.094 | 0.064 | 0.061 | 0.016 |
+| Pilot 02 | C0-wiki0 | 0.059 | 0.041 | 0.650 | 0.106 | 0.100 | 0.044 | 0.000 |
+| Pilot 03 | C0-wiki0 | 0.059 | 0.650 | 0.041 | 0.106 | 0.100 | 0.044 | 0.000 |
+| Pilot 04 | C0-dclm0 | 0.000 | 0.041 | 0.041 | 0.425 | 0.400 | 0.044 | 0.050 |
+| Pilot 05 | C1-dclm50 | 0.500 | 0.200 | 0.113 | 0.075 | 0.051 | 0.049 | 0.013 |
+| Pilot 06 | C1-dclm55 | 0.550 | 0.180 | 0.101 | 0.068 | 0.046 | 0.044 | 0.011 |
+| Pilot 07 | C1-dclm60 | 0.600 | 0.160 | 0.090 | 0.060 | 0.041 | 0.039 | 0.010 |
+| Pilot 08 | C1 | 0.119 | 0.041 | 0.041 | 0.027 | 0.400 | 0.350 | 0.023 |
+| Pilot 09 | C1 | 0.030 | 0.163 | 0.325 | 0.027 | 0.050 | 0.350 | 0.056 |
+| Pilot 10 | C1 | 0.059 | 0.041 | 0.041 | 0.425 | 0.050 | 0.350 | 0.034 |
+| Pilot 11 | C1 | 0.030 | 0.163 | 0.325 | 0.027 | 0.400 | 0.044 | 0.013 |
+| Pilot 12 | C1 | 0.030 | 0.325 | 0.041 | 0.425 | 0.050 | 0.044 | 0.086 |
+| Pilot 13 | C1 | 0.059 | 0.041 | 0.325 | 0.425 | 0.100 | 0.044 | 0.006 |
+| Pilot 14 | C1 | 0.059 | 0.325 | 0.081 | 0.053 | 0.200 | 0.175 | 0.106 |
+| Pilot 15 | C1 | 0.030 | 0.325 | 0.325 | 0.212 | 0.050 | 0.044 | 0.014 |
+| Pilot 16 | C1 | 0.237 | 0.163 | 0.041 | 0.106 | 0.400 | 0.044 | 0.009 |
+| Pilot 17 | C1 | 0.475 | 0.041 | 0.041 | 0.027 | 0.050 | 0.350 | 0.017 |
+| Pilot 18 | C1 | 0.237 | 0.041 | 0.041 | 0.425 | 0.100 | 0.044 | 0.113 |
+| Pilot 19 | C1 | 0.237 | 0.041 | 0.325 | 0.106 | 0.100 | 0.087 | 0.103 |
+| Pilot 20 | C1 | 0.059 | 0.081 | 0.163 | 0.212 | 0.200 | 0.175 | 0.109 |
+| Pilot 21 | C1 | 0.237 | 0.041 | 0.163 | 0.053 | 0.050 | 0.350 | 0.106 |
+| Pilot 22 | C1 | 0.237 | 0.163 | 0.041 | 0.212 | 0.050 | 0.175 | 0.122 |
+| Pilot 23 | C1 | 0.475 | 0.041 | 0.325 | 0.053 | 0.050 | 0.044 | 0.013 |
+| Pilot 24 | C1 | 0.119 | 0.325 | 0.041 | 0.106 | 0.050 | 0.350 | 0.009 |
+
+---
+
+## Surrogate fits
+
+Two surrogates map 7-domain weights → six Chinchilla-extrapolated losses.
+
+| | Mixing law | LightGBM |
+|---|---|---|
+| Model | Regularized [Ye et al.](https://arxiv.org/abs/2403.16952) law | One gradient-boosted tree per family ([RegMix](https://arxiv.org/abs/2407.01492)-style) |
+| Pilot runs | 24 | 24 |
+| Chinchilla step | 5806 | 5806 |
+
+### Parametric mixing law
+
+$$
+L_i(r) = c_i + k_i \exp\big(\mathrm{clip}(\sum_j t_{ij} r_j,\,-60,\,60)\big)
+$$
+
+More negative $t_{ij}$ means increasing domain $j$ lowers family $i$ loss. Among multi-start solutions within 1.35× best RMSE, pick the most parsimonious under:
+
+| Parameter | Value |
+|-----------|-------|
+| t_soft | 4.0 |
+| t_hard | 8.0 |
+| k_ratio_soft | 20.0 |
+| lambda_t | 0.02 |
+| lambda_k | 0.05 |
+| rmse_slack | 1.35 |
+| n_starts | 128 |
+
+#### Fitted $c_i$, $k_i$
+
+| family | $c_i$ | $k_i$ | $k$/std | max$\|t\|$ | in-sample RMSE |
+|--------|------:|------:|--------:|----------:|---------------:|
 | arc_challenge | 1.5043 | 0.0790 | 1.00 | 3.72 | 0.0471 |
 | arc_easy | 1.8108 | 0.0878 | 1.00 | 2.16 | 0.0887 |
 | mmlu_humanities | 1.6022 | 0.0678 | 1.00 | 1.69 | 0.0163 |
@@ -294,8 +170,10 @@ Shared across both fits — per-family Chinchilla-extrapolated loss at step 5806
 | mmlu_social_sciences | 1.2571 | 0.0608 | 1.00 | 2.77 | 0.0198 |
 | mmlu_stem | 2.1427 | 0.0805 | 1.00 | 1.88 | 0.0433 |
 
+#### Skill / transfer matrix $t_{ij}$ (rows = families, columns = domains)
+
 | family | dclm | arxiv | starcoder | pes2o | open-web-math | algebraic-stack | wiki |
-|--------|---|---|---|---|---|---|---|
+|--------|---:|---:|---:|---:|---:|---:|---:|
 | arc_challenge | -3.72 | 2.07 | 1.20 | -0.07 | 0.49 | 1.03 | -1.50 |
 | arc_easy | 1.31 | 0.69 | 0.84 | 0.72 | -2.16 | 1.48 | -1.92 |
 | mmlu_humanities | -0.67 | 1.63 | 1.69 | 0.72 | 1.63 | 1.61 | -1.27 |
@@ -303,10 +181,32 @@ Shared across both fits — per-family Chinchilla-extrapolated loss at step 5806
 | mmlu_social_sciences | -2.77 | 1.69 | 1.34 | 0.17 | 1.50 | 1.82 | -1.64 |
 | mmlu_stem | -0.07 | 1.88 | 1.43 | -1.66 | 1.18 | 1.59 | -0.49 |
 
-### LightGBM feature importance (gain)
+### LightGBM
+
+Features = 7 mixture weights; target = per-family Chinchilla loss; predicted macro = mean over families. Hyperparameters chosen by a **144-config LOO grid** minimizing macro LOO RMSE. Optima: **50k random simplex samples + SLSQP polish**.
+
+| Parameter | Value |
+|-----------|-------|
+| objective | regression |
+| metric | rmse |
+| verbosity | -1 |
+| feature_fraction | 1.0 |
+| bagging_fraction | 1.0 |
+| seed | 0 |
+| num_leaves | 7 |
+| max_depth | 3 |
+| min_data_in_leaf | 2 |
+| learning_rate | 0.05 |
+| lambda_l2 | 0.1 |
+| num_boost_round | 100 |
+
+LOO grid: hand-picked default macro LOO RMSE 0.0439 → selected 0.0366
+(num_leaves 7, max_depth 3, min_data_in_leaf 2, lr 0.05, λ₂ 0.1, rounds 100).
+
+#### LightGBM feature importance (gain)
 
 | family | dclm | arxiv | starcoder | pes2o | open-web-math | algebraic-stack | wiki |
-|--------|---|---|---|---|---|---|---|
+|--------|---:|---:|---:|---:|---:|---:|---:|
 | arc_challenge | 0.75 | 0.06 | 0.02 | 0.15 | 0.32 | 0.05 | 0.18 |
 | arc_easy | 0.27 | 0.32 | 0.26 | 0.08 | 0.53 | 0.19 | 0.19 |
 | mmlu_humanities | 0.85 | 0.00 | 0.05 | 0.06 | 0.04 | 0.01 | 0.12 |
@@ -314,20 +214,32 @@ Shared across both fits — per-family Chinchilla-extrapolated loss at step 5806
 | mmlu_social_sciences | 0.67 | 0.02 | 0.03 | 0.14 | 0.01 | 0.02 | 0.01 |
 | mmlu_stem | 0.22 | 0.06 | 0.24 | 0.71 | 0.02 | 0.01 | 0.31 |
 
+### Leave-one-out cross-validation
+
+| Metric | Mixing law | LightGBM |
+|--------|-----------:|---------:|
+| Mean LOO RMSE | 0.0766 | 0.0751 |
+| Mean LOO RMSE / std | 84.4% | 84.1% |
+| Macro LOO RMSE | 0.0443 | 0.0366 |
+
+| family | ML LOO | LGB LOO | ML in-sample | LGB in-sample |
+|--------|-------:|--------:|-------------:|--------------:|
+| arc_challenge | 0.0774 | 0.0757 | 0.0471 | 0.0079 |
+| arc_easy | 0.1269 | 0.1163 | 0.0887 | 0.0159 |
+| mmlu_humanities | 0.0271 | 0.0288 | 0.0163 | 0.0028 |
+| mmlu_other | 0.1432 | 0.1306 | 0.0951 | 0.0111 |
+| mmlu_social_sciences | 0.0269 | 0.0317 | 0.0198 | 0.0037 |
+| mmlu_stem | 0.0581 | 0.0674 | 0.0433 | 0.0090 |
+
 ### Mixture optima and near-optimal candidates
 
-Constrained optima (`uncapped`, `pilot_caps`, `min1pct`) plus sampled near-optimal
-mixtures. Near-opt rows: **≥ 1%** on every domain, within **+0.04 bpb** of each model's
-uncapped optimum (mixing law 1.7965, LightGBM 1.8316), and **≥ 8 pp**
-(L∞) away from every optimum row above. None exactly match a pilot point.
+Surrogate optima plus nearby mixtures (within +0.04 bpb of that model’s optimum and ≥ 8 pp ($L_\infty$) from the optimum). None exactly match a pilot point.
 
 **Mixing law**
 
-| label | pred macro | max_w | dclm | arxiv | star | pes2o | owm | alg | wiki |
-|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| uncapped | 1.7965 | 0.568 | 0.568 | — | — | 0.097 | 0.035 | — | 0.300 |
-| pilot_caps | 1.7965 | 0.568 | 0.568 | — | — | 0.097 | 0.035 | — | 0.300 |
-| min1pct | 1.7984 | 0.556 | 0.556 | 0.010 | 0.010 | 0.092 | 0.023 | 0.010 | 0.300 |
+| candidate | pred macro | max_w | dclm | arxiv | starcoder | pes2o | open-web-math | algebraic-stack | wiki |
+|-----------|------------:|-------:|---:|---:|---:|---:|---:|---:|---:|
+| optimum | 1.7965 | 0.568 | 0.568 | — | — | 0.097 | 0.035 | — | 0.300 |
 | near-opt 1 | 1.7995 | 0.440 | 0.440 | 0.011 | 0.011 | 0.207 | 0.013 | 0.018 | 0.300 |
 | near-opt 2 | 1.8016 | 0.435 | 0.435 | 0.018 | 0.011 | 0.134 | 0.069 | 0.032 | 0.300 |
 | near-opt 3 | 1.8022 | 0.354 | 0.354 | 0.020 | 0.012 | 0.258 | 0.027 | 0.029 | 0.300 |
@@ -337,14 +249,11 @@ uncapped optimum (mixing law 1.7965, LightGBM 1.8316), and **≥ 8 pp**
 | near-opt 7 | 1.8036 | 0.397 | 0.223 | 0.010 | 0.010 | 0.397 | 0.051 | 0.010 | 0.300 |
 | near-opt 8 | 1.8041 | 0.638 | 0.638 | 0.024 | 0.036 | 0.010 | 0.016 | 0.010 | 0.267 |
 
-
 **LightGBM**
 
-| label | pred macro | max_w | dclm | arxiv | star | pes2o | owm | alg | wiki |
-|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| uncapped | 1.8316 | 0.441 | 0.354 | 0.083 | 0.061 | 0.441 | 0.030 | 0.022 | 0.009 |
-| pilot_caps | 1.8316 | 0.441 | 0.354 | 0.083 | 0.061 | 0.441 | 0.030 | 0.022 | 0.009 |
-| min1pct | 1.8335 | 0.553 | 0.553 | 0.212 | 0.087 | 0.082 | 0.042 | 0.014 | 0.011 |
+| candidate | pred macro | max_w | dclm | arxiv | starcoder | pes2o | open-web-math | algebraic-stack | wiki |
+|-----------|------------:|-------:|---:|---:|---:|---:|---:|---:|---:|
+| optimum | 1.8335 | 0.553 | 0.553 | 0.212 | 0.087 | 0.082 | 0.042 | 0.014 | 0.011 |
 | near-opt 1 | 1.8335 | 0.558 | 0.558 | 0.199 | 0.073 | 0.083 | 0.033 | 0.042 | 0.012 |
 | near-opt 2 | 1.8380 | 0.491 | 0.491 | 0.167 | 0.071 | 0.087 | 0.046 | 0.073 | 0.064 |
 | near-opt 3 | 1.8383 | 0.495 | 0.495 | 0.167 | 0.072 | 0.179 | 0.015 | 0.055 | 0.017 |
@@ -356,10 +265,10 @@ uncapped optimum (mixing law 1.7965, LightGBM 1.8316), and **≥ 8 pp**
 
 ### Random-simplex plausibility
 
-**1000** mixtures sampled uniformly on the 7-simplex (Dirichlet(1,…,1), seed 42). Pilot observed macro range: **2.0444 – 2.2888 bpb**.
+1000 mixtures ~ Dirichlet(1,…,1) on the 7-simplex (seed 42). Pilot observed macro range: **2.0444 – 2.2888 bpb**.
 
 | Metric | Mixing law | LightGBM |
-|--------|------------|----------|
+|--------|-----------:|---------:|
 | Macro min | 1.8526 | 1.8408 |
 | Macro p50 | 1.9131 | 1.9297 |
 | Macro p95 | 2.0166 | 2.0022 |
@@ -369,144 +278,81 @@ uncapped optimum (mixing law 1.7965, LightGBM 1.8316), and **≥ 8 pp**
 | % inside pilot macro range | 2.3% | 0.0% |
 | Mixtures with macro > 3 bpb | 0 | 0 |
 | Mixtures with macro > 5 bpb | 0 | 0 |
-| Any family > 10 bpb | 0 | 0 |
-| mmlu_other max | 2.8288 | 2.7716 |
 
-Sources: `mixlaw_random_simplex_plausibility.json` (mixing law); `mixlaw_fit_lightgbm_chinchilla.json` (LightGBM).
+Off-hull predictions stay bounded; claimed gains of the surrogate optima over the best measured pilot are **not distinguishable from LOO error** at 60M scale — hence the 370M validation.
 
-### Pilot mixtures ranked by predicted macro
+### Pilot mixtures ranked by predicted macro (top 12)
 
-Sorted by mixing-law prediction; LightGBM rank shown for comparison.
-
-| ML rank | LGB rank | mix | tag | ML pred | LGB pred | max_w | measured curve-6 |
-|---------|----------|-----|-----|---------|----------|-------|------------------|
-| 1 | 4 | mix18 | C1 | 1.8368 | 1.8700 | 0.425 | 2.1089 |
-| 2 | 2 | mix07 | C1-dclm60 | 1.8618 | 1.8451 | 0.600 | 2.0444 |
-| 3 | 7 | mix22 | C1 | 1.8666 | 1.8810 | 0.237 | 2.0899 |
-| 4 | 1 | mix06 | C1-dclm55 | 1.8668 | 1.8370 | 0.550 | 2.0963 |
-| 5 | 5 | mix05 | C1-dclm50 | 1.8726 | 1.8714 | 0.500 | 2.0830 |
-| 6 | 14 | mix23 | C1 | 1.8733 | 1.9107 | 0.475 | 2.0981 |
-| 7 | 17 | mix19 | C1 | 1.8752 | 1.9628 | 0.325 | 2.1456 |
-| 8 | 13 | mix17 | C1 | 1.8897 | 1.9093 | 0.475 | 2.0835 |
-| 9 | 10 | mix01 | base | 1.8913 | 1.8951 | 0.375 | 2.0727 |
-| 10 | 8 | mix04 | C0-dclm0 | 1.8964 | 1.8888 | 0.425 | 2.1174 |
-| 11 | 6 | mix21 | C1 | 1.8969 | 1.8764 | 0.350 | 2.1364 |
-| 12 | 3 | mix16 | C1 | 1.8992 | 1.8527 | 0.400 | 2.1125 |
-
-### 370M validation plan
-
-Eight mixtures selected for OLMo-370M scale-up: the natural **olmo-mix-1124** corpus mix (~95% DCLM), three pilot anchors (mix01, mix07, mix18), plus mixing-law pilot_caps + near-opt 4; LightGBM min1pct + near-opt 8).
-
-| run | source | dclm | arxiv | starcoder | pes2o | open-web-math | alg-stack | wiki |
-|-----|--------|---:|---:|---:|---:|---:|---:|---:|
-| olmo-mix-1124 | reference | 0.951 | 0.005 | 0.021 | 0.015 | 0.003 | 0.003 | 0.001 |
-| mix01 | pilot | 0.375 | 0.250 | 0.141 | 0.094 | 0.064 | 0.061 | 0.016 |
-| mix07 | pilot | 0.600 | 0.160 | 0.090 | 0.060 | 0.041 | 0.039 | 0.010 |
-| mix18 | pilot | 0.237 | 0.041 | 0.041 | 0.425 | 0.100 | 0.044 | 0.113 |
-| ML-pilot_caps | mixing-law | 0.568 | 0.000 | 0.000 | 0.097 | 0.035 | 0.000 | 0.300 |
-| ML-near-opt-4 | mixing-law | 0.440 | 0.012 | 0.012 | 0.043 | 0.181 | 0.012 | 0.300 |
-| LGB-min1pct | lightgbm | 0.553 | 0.212 | 0.087 | 0.082 | 0.042 | 0.014 | 0.011 |
-| LGB-near-opt-8 | lightgbm | 0.182 | 0.182 | 0.076 | 0.377 | 0.020 | 0.037 | 0.127 |
-
-### Key takeaways
-
-1. **mix07** has the lowest measured 6-family macro at the last in-run eval (2.0444 bpb); mixing-law top pilot by prediction is **mix18** (1.8368 bpb @ Chinchilla).
-2. Mixing-law uncapped optimum is **1.7965** bpb (max_w=0.568); LightGBM uncapped is **1.8316** (max_w=0.441).
-3. Claimed gains over the best measured pilot are **not distinguishable** from LOO error.
-4. Mean LOO RMSE: mixing law 0.0766, LightGBM 0.0751.
-5. Off-hull random mixtures stay bounded under both surrogates.
-
-### Reproduce
-
-```bash
-cd experiments/skill-dag/mixlaw
-py -3 extrapolate_chinchilla.py
-py -3 fit_chinchilla.py
-py -3 loo_chinchilla.py
-py -3 sample_random_simplex.py
-py -3 fit_lightgbm_chinchilla.py
-py -3 reoptimize_constraints.py --constraints-only --lightgbm
-py -3 generate_readme.py   # refresh this file
-```
+| ML rank | LGB rank | mix | tag | ML pred | LGB pred | measured curve-6 |
+|--------:|---------:|-----|-----|--------:|---------:|-----------------:|
+| 1 | 4 | Pilot 18 | C1 | 1.8368 | 1.8700 | 2.1089 |
+| 2 | 2 | Pilot 07 | C1-dclm60 | 1.8618 | 1.8451 | 2.0444 |
+| 3 | 7 | Pilot 22 | C1 | 1.8666 | 1.8810 | 2.0899 |
+| 4 | 1 | Pilot 06 | C1-dclm55 | 1.8668 | 1.8370 | 2.0963 |
+| 5 | 5 | Pilot 05 | C1-dclm50 | 1.8726 | 1.8714 | 2.0830 |
+| 6 | 14 | Pilot 23 | C1 | 1.8733 | 1.9107 | 2.0981 |
+| 7 | 17 | Pilot 19 | C1 | 1.8752 | 1.9628 | 2.1456 |
+| 8 | 13 | Pilot 17 | C1 | 1.8897 | 1.9093 | 2.0835 |
+| 9 | 10 | Pilot 01 | base | 1.8913 | 1.8951 | 2.0727 |
+| 10 | 8 | Pilot 04 | C0-dclm0 | 1.8964 | 1.8888 | 2.1174 |
+| 11 | 6 | Pilot 21 | C1 | 1.8969 | 1.8764 | 2.1364 |
+| 12 | 3 | Pilot 16 | C1 | 1.8992 | 1.8527 | 2.1125 |
 
 ---
 
-## 370M validation (olmohq stream + recipe)
+## Validated mixture weights (370M)
 
-Eight **10B-token** OLMo-370M arms. Domain weights live in `validation_mixtures_10b.json` (schema 2). Training **streams from a shared olmohq working pool** at those weights — no per-mix corpora under `mixlaw/mixes/`.
+Recipe domain weights for the four 370M arms that were trained:
 
-| Mixture | Role |
-|---------|------|
-| `olmo-mix-1124` | Natural olmo-mix-1124 reference weights |
-| `mix01` | RegMix base weights (same proportions as pilot mix01) |
-| `mix07`, `mix18` | Pilot grid points |
-| `ML-pilot_caps`, `ML-near-opt-4` | Mixing-law surrogates |
-| `LGB-min1pct`, `LGB-near-opt-8` | LightGBM surrogates |
+| arm | source | dclm | arxiv | starcoder | pes2o | open-web-math | algebraic-stack | wiki |
+|-----|--------|---:|---:|---:|---:|---:|---:|---:|
+| OLMo Mix 1124 | reference | 0.951 | 0.005 | 0.021 | 0.015 | 0.003 | 0.003 | 0.001 |
+| Data Mixing Laws paper | pilot | 0.375 | 0.250 | 0.141 | 0.094 | 0.064 | 0.061 | 0.016 |
+| MixLaw | mixing-law | 0.568 | 0.000 | 0.000 | 0.097 | 0.035 | 0.000 | 0.300 |
+| LightGBM | lightgbm | 0.553 | 0.212 | 0.087 | 0.082 | 0.042 | 0.014 | 0.011 |
 
-**Data source:** `s3://edullm-data/pretrain/olmo-127b/` (published+validated). Stage one peak-sized working pool from edullm-data, then train every arm from it.
+**What each validated arm manipulates**
 
-### Pipeline
+- **OLMo Mix 1124 (control)** — hold mix fixed at the natural OLMo Mix 1124 corpus proportions (very DCLM-heavy).
+- **Data Mixing Laws paper** — hold domain mix fixed at the Data Mixing Laws paper proportions (Pilot 01).
+- **MixLaw** — train the parametric mixing-law optimum. Method from [Ye et al., Data Mixing Laws](https://arxiv.org/abs/2403.16952).
+- **LightGBM** — train the LightGBM mixing-law optimum. Method from [Liu et al., RegMix](https://arxiv.org/abs/2407.01492) (regression / tree surrogate over mixture probes).
 
-1. **pool** — `submit_mixlaw_validation_pool.sh` → `stage_validation_pool_from_edullm_data.py` (peak demand from recipe @ 10B).
-2. **recipe sidecars** — `prepare_validation_370m_data.py` writes per-arm `mix_weights.json`.
-3. **train** — `submit_mixlaw_validation_370m.sh` → `train_mixlaw_validation_370m.py` (`DomainMixtureStream`).
+---
 
-### Platform seven-arm array
+## 370M evaluation and uncertainty
 
-The platform array runs indices `0..6` as `olmo-mix-1124`, `mix07`, `mix18`, `ML-pilot_caps`, `ML-near-opt-4`, `LGB-min1pct`, and `LGB-near-opt-8`. `mix01` is deliberately excluded because its control run is already separate.
+Task-loss is evaluated periodically on the shared 20-label suite. Final performance uses a **power-law residual bootstrap**:
 
-- The image is built from `.edullm/Dockerfile` with the platform-supplied digest and `.edullm/requirements-linux-cu128.lock`. Publication is manual through the `Publish platform research image` workflow; implementation does not dispatch it.
-- Submit repository `edullm-p1`, workload `mixlaw-validation-370m-8xa100`, dataset `olmo-127b-v1`, team `pre-training`, W&B project `mixlaw`, and fan-out size/parallelism `7`.
-- Set experiment/fan-out parameter to `370m-validation`/`mixture` and use command `bash -lc 'EDULLM_LAUNCH_CHECK=waived exec python /opt/edullm/experiments/skill-dag/mixlaw/platform_array_entrypoint.py --checkpoint-prefix "$EDULLM_CHECKPOINT_DIR"'`. The explicit launcher waiver is required because admission can inspect the submitted shell command but cannot see that this entrypoint deterministically starts eight `torchrun` ranks.
-- Every child requires the platform-injected `EDULLM_DATASET_ID=pretrain/olmo-127b` and `EDULLM_DATASET_VERSION=v1`; `latest` is refused. It uses `/scratch/$AWS_BATCH_JOB_ID`, stages only its selected arm, and runs eight ranks with two CPU threads each (16 vCPU total).
-- Checkpoints publish beneath `$EDULLM_CHECKPOINT_DIR/array/<index>-<mix>/stepN/`; progress and task loss publish beneath `$EDULLM_OUTPUT_PREFIX/array/<index>-<mix>/`. Checkpoint contents land before `_COMPLETE.json`.
-- Use the platform status/cancel workflow against the parent array or a specific child. Do not use the FarmShare submit scripts to manage Batch.
-- Batch attempts remain `1`. Checkpoints are durable, but automatic restore from platform S3 is not implemented; a replacement run must first restore a checkpoint to local scratch and pass an explicit `--load-path`.
+1. Fit $y = a + b / \mathrm{step}^{\alpha}$ on all eval points with step ≥ 1000 ($\alpha$ on a grid in $[0.05, 3]$).
+2. Take the fitted value at the final step as the point estimate.
+3. Residual bootstrap (10k draws) for a 95% CI on that fitted final.
+4. Pairwise $\Delta = \mathrm{arm} - \mathrm{control}$ from independent bootstraps (control = OLMo Mix 1124); two-sided $p$ reported only when the arm beats control.
 
-### Recovery, eval, and durability contract
+---
 
-- Set `RECOVERY_MODE=fresh|resume|fail` for every launch. The default is `fail`: clean scratch starts at step 0, but any leftover checkpoint aborts. `fresh` explicitly ignores leftovers. `resume` requires an explicit `--load-path` or a validated `last_durable_step.json`; no mode scans for the newest checkpoint.
-- Production (platform S3 or online W&B durability) requires synchronous all-rank evaluation of all 20 OLMES `*_bpb` labels at every permanent checkpoint. Evaluation failures abort only after the train module has been rebuilt and reloaded. Local smoke runs may explicitly disable task loss.
-- A platform checkpoint becomes durable only after its files and completion sentinel upload successfully; progress and task-loss JSON then publish under the isolated arm output prefix. FarmShare retains its existing local/W&B path.
-- `launch_validation_370m.sh` runs `preflight_validation_370m.py` before training. It requires the complete OLMES label map, a ladder base config, the evaluator, and current dependencies; resolved package and dataset versions are recorded in `run_meta.json`.
-- Install `edullm-data` from the newest release wheel or GitHub `main`; old pins such as `v0.2.0` are rejected.
+## 370M results
 
-The checked-in RunPod source bundle is deterministic and local-only:
+### Fitted final macro task-loss (bpb)
 
-```bash
-python scripts/runpod/build_mixlaw_bundle.py --sync   # refresh local tree
-python scripts/runpod/build_mixlaw_bundle.py          # parity check only
-```
+| Arm | Fitted final | Observed | 95% CI | vs control |
+|-----|-------------:|---------:|--------|------------|
+| **MixLaw** | **1.6062** | 1.6048 | [1.6027, 1.6097] | $p_{\mathrm{two}} < 0.0001$ |
+| **LightGBM** | **1.6087** | 1.6077 | [1.6062, 1.6111] | $p_{\mathrm{two}} < 0.0001$ |
+| OLMo Mix 1124 (control) | 1.6329 | 1.6370 | [1.6284, 1.6368] | — |
+| Data Mixing Laws paper | 1.6518 | 1.6518 | [1.6483, 1.6552] | — |
 
-The builder does not create or upload a tarball and does not touch a pod.
+Lower is better. Both fitted mixtures beat the OLMo Mix 1124 control. Data Mixing Laws paper does not.
 
-### Validation scripts
+### Takeaways
 
-| Script | Role |
-|--------|------|
-| `write_validation_mixtures.py` | Emit `validation_mixtures_10b.json` from fit JSON + pilot mixtures |
-| `submit_mixlaw_validation_pool.sh` | FarmShare: stage peak pool from edullm-data |
-| `stage_validation_pool_from_edullm_data.py` | Download+concat domain memmaps for 370M peak demand |
-| `prepare_validation_370m_data.py` | Per-arm `mix_weights.json` sidecars from recipe |
-| `train_mixlaw_validation_370m.py` | OLMo2-370M CE trainer (domain-stratified stream) |
-| `launch_validation_370m.sh` | Train one recipe arm |
-| `mixlaw_runtime.py` | Pure recovery, dependency, and production contracts |
-| `preflight_validation_370m.py` | OLMES/dependency preflight + version metadata |
-| `platform_array_entrypoint.py` | Deterministic seven-arm Batch mapping and platform paths |
-| `platform_artifacts.py` | Fail-closed checkpoint/progress/task-loss S3 publication |
-| `ladder_base_config.yaml` | Checked-in OLMo2-370M OLMES base config |
-| `submit_mixlaw_validation_370m.sh` | Slurm array over all recipe arms |
-| `domain_stream.py` | Shared olmohq domain sampler (also used by skillit) |
-| `check_validation_pool.py` | Peak demand vs olmohq inventory |
+1. **Mixing-law search works at this scale.** Short-run fits produced mixtures that clearly dominate the OLMo Mix 1124 control under a matched one-epoch budget.
+2. **MixLaw ≈ LightGBM**, with a small edge to the MixLaw optimum.
+3. **Data Mixing Laws paper proportions underperform the control.** That fixed paper mix finishes worse than OLMo Mix 1124.
+4. **Cost.** Four full arms 188.74 A100-hours and $\approx 1.05\times10^{20}$ FLOPs, plus $\approx 2.3\times10^{18}$ FLOPs for the 60M pilot grid.
 
-**Unsupported for new work:** `submit_mixlaw_validation_10b.sh` + `build_mixture_data.py` + `build_working_pool_from_shards.py` + `finalize_mixlaw_upload.py` (per-mix slices / `edullm-datasets/mixlaw/`). Use the streaming peak-pool pipeline above only.
+---
 
-Regenerate the recipe after refitting:
+## Conclusions
 
-```bash
-cd experiments/skill-dag/mixlaw
-py -3 write_validation_mixtures.py
-bash submit_mixlaw_validation_pool.sh
-TRAIN_VENV=/path/to/gpu-venv POOL_DIR=$RUN_DIR/pool SAVE_ROOT=... PROGRESS_ROOT=... bash submit_mixlaw_validation_370m.sh
-```
-
+Under the P1 one-epoch 370M contract, **data mixture is a high-leverage lever**: mixing-law optimization yields ~0.025 bpb absolute macro task-loss improvement over the OLMo Mix 1124 control, with tight CIs and decisive bootstrap significance. Among levers in this campaign, MixLaw is the clearest positive result.

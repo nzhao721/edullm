@@ -32,9 +32,47 @@ def _local_tensor(t: Tensor) -> Tensor:
     return t
 
 
+def _canonical_param_name(name: str) -> str:
+    """Remove transparent wrapper segments that do not change parameter identity."""
+    return name.replace("._checkpoint_wrapped_module", "")
+
+
 def _copy_into_param_(dst: Tensor, src: Tensor) -> None:
-    """In-place copy that never mixes a plain Tensor with a DTensor destination."""
-    _local_tensor(dst).copy_(_local_tensor(src))
+    """Write a local or full tensor into a possibly all-gathered DTensor."""
+    local = _local_tensor(dst)
+    values = _local_tensor(src).detach()
+    if tuple(local.shape) == tuple(values.shape):
+        local.copy_(values.to(device=local.device, dtype=local.dtype))
+        return
+    if tuple(values.shape) == tuple(dst.shape):
+        local_values = _distribute_full_to_local(values, dst)
+        if tuple(local_values.shape) == tuple(local.shape):
+            local.copy_(local_values.to(device=local.device, dtype=local.dtype))
+            return
+    raise RuntimeError(
+        f"cannot write EMA weight: local shape {tuple(local.shape)}, value shape "
+        f"{tuple(values.shape)}, parameter global shape {tuple(dst.shape)}"
+    )
+
+
+def _snapshot_param(param: Tensor) -> Tensor:
+    """Capture only the rank-local shard of a live parameter."""
+    return _local_tensor(param).detach().clone()
+
+
+def _force_reshard(module: nn.Module) -> None:
+    """Release any FSDP2 full parameters left resident by a no-grad forward.
+
+    FSDP2 intentionally leaves some root parameters unsharded after forward so
+    backward can reuse them. REL's history pass has no backward, so force every
+    FSDP module back to its local shard before restoring the saved live weights.
+    This keeps the swap rank-local and avoids retaining a full-model snapshot on
+    every rank.
+    """
+    for submodule in reversed(tuple(module.modules())):
+        reshard = getattr(submodule, "reshard", None)
+        if callable(reshard):
+            reshard()
 
 
 def alpha_exp(step: int, *, tau: float = DEFAULT_ALPHA_TAU) -> float:
@@ -158,7 +196,10 @@ class EMAHistory:
         # Tensor of the shard, which is what we want to accumulate into.
         self._shadow: Dict[str, Tensor] = {}
         for name, p in named_params:
-            self._shadow[name] = _local_tensor(p).detach().clone().zero_()
+            key = _canonical_param_name(name)
+            if key in self._shadow:
+                raise KeyError(f"duplicate EMA parameter after wrapper normalization: {key!r}")
+            self._shadow[key] = _local_tensor(p).detach().clone().zero_()
 
     @classmethod
     def from_module(cls, module: nn.Module, *, alpha: float = 0.999) -> "EMAHistory":
@@ -249,7 +290,7 @@ class EMAHistory:
                 f"EMA seed state_dict missing parameters: {sorted(missing)[:8]}"
                 + ("…" if len(missing) > 8 else "")
             )
-        live = {n: p for n, p in module.named_parameters()}
+        live = {_canonical_param_name(n): p for n, p in module.named_parameters()}
         for name, shadow in self._shadow.items():
             value = state_dict[name]
             if not isinstance(value, Tensor):
@@ -293,10 +334,11 @@ class EMAHistory:
         a = self.alpha if alpha is None else float(alpha)
         one_minus = 1.0 - a
         for name, p in named_params:
-            shadow = self._shadow.get(name)
+            key = _canonical_param_name(name)
+            shadow = self._shadow.get(key)
             if shadow is None:
                 raise KeyError(
-                    f"parameter {name!r} is absent from the EMA accumulator; seeding it now "
+                    f"parameter {key!r} is absent from the EMA accumulator; seeding it now "
                     "would give it the wrong weight in the debiased average"
                 )
             # s ← α s + (1−α) θ  (both sides are rank-local shards)
@@ -312,8 +354,9 @@ class EMAHistory:
         """Overwrite ``module`` parameters with the debiased history (for history forward)."""
         correction = self._require_history()
         for name, p in module.named_parameters():
-            if name in self._shadow:
-                _copy_into_param_(p, self._shadow[name] / correction)
+            key = _canonical_param_name(name)
+            if key in self._shadow:
+                _copy_into_param_(p, self._shadow[key] / correction)
 
     @contextlib.contextmanager
     def swap_to(self, module: nn.Module):
@@ -336,17 +379,24 @@ class EMAHistory:
         try:
             with torch.no_grad():
                 for name, p in module.named_parameters():
-                    if name in self._shadow:
+                    key = _canonical_param_name(name)
+                    if key in self._shadow:
                         # Snapshot the local shard; restoring via _copy_into_param_ keeps
                         # DTensor destinations happy under FSDP2.
-                        saved[name] = _local_tensor(p).detach().clone()
-                        _copy_into_param_(p, self._shadow[name] / correction)
+                        saved[key] = _snapshot_param(p)
+                        _copy_into_param_(p, self._shadow[key] / correction)
             yield module
         finally:
             with torch.no_grad():
+                # A no-grad FSDP2 forward can leave parameters all-gathered. Return
+                # them to shard-local storage before copying the shard snapshots
+                # back; this is both shape-safe and substantially less memory-hungry
+                # than preserving full tensors for every parameter.
+                _force_reshard(module)
                 for name, p in module.named_parameters():
-                    if name in saved:
-                        _copy_into_param_(p, saved[name])
+                    key = _canonical_param_name(name)
+                    if key in saved:
+                        _copy_into_param_(p, saved[key])
 
     def named_history_params(self) -> Iterator[Tuple[str, Tensor]]:
         correction = self._require_history()
@@ -360,9 +410,12 @@ class EMAHistory:
     ) -> None:
         """Compatibility helper: prefer ``copy_to`` for full replace."""
         if source_named is not None:
-            mapping: MutableMapping[str, Tensor] = dict(source_named)
+            mapping: MutableMapping[str, Tensor] = {
+                _canonical_param_name(name): value for name, value in source_named
+            }
             for name, p in target.named_parameters():
-                if name in mapping:
-                    _copy_into_param_(p, mapping[name])
+                key = _canonical_param_name(name)
+                if key in mapping:
+                    _copy_into_param_(p, mapping[key])
             return
         self.copy_to(target)

@@ -22,7 +22,7 @@
 #   LADDER_BASE_CONFIG compatible OLMES evaluation YAML (required)
 #   TASK_LOSS_EVAL_SCRIPT shared all-rank evaluator (repo default)
 #   SEED            default 42
-#   LR_ALPHA_F      default 1.0
+#   LR_ALPHA_F      default 0.1
 #   A_OFFLINE       path to A_offline.npy (default: artifacts/probes_full or artifacts/)
 #   MIXLAW_FIT_JSON path to mixlaw_fit_chinchilla.json
 #   WANDB_PROJECT   default skillit
@@ -68,7 +68,7 @@ PYTHON="${PYTHON:-python}"
 NPROC="${NPROC:-1}"
 DEVICE_BATCH_SIZE="${DEVICE_BATCH_SIZE:-32}"
 SEED="${SEED:-42}"
-LR_ALPHA_F="${LR_ALPHA_F:-1.0}"
+LR_ALPHA_F="${LR_ALPHA_F:-0.1}"
 EXTRA_ARGS="${EXTRA_ARGS:-}"
 if [[ -z "${A_OFFLINE:-}" ]]; then
   # Plan default: artifacts/probes_full/A_offline.npy (legacy artifacts/ fallback).

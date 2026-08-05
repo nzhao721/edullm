@@ -259,6 +259,67 @@ def _token_paths(tokens_dir: Path, *, expected_tokenizer: str) -> List[str]:
         raise SystemExit(str(exc)) from exc
 
 
+def _offline_staged_resolution(
+    cfg: Mapping[str, Any],
+    out: Path,
+) -> Dict[str, Any] | None:
+    """Resolve an already-verified local stage without making another S3 call.
+
+    ``ensure_train_tokens`` writes this manifest only after resolving the published
+    dataset and verifying every declared shard. A launch may then drop its bounded
+    bootstrap credentials before torchrun; every rank re-validates the complete
+    local manifest instead of querying S3 again.
+    """
+    data = cfg.get("data") or {}
+    if not bool(data.get("offline_staged")):
+        return None
+    tokens_dir = out / "tokens"
+    if not (tokens_dir / "manifest.json").is_file():
+        return None
+    tokenizer = str(data.get("tokenizer") or "")
+    try:
+        manifest = validate_token_manifest(tokens_dir, expected_tokenizer=tokenizer)
+    except ValueError as exc:
+        raise SystemExit(f"offline staged train data validation failed: {exc}") from exc
+
+    dataset_id = str(data.get("dataset_id") or "")
+    version = str(data.get("dataset_version") or "")
+    if not dataset_id or not version:
+        raise SystemExit(
+            "data.offline_staged requires pinned data.dataset_id and data.dataset_version"
+        )
+    if str(manifest.get("dataset_id") or "") != dataset_id:
+        raise SystemExit(
+            f"offline staged dataset_id {manifest.get('dataset_id')!r} != {dataset_id!r}"
+        )
+    if str(manifest.get("dataset_version") or "") != version:
+        raise SystemExit(
+            f"offline staged dataset_version {manifest.get('dataset_version')!r} != {version!r}"
+        )
+    expected_uri = f"s3://edullm-data/{dataset_id}/{version}/tokens"
+    source_uri = str(manifest.get("source_uri") or "").rstrip("/")
+    if source_uri != expected_uri:
+        raise SystemExit(
+            f"offline staged source_uri {source_uri!r} != expected {expected_uri!r}"
+        )
+    paths = [
+        f"{source_uri}/{str(shard['path']).lstrip('/')}"
+        for shard in manifest["shards"]
+    ]
+    return {
+        "dataset_id": dataset_id,
+        "version": version,
+        "tokens_uri": source_uri,
+        "paths": paths,
+        "dtype": manifest.get("dtype"),
+        "numpy_dtype": manifest.get("dtype"),
+        "rows": int(manifest["n_tokens"]),
+        "header_bytes": 0,
+        "byte_order": "little",
+        "resolved": None,
+    }
+
+
 def prepare_train_data(cfg: Dict[str, Any], out: Path, *, stage: bool = True) -> Dict[str, Any]:
     """Resolve + optionally stage edullm-data train shards; ensure order contract.
 
@@ -268,17 +329,26 @@ def prepare_train_data(cfg: Dict[str, Any], out: Path, *, stage: bool = True) ->
     resolves the published corpus so configs cannot silently point at legacy
     ``edullm-datasets`` URIs.
     """
-    try:
-        remote = resolve_train_dataset(cfg)
-    except Exception as exc:
-        raise SystemExit(f"train corpus resolution failed: {exc}") from exc
+    remote = _offline_staged_resolution(cfg, out)
+    staged_local = remote is not None
+    if remote is None:
+        try:
+            remote = resolve_train_dataset(cfg)
+        except Exception as exc:
+            raise SystemExit(f"train corpus resolution failed: {exc}") from exc
     tokens_dir = out / "tokens"
     if stage:
-        try:
-            ensure_train_tokens(cfg, tokens_dir)
-            ensure_order_contract(cfg, out)
-        except Exception as exc:
-            raise SystemExit(f"train data staging failed: {exc}") from exc
+        if staged_local:
+            try:
+                ensure_order_contract(cfg, out)
+            except Exception as exc:
+                raise SystemExit(f"offline train data contract failed: {exc}") from exc
+        else:
+            try:
+                ensure_train_tokens(cfg, tokens_dir)
+                ensure_order_contract(cfg, out)
+            except Exception as exc:
+                raise SystemExit(f"train data staging failed: {exc}") from exc
     return remote
 
 
@@ -345,6 +415,13 @@ def build_plan(
     needs_reference = method in ("rho_excess", "middle_ppl") or (
         method == "rel_ema" and ema_seed_mode == "refhq"
     )
+    data_cfg = cfg.get("data") or {}
+    if bool(data_cfg.get("offline_staged")):
+        dataset_id = str(data_cfg.get("dataset_id") or "")
+        dataset_version = str(data_cfg.get("dataset_version") or "")
+        s3_tokens = f"s3://edullm-data/{dataset_id}/{dataset_version}/tokens"
+    else:
+        s3_tokens = resolve_tokens_s3(cfg)
 
     return {
         "run_id": cfg["run_id"],
@@ -386,7 +463,7 @@ def build_plan(
         # block the relaunch after a failed build.
         "dataset_cache": str(out / "dataset_cache" / method),
         "metrics_dir": str(out / "metrics" / method),
-        "s3_tokens": resolve_tokens_s3(cfg),
+        "s3_tokens": s3_tokens,
         "dataset_id": str((cfg.get("data") or {}).get("dataset_id") or ""),
         "checkpoint_artifact_store": "wandb",
         "torchrun_example": (
@@ -634,6 +711,11 @@ def _prepare_run_dir(plan: Dict[str, Any], *, resume: bool) -> None:
     fingerprint_path = _fingerprint_path(plan)
     current = _run_fingerprint(plan)
     if resume:
+        from token_selection.olmo_ext.permanent_checkpoint import (
+            CheckpointContractError,
+            read_run_fingerprint,
+        )
+
         if not fingerprint_path.exists():
             raise SystemExit(
                 f"--resume set but no run_fingerprint.json under {save_folder}; there is "
@@ -641,7 +723,10 @@ def _prepare_run_dir(plan: Dict[str, Any], *, resume: bool) -> None:
                 "be restored before this check. "
                 "Launch without --resume to start the run."
             )
-        prior = json.loads(fingerprint_path.read_text(encoding="utf-8"))
+        try:
+            prior = read_run_fingerprint(fingerprint_path)["identity"]
+        except CheckpointContractError as exc:
+            raise SystemExit(str(exc)) from exc
         if _fingerprints_compatible(prior, current):
             return
         diffs = sorted(k for k in set(prior) | set(current) if prior.get(k) != current.get(k))
@@ -662,19 +747,22 @@ def _commit_run_fingerprint(plan: Dict[str, Any], *, resume: bool) -> None:
     On resume, rewrite when ``max_tokens`` was extended or the reference path was
     relocated (same content hash) so a later resume still matches.
     """
+    from token_selection.olmo_ext.permanent_checkpoint import (
+        read_run_fingerprint,
+        write_run_fingerprint,
+    )
+
     fingerprint_path = _fingerprint_path(plan)
     current = _run_fingerprint(plan)
     if resume:
         if fingerprint_path.exists():
-            prior = json.loads(fingerprint_path.read_text(encoding="utf-8"))
+            prior = read_run_fingerprint(fingerprint_path)["identity"]
             if prior == current:
                 return
             if _fingerprints_compatible(prior, current):
-                fingerprint_path.write_text(
-                    json.dumps(current, indent=2), encoding="utf-8"
-                )
+                write_run_fingerprint(fingerprint_path.parent, current)
         return
-    fingerprint_path.write_text(json.dumps(current, indent=2), encoding="utf-8")
+    write_run_fingerprint(fingerprint_path.parent, current)
 
 
 def build_trainer(plan: Dict[str, Any], cfg: Dict[str, Any], method: MethodName, *, resume: bool = False):
@@ -701,6 +789,7 @@ def build_trainer(plan: Dict[str, Any], cfg: Dict[str, Any], method: MethodName,
         from olmo_core.train import Duration, LoadStrategy, TrainerConfig  # type: ignore
         from olmo_core.train.callbacks import CheckpointerCallback  # type: ignore
         from olmo_core.train.train_module.transformer import (  # type: ignore
+            TransformerActivationCheckpointingConfig,
             TransformerDataParallelConfig,
             TransformerTrainModuleConfig,
         )
@@ -830,12 +919,24 @@ def build_trainer(plan: Dict[str, Any], cfg: Dict[str, Any], method: MethodName,
             raise SystemExit(
                 f"global_batch_size {gbs} is not divisible by rank_microbatch_size {rank_mbz}"
             )
+        ac_interval = int(train_cfg.get("activation_checkpoint_interval", 0) or 0)
+        if ac_interval < 0:
+            raise SystemExit("train.activation_checkpoint_interval must be >= 0")
+        ac_config = (
+            TransformerActivationCheckpointingConfig(
+                mode="selected_blocks",
+                block_interval=ac_interval,
+            )
+            if ac_interval
+            else None
+        )
         train_module_cfg = TransformerTrainModuleConfig(
             rank_microbatch_size=rank_mbz,
             max_sequence_length=seq_len,
             optim=optim_cfg,
             scheduler=scheduler,
             compile_model=compile_model,
+            ac_config=ac_config,
             max_grad_norm=max_grad_norm,
             z_loss_multiplier=z_loss_multiplier,
             dp_config=TransformerDataParallelConfig(
@@ -982,25 +1083,22 @@ def build_trainer(plan: Dict[str, Any], cfg: Dict[str, Any], method: MethodName,
         )
         if not results_dir.is_absolute():
             results_dir = ROOT / results_dir
-        trainer_cfg = trainer_cfg.with_callback(
-            "task_loss_eval",
-            TaskLossEvalCallback(
-                total_steps=total_steps,
-                save_folder=plan["save_folder"],
-                run_id=str(plan["run_id"]),
-                results_dir=results_dir,
-                interval=interval,
-                enabled=task_loss_enabled,
-                command_template=eval_cfg.get("command_template"),
-                eval_script=eval_cfg.get("eval_script"),
-                arm=cfg.get("arm") or None,
-                progress_dir=Path(plan["metrics_dir"]).parent,
-                method=str(method),
-                task_loss_nproc=eval_cfg.get("nproc"),
-                strict=bool(eval_cfg.get("strict", True)),
-                production=production,
-                wandb_mode=os.environ.get("WANDB_MODE", "online"),
-            ),
+        task_loss_callback = TaskLossEvalCallback(
+            total_steps=total_steps,
+            save_folder=plan["save_folder"],
+            run_id=str(plan["run_id"]),
+            results_dir=results_dir,
+            interval=interval,
+            enabled=task_loss_enabled,
+            command_template=eval_cfg.get("command_template"),
+            eval_script=eval_cfg.get("eval_script"),
+            arm=cfg.get("arm") or None,
+            progress_dir=Path(plan["metrics_dir"]).parent,
+            method=str(method),
+            task_loss_nproc=eval_cfg.get("nproc"),
+            strict=bool(eval_cfg.get("strict", True)),
+            production=production,
+            wandb_mode=os.environ.get("WANDB_MODE", "online"),
         )
 
         # W&B: train scalars via olmo_core WandBCallback; ckpt/eval artifacts via side channel.
@@ -1054,6 +1152,11 @@ def build_trainer(plan: Dict[str, Any], cfg: Dict[str, Any], method: MethodName,
             if wb_cfg.get("entity"):
                 wb_kwargs["entity"] = str(wb_cfg["entity"])
             trainer_cfg = trainer_cfg.with_callback("wandb", WandBCallback(**wb_kwargs))
+            # W&B must initialize before the step-0 task-loss callback uploads the
+            # pre-train checkpoint/eval artifact.
+            trainer_cfg = trainer_cfg.with_callback(
+                "task_loss_eval", task_loss_callback
+            )
             trainer_cfg = trainer_cfg.with_callback(
                 "wandb_artifacts",
                 make_wandb_artifacts_callback(
@@ -1075,6 +1178,9 @@ def build_trainer(plan: Dict[str, Any], cfg: Dict[str, Any], method: MethodName,
                 production=production, mode=os.environ.get("WANDB_MODE", "online")
             ):
                 raise
+            trainer_cfg = trainer_cfg.with_callback(
+                "task_loss_eval", task_loss_callback
+            )
             print(
                 json.dumps(
                     {

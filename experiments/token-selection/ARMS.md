@@ -6,10 +6,10 @@ Reference architecture source of truth: [`reference/`](reference/) (RefHQ CE, le
 | Arm | Directory | Selection | Status |
 |-----|-----------|-----------|--------|
 | Control (random 60%) | [`control/`](control/) | uniform random keep 60% | Standalone trainer; `control-regmix10b-v2` |
-| BLADE | [`blade/`](blade/) | top-60% `L_ref − L_proxy` | Syncs 500/875/1250/1625/2000; K=75, τ=375, γ=0.6, λ=1.0; blade_start=500; ckpts save proxy+ref |
+| BLADE | [`blade/`](blade/) | top-60% `L_proxy − L_ref` | RegMix proxy/penalty stream + pinned `pretrain/refhq-instruct/v3` HQ updates; syncs 500/875/1250/1625/2000; K=75, τ=375, γ=0.6, λ=1.0; blade_start=500; pre/post-sync checkpoints |
 | RHO-1 | [`rho-1/`](rho-1/) | top-60% `L_curr − L_ref` | Frozen RefHQ step1315; `t0=0`; YAML spine |
 | REL exp-α | [`rel-ema-exp/`](rel-ema-exp/) | top-60% `L_hist − L_curr` | Bias-corrected EMA from zero; `α(t)=1−e^(−t/300)`; `t0=0` |
-| REL RefHQ-init | [`rel-ema-refhq/`](rel-ema-refhq/) | top-60% REL | Seed EMA from RefHQ; constant α=0.9985; `t0=0` |
+| REL RefHQ-init | [`rel-ema-refhq/`](rel-ema-refhq/) | top-60% REL | Seed EMA from Instruct-v3 step 940; constant α=0.9985; `t0=0` |
 | Middle PPL (token) | [`middle-ppl-token/`](middle-ppl-token/) | middle-60% by frozen RefHQ `L_ref` | Online scorer; `t0=0` |
 | Middle PPL (doc) | [`middle-ppl-doc/`](middle-ppl-doc/) | middle-60% docs by RefHQ PPL | Offline filter + CE; needs LM labels |
 | Attention | [`attention/`](attention/) | top-60% attn-received | `attention_topk`; FA-safe hook+recompute; `t0=0` |

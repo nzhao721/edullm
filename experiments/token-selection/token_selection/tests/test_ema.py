@@ -242,3 +242,63 @@ def test_swap_to_works_when_parameters_look_like_dtensors():
     with ema.swap_to(m):
         assert torch.allclose(m._w.data, expected)
     assert torch.allclose(m._w.data, torch.tensor([7.0, 7.0]))
+
+
+def test_swap_to_forces_reshard_before_restoring_local_snapshot():
+    """A scoring forward may leave full FSDP parameters resident until backward."""
+
+    class GatheredParam:
+        def __init__(self):
+            self.shard = nn.Parameter(torch.tensor([1.0, 1.0]))
+            self._local = self.shard
+
+        def to_local(self):
+            return self._local
+
+        @property
+        def requires_grad(self):
+            return True
+
+    class GatheredModule(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.param = GatheredParam()
+            self.reshard_calls = 0
+
+        def named_parameters(self, prefix="", recurse=True):  # noqa: ARG002
+            yield "w", self.param
+
+        def reshard(self):
+            self.reshard_calls += 1
+            self.param._local = self.param.shard
+
+    m = GatheredModule()
+    ema = EMAHistory.from_module(m, alpha=0.5)
+    m.param.shard.data.fill_(3.0)
+    ema.update_module(m)
+    m.param.shard.data.fill_(7.0)
+
+    with ema.swap_to(m):
+        assert torch.allclose(m.param.to_local(), torch.tensor([3.0, 3.0]))
+        # Simulate FSDP replacing the local view with an all-gathered parameter.
+        m.param._local = torch.full((8,), -1.0)
+
+    assert m.reshard_calls == 1
+    assert torch.allclose(m.param.shard, torch.tensor([7.0, 7.0]))
+
+
+def test_activation_checkpoint_wrapper_names_are_transparent():
+    class WrappedNameModule(M):
+        def named_parameters(self, prefix="", recurse=True):  # noqa: ARG002
+            yield "block._checkpoint_wrapped_module.w", self.w
+
+    m = WrappedNameModule((1.0, 1.0))
+    ema = EMAHistory.from_module_seeded(
+        m,
+        {"block.w": torch.tensor([3.0, 5.0])},
+        alpha=0.5,
+    )
+    assert set(ema.shadow) == {"block.w"}
+    with ema.swap_to(m):
+        assert torch.equal(m.w, torch.tensor([3.0, 5.0]))
+    assert torch.equal(m.w, torch.tensor([1.0, 1.0]))

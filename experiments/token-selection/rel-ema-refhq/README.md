@@ -1,7 +1,7 @@
 # REL RefHQ-init constant-α (`rel-ema-refhq`)
 
 **Only arm that seeds EMA history from RefHQ.** Trainable weights still start from
-scratch on RegMix 10B; the exported RefHQ step1315 `model.pt` initializes the EMA
+scratch on RegMix 10B; today's Instruct-v3 step-940 reference initializes the EMA
 history buffers so REL can score against a strong history from step 0.
 
 Near-clone of [`../rel-ema-exp/`](../rel-ema-exp/): controlled knobs match; only
@@ -11,7 +11,7 @@ Near-clone of [`../rel-ema-exp/`](../rel-ema-exp/): controlled knobs match; only
 | Knob | Value |
 |------|--------|
 | Method | `rel_ema` — top 60% `REL = L_hist − L_curr` |
-| EMA seed | RefHQ step1315 (via `ema.seed_mode: refhq`) |
+| EMA seed | Instruct-v3 step 940 (via `ema.seed_mode: refhq`) |
 | α | constant `0.9985` (~20% half-life on 2360 steps) |
 | `t0` | `0` (selection from step 0; no masking warmup) |
 | Arch | `olmo2_370M` (RefHQ-matched) |
@@ -39,7 +39,7 @@ from token_selection.olmo_ext.train_module import load_reference_state_dict
 # α ≈ 0.9985 for ~20% of a 2360-step run:
 assert abs(alpha_for_half_life(0.2 * 2360) - 0.9985) < 5e-5
 
-weights = load_reference_state_dict("/path/to/refhq_step1315_model.pt")
+weights = load_reference_state_dict("/path/to/refhq_instruct_v3_step940_model.pt")
 ema = EMAHistory.from_module_seeded(model, weights, alpha=0.9985)
 # or: ema = EMAHistory.from_module(model, alpha=0.9985); ema.seed_from_state_dict(model, weights)
 assert ema.has_history and ema.correction == 1.0
@@ -51,23 +51,24 @@ YAML:
 ema:
   seed_mode: refhq   # ONLY this arm
 reference:
-  load_path: /path/to/refhq_step1315_model.pt
+  load_path: /path/to/refhq_instruct_v3_step940_model.pt
 alpha_schedule: linear
 alpha_start: 0.9985
 alpha_end: 0.9985
 t0_steps: 0
 ```
 
-## Export RefHQ seed
+## Reference seed provenance
 
-```bash
-python experiments/token-selection/reference/export_refhq_reference.py \
-  --work-dir /path/to/refhq_export_work \
-  --output /path/to/refhq_step1315_model.pt
+The immutable source is:
+
+```text
+s3://edullm-checkpoints/olmo-370m/edullm-370M-refhq-instruct-v3/checkpoints/step940/
 ```
 
-Set `REF_PT` (or `reference.load_path` in the YAML) to that `model.pt` before train.
-If unset, `--launch` auto-materializes `reference.s3_uri` into a job cache.
+Set `REF_PT` (or `reference.load_path` in the YAML) to a materialized `model.pt`
+from that checkpoint. If unset, `--launch` auto-materializes `reference.s3_uri`
+into a job cache. The reference content hash is part of run provenance.
 
 ## Launch (1..N GPU)
 
@@ -75,7 +76,7 @@ If unset, `--launch` auto-materializes `reference.s3_uri` into a job cache.
 export EDULLM_ROOT=/path/to/edullm
 export OLMO_CORE_DIR=/path/to/OLMo-core   # must match YAML olmo_core.revision
 export RUN_DIR=/path/to/empty/scratch     # required; job-local tokens/ckpts
-export REF_PT=/path/to/refhq_step1315_model.pt   # optional if YAML s3_uri set
+export REF_PT=/path/to/refhq_instruct_v3_step940_model.pt   # optional if YAML s3_uri set
 # Optional hardware: NUM_GPUS=4  or  CUDA_VISIBLE_DEVICES=0,1,2,3
 # Optional memory:   RANK_MICROBATCH_SIZE=16384
 
@@ -89,7 +90,7 @@ WANDB_RESUME_ARTIFACT=entity/project/run-checkpoint:latest \
 FarmShare thin wrapper (same launcher; defaults `RUN_DIR` + `RANK_MICROBATCH_SIZE=16384`):
 
 ```bash
-export REF_PT=/path/to/refhq_step1315_model.pt
+export REF_PT=/path/to/refhq_instruct_v3_step940_model.pt
 export RUN_DIR=/scratch/$USER/rel-ema-refhq-run
 bash "$EDULLM_ROOT/experiments/token-selection/rel-ema-refhq/farmshare/run_rel_ema_refhq.sh" train
 ```

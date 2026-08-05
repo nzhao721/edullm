@@ -15,9 +15,9 @@ Locked BLADE schedule (do not change without a new ``run_id``):
   * ``tau=375``, ``K=75``, ``gamma=0.6``, ``lambda_pen=1.0``
   * ``blade_start=500`` — steps 0..499 proxy-only full CE
   * syncs at **exactly** 500, 875, 1250, 1625, 2000 then hold ref through end
-  * selection score ``L_ref − L_proxy``, keep top-γ after blade_start
-  * train: ``pretrain/regmix-10b``; val/HQ for K updates: ``pretrain/refhq-regmix-5p5b``
-    (both from ``s3://edullm-data/`` via ``resolve_latest`` / ``dataset_paths``;
+  * selection score ``L_proxy − L_ref``, keep top-γ after blade_start
+  * train: ``pretrain/regmix-10b``; val/HQ for K updates: pinned
+    ``pretrain/refhq-instruct/v3`` (both from ``s3://edullm-data/``;
     stage with ``prepare_blade_data.py`` into job scratch)
 
 Ephemeral-machine contract:
@@ -591,9 +591,9 @@ def top_gamma_label_mask(
     labels: torch.Tensor,
     gamma: float,
 ) -> torch.Tensor:
-    """Keep top-γ tokens by BLADE score ``Δ = L_ref − L_proxy`` (paper Eq. 5)."""
+    """Keep top-γ tokens by BLADE ranking score ``L_proxy − L_ref``."""
     valid = labels != LABEL_IGNORE_INDEX
-    score = ref_ce - proxy_ce
+    score = proxy_ce - ref_ce
     flat = score[valid]
     if flat.numel() == 0:
         return valid
@@ -717,7 +717,7 @@ def build_blade_labels(
     gamma: float,
     micro_seqs: int,
 ) -> Tuple[torch.Tensor, float]:
-    """Top-γ mask by ``L_ref − L_proxy``; return masked labels + select fraction."""
+    """Top-γ mask by ``L_proxy − L_ref``; return masked labels + select fraction."""
     B = input_ids.size(0)
     labels_full = get_labels({"input_ids": input_ids}, label_ignore_index=LABEL_IGNORE_INDEX)
     select = torch.zeros_like(labels_full, dtype=torch.bool)
@@ -853,7 +853,7 @@ def save_checkpoint(
             "method": "BLADE",
             "blade_sync_steps": list(BLADE_SYNC_STEPS),
             "blade_start": BLADE_START,
-            "selection_score": "L_ref - L_proxy",
+            "selection_score": "L_proxy - L_ref",
             "checkpoint_format": CHECKPOINT_FORMAT,
             "has_reference": ref_sd is not None,
         }
@@ -1296,7 +1296,7 @@ def _run(args: argparse.Namespace) -> None:
         "method": "BLADE",
         "proxy_train_stack": "TransformerTrainModule HSDP bf16 SkipStepAdamW compile",
         "matched_reference": "experiments/token-selection/reference/train_olmo3_370m_refhq.py",
-        "selection_score": "L_ref - L_proxy",
+        "selection_score": "L_proxy - L_ref",
         "gamma": float(args.gamma),
         "lambda_pen": float(args.lambda_pen),
         "tau": int(args.tau),
@@ -1355,7 +1355,7 @@ def _run(args: argparse.Namespace) -> None:
         "tau": int(args.tau),
         "K": int(args.K),
         "lambda_pen": float(args.lambda_pen),
-        "selection_score": "L_ref-L_proxy",
+        "selection_score": "L_proxy-L_ref",
         "train_paths_sha256": sha256_file(Path(args.train_paths_file)),
         "reference_paths_sha256": sha256_file(Path(args.ref_paths_file)),
         "reference_stream_seed_offset": 101,
@@ -1384,7 +1384,7 @@ def _run(args: argparse.Namespace) -> None:
                     f"blade_start={blade_start}  # warmup steps 0..{blade_start - 1}",
                     f"blade_sync_steps={list(BLADE_SYNC_STEPS)}",
                     f"tau={args.tau}  K={args.K}  gamma={args.gamma}  lambda={args.lambda_pen}",
-                    "selection_score=L_ref - L_proxy",
+                    "selection_score=L_proxy - L_ref",
                     f"permanent_checkpoints={ladder}",
                     f"checkpoint_format={CHECKPOINT_FORMAT}  # proxy+optim + reference",
                     f"global_batch_tokens={GLOBAL_BATCH_TOKENS}  mbs_seqs={mbs}  "

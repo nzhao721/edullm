@@ -1,5 +1,5 @@
 # REL RefHQ-init, constant-α arm (Arm 3).
-# ONLY arm that seeds EMA history buffers from RefHQ step1315.
+# ONLY arm that seeds EMA history buffers from today's Instruct-v3 step940.
 # Trainable model still initializes from scratch on RegMix 10B.
 #
 # Near-clone of rel-ema-exp: controlled knobs match; independent diffs are only
@@ -10,9 +10,9 @@
 #   (α^H = 1/2 ⇒ H = ln(0.5)/ln(0.9985) ≈ 462 ≈ 0.2 · 2360)
 #
 # Reference seed (EMA history only — not a frozen RHO ref):
-#   s3://edullm-checkpoints/olmo-370m/edullm-370M-refhq-5p5b/checkpoints/step1315/
+#   s3://edullm-checkpoints/olmo-370m/edullm-370M-refhq-instruct-v3/checkpoints/step940/
 # load_path may stay null: --launch auto-materializes from s3_uri.
-# Optional override: REF_PT=/path/to/refhq_step1315_model.pt
+# Optional override: REF_PT=/path/to/refhq_instruct_v3_step940_model.pt
 
 run_id: rel-ema-refhq-10b-scratch-v1
 seed: 42
@@ -39,11 +39,10 @@ ema:
 # Local path optional — null + s3_uri → auto-materialize at --launch.
 reference:
   load_path: null
-  s3_uri: s3://edullm-checkpoints/olmo-370m/edullm-370M-refhq-5p5b/checkpoints/step1315/
-  step: 1315
-  planned_total_steps: 1314
-  # Provenance only: RefHQ was trained on published pretrain/refhq-regmix-5p5b.
-  dataset: pretrain/refhq-regmix-5p5b
+  s3_uri: s3://edullm-checkpoints/olmo-370m/edullm-370M-refhq-instruct-v3/checkpoints/step940/
+  step: 940
+  planned_total_steps: 940
+  dataset: pretrain/refhq-instruct/v3
 
 data:
   # Published+validated corpus (edullm_data.read.resolve_latest / dataset_paths).

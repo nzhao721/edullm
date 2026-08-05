@@ -105,17 +105,39 @@ async function main() {
     const podId = process.argv[3];
     if (!podId) throw new Error("usage: create_idle_pod.js --inspect POD_ID");
     const pod = await request("GET", `/v1/pods/${podId}`);
+    const ssh = sshEndpoint(pod);
     process.stdout.write(
       JSON.stringify({
-        keys: Object.keys(pod),
         id: pod.id,
+        name: pod.name,
         status: pod.status ?? pod.desiredStatus,
-        runtime: pod.runtime,
-        ports: pod.ports,
-        portMappings: pod.portMappings,
-        publicIp: pod.publicIp,
-        machineKeys: pod.machine ? Object.keys(pod.machine) : [],
+        publicIp: pod.publicIp ?? null,
+        sshHost: ssh?.host ?? null,
+        sshPort: ssh?.port ?? null,
       }) + "\n"
+    );
+    return;
+  }
+  if (process.argv[2] === "--list") {
+    const nameFilter = process.argv[3] ?? "";
+    const pods = await request("GET", "/v1/pods");
+    const items = (Array.isArray(pods) ? pods : pods?.pods ?? []).filter(
+      (pod) => !nameFilter || String(pod.name ?? "").includes(nameFilter)
+    );
+    process.stdout.write(
+      JSON.stringify(
+        items.map((pod) => {
+          const ssh = sshEndpoint(pod);
+          return {
+            id: pod.id,
+            name: pod.name,
+            status: pod.status ?? pod.desiredStatus,
+            publicIp: pod.publicIp ?? null,
+            sshHost: ssh?.host ?? null,
+            sshPort: ssh?.port ?? null,
+          };
+        })
+      ) + "\n"
     );
     return;
   }

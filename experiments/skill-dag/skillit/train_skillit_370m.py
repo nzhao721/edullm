@@ -342,7 +342,7 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--compile", dest="compile", action="store_true", default=True)
     ap.add_argument("--no-compile", dest="compile", action="store_false")
     ap.add_argument("--lr-warmup-steps", type=int, default=24)
-    ap.add_argument("--lr-alpha-f", type=float, default=1.0)
+    ap.add_argument("--lr-alpha-f", type=float, default=0.1)
     ap.add_argument("--eta", type=float, default=ETA_DEFAULT)
     ap.add_argument("--log-interval", type=int, default=10)
     ap.add_argument("--task-loss-results-dir", type=str, default=None)

@@ -10,19 +10,32 @@ import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-# mix01 validation arm constants
+# MixLaw 370M production run constants (all arms).
 TOTAL_STEPS = 2384
 TOKENS_PER_STEP = 4_194_304
 SAVE_INTERVAL = 125
+GPU_COUNT = 8
 # Conservative pause per remaining ladder milestone (eval + checkpoint + wandb).
 EVAL_MINUTES_PER_MILESTONE = 12.0
 
+# Legacy smoke / custom launcher format.
 STEP_RE = re.compile(
     r"step=(\d+)/(\d+)\s+.*?\btok/s=(\d+)\s+\(avg=(\d+)\)",
 )
 STEP_TS_RE = re.compile(
     r"(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3}).*?step=(\d+)/(\d+)",
 )
+
+# OLMo-core console_logger format (launch.sh / mixlaw-train.log).
+OLMO_STEP_RE = re.compile(r"\[step=(\d+)/(\d+)(?:,[^\]]*)?\]")
+OLMO_STEP_TS_RE = re.compile(
+    r"(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3}).*?\[step=(\d+)/(\d+)",
+)
+OLMO_DEVICE_TPS_RE = re.compile(r"throughput/device/TPS=([\d,]+)")
+OLMO_DEVICE_AVG_TPS_RE = re.compile(
+    r"throughput/device/TPS \(actual avg\)=([\d,]+)"
+)
+OLMO_LOG_ETA_RE = re.compile(r"\[step=\d+/\d+,[^\]]*eta=([^\],]+)")
 
 
 def _import_ladder():
@@ -137,9 +150,18 @@ def estimate(
     }
 
 
+def _parse_tps(value: str) -> float:
+    return float(value.replace(",", ""))
+
+
 def parse_logs(text: str) -> dict | None:
     samples: list[tuple[datetime, int]] = []
     last_match: re.Match[str] | None = None
+    olmo_step: int | None = None
+    olmo_total: int | None = None
+    device_tps: float | None = None
+    device_avg_tps: float | None = None
+
     for line in text.splitlines():
         m = STEP_RE.search(line)
         if m:
@@ -151,20 +173,59 @@ def parse_logs(text: str) -> dict | None:
             )
             samples.append((ts, int(ts_m.group(2))))
 
-    if last_match is None:
+        olmo_m = OLMO_STEP_RE.search(line)
+        if olmo_m:
+            olmo_step = int(olmo_m.group(1))
+            olmo_total = int(olmo_m.group(2))
+        olmo_ts_m = OLMO_STEP_TS_RE.search(line)
+        if olmo_ts_m:
+            ts = datetime.strptime(olmo_ts_m.group(1), "%Y-%m-%d %H:%M:%S.%f").replace(
+                tzinfo=timezone.utc
+            )
+            samples.append((ts, int(olmo_ts_m.group(2)))
+        tps_m = OLMO_DEVICE_TPS_RE.search(line)
+        if tps_m:
+            device_tps = _parse_tps(tps_m.group(1))
+        avg_m = OLMO_DEVICE_AVG_TPS_RE.search(line)
+        if avg_m:
+            device_avg_tps = _parse_tps(avg_m.group(1))
+
+    if last_match is not None:
+        step = int(last_match.group(1))
+        tok_s = float(last_match.group(3))
+        avg_tok_s = float(last_match.group(4))
+        return estimate(
+            step,
+            tok_s=tok_s,
+            avg_tok_s=avg_tok_s,
+            log_samples=samples,
+        )
+
+    if olmo_step is None:
         return None
 
-    step = int(last_match.group(1))
-    total = int(last_match.group(2))
-    tok_s = float(last_match.group(3))
-    avg_tok_s = float(last_match.group(4))
-    if total != TOTAL_STEPS:
-        pass  # still use parsed step; total may vary in smoke runs
+    aggregate_tok_s = 0.0
+    aggregate_avg_tok_s: float | None = None
+    if device_tps is not None and device_tps > 0:
+        aggregate_tok_s = device_tps * GPU_COUNT
+    if device_avg_tps is not None and device_avg_tps > 0:
+        aggregate_avg_tok_s = device_avg_tps * GPU_COUNT
+    if aggregate_tok_s <= 0 and samples:
+        # Step-only lines: estimate from recent step timestamps.
+        if len(samples) >= 2:
+            (t0, s0), (t1, s1) = samples[-2], samples[-1]
+            dstep = s1 - s0
+            dsec = (t1 - t0).total_seconds()
+            if dstep > 0 and dsec > 0:
+                aggregate_tok_s = (dstep * TOKENS_PER_STEP) / dsec
+
+    if aggregate_tok_s <= 0:
+        return None
 
     return estimate(
-        step,
-        tok_s=tok_s,
-        avg_tok_s=avg_tok_s,
+        olmo_step,
+        tok_s=aggregate_tok_s,
+        avg_tok_s=aggregate_avg_tok_s,
         log_samples=samples,
     )
 

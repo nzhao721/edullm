@@ -64,7 +64,9 @@ def test_trainer_rejects_legacy_coordinates_and_implicit_recovery() -> None:
 
 def test_launcher_preflights_and_explicit_recovery() -> None:
     text = LAUNCHER.read_text(encoding="utf-8")
-    assert "LADDER_BASE_CONFIG is required" in text
+    # Match MixLaw: default to the shared OLMo2-370M ladder YAML, then require the file.
+    assert 'skill-dag/mixlaw" && pwd)/ladder_base_config.yaml' in text
+    assert "LADDER_BASE_CONFIG must name an existing config" in text
     assert "HF token present" in text
     assert "FRESH=1 and LOAD_PATH are mutually exclusive" in text
     assert "choose recovery mode explicitly" in text

@@ -43,7 +43,9 @@
 #   LR_ALPHA_F          default 1.0 (constant LR after warmup)
 #   FRESH=1             explicit start-from-scratch mode (required unless LOAD_PATH is set)
 #   LOAD_PATH           local step dir or wandb-artifact://entity/project/name:version
-#   LADDER_BASE_CONFIG  required config YAML when task-loss eval is enabled
+#   LADDER_BASE_CONFIG  OLMES eval YAML when task-loss is enabled (default: shared
+#                       MixLaw OLMo2-370M ladder_base_config.yaml — same file MixLaw
+#                       / Skill-It / token-selection production eval uses)
 #   HF_SESSION_ENV      optional hf-session.env; HF_TOKEN is preflighted without network
 #   TASK_LOSS_OUT_DIR   default: $PROGRESS_DIR/task_loss_results
 #   METRICS_DIR         default: sibling of PROGRESS_DIR named metrics
@@ -57,14 +59,14 @@
 #   bash scripts/farmshare/push_wandb_session_to_farmshare.sh "$RUN_DIR"
 #   bash scripts/farmshare/push_aws_session_to_farmshare.sh "$RUN_DIR"
 #   ARM_ID=control PACING=control \
-#     FRESH=1 LADDER_BASE_CONFIG=/path/to/ladder-config.yaml \
+#     FRESH=1 \
 #     SAVE_FOLDER=$RUN_DIR/ckpts PROGRESS_DIR=$RUN_DIR/progress \
 #     DATA_CACHE_DIR=$RUN_DIR/cache \
 #     bash launch_arm.sh
 #
 # Example (N ranks, curriculum — requires published curriculum/* on edullm-data):
 #   NPROC=4 ARM_ID=linear10-cr PACING=linear_n10 DIFFICULTY_METRIC=compression_ratio \
-#     FRESH=1 LADDER_BASE_CONFIG=/path/to/ladder-config.yaml \
+#     FRESH=1 \
 #     SAVE_FOLDER=$RUN_DIR/ckpts PROGRESS_DIR=$RUN_DIR/progress \
 #     DATA_CACHE_DIR=$RUN_DIR/cache \
 #     bash launch_arm.sh
@@ -151,13 +153,16 @@ if [[ -n "${HF_TOKEN:-}${HUGGING_FACE_HUB_TOKEN:-}" ]]; then
 else
   echo "[launch_arm] WARNING: no HF token; public Hub downloads may be rate-limited" >&2
 fi
+# Same default as MixLaw launch_validation_370m.sh: checked-in OLMo2-370M OLMES YAML.
+_DEFAULT_LADDER_BASE_CONFIG="$(cd "${CUR_ROOT}/../skill-dag/mixlaw" && pwd)/ladder_base_config.yaml"
+LADDER_BASE_CONFIG="${LADDER_BASE_CONFIG:-${_DEFAULT_LADDER_BASE_CONFIG}}"
 if [[ "${TASK_LOSS_EVAL}" != "0" ]]; then
-  : "${LADDER_BASE_CONFIG:?LADDER_BASE_CONFIG is required when TASK_LOSS_EVAL is enabled}"
   if [[ ! -f "${LADDER_BASE_CONFIG}" ]]; then
-    echo "missing LADDER_BASE_CONFIG: ${LADDER_BASE_CONFIG}" >&2
+    echo "[launch_arm] LADDER_BASE_CONFIG must name an existing config: ${LADDER_BASE_CONFIG}" >&2
     exit 2
   fi
   export LADDER_BASE_CONFIG
+  echo "[launch_arm] LADDER_BASE_CONFIG=${LADDER_BASE_CONFIG}" >&2
 fi
 
 if [[ "${ALLOW_LOCAL_ONLY}" != "1" ]]; then
@@ -264,7 +269,7 @@ echo "[launch_arm] artifacts=scratch+wandb s3=published-input-staging-only"
 if [[ "${NPROC}" -le 1 ]]; then
   exec "${PYTHON}" "${TRAIN_SCRIPT}" "${ARGS[@]}" "${EXTRA[@]}"
 else
-  exec torchrun --standalone --nproc_per_node="${NPROC}" \
+  exec torchrun --standalone --nproc_per_node="${NPROC}" -- \
     "${TRAIN_SCRIPT}" "${ARGS[@]}" "${EXTRA[@]}"
 fi
 
