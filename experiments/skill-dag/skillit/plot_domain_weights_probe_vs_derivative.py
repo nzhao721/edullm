@@ -18,7 +18,7 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 
-OUT_DIR = Path(__file__).resolve().parents[3] / "p1-whitepaper-overleaf" / "figures"
+OUT_DIR = Path(__file__).resolve().parent / "figures"
 FINAL_STEP = 2384
 
 # Bottom-to-top stacking order, matching the original figure.
