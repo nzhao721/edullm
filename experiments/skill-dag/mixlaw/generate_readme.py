@@ -117,10 +117,6 @@ def validation_corpora_lines() -> list[str]:
         "`LGB-near-opt-8`. `mix01` is deliberately excluded because its control "
         "run is already separate.",
         "",
-        "- The image is built from `.edullm/Dockerfile` with the platform-supplied "
-        "digest and `.edullm/requirements-linux-cu128.lock`. Publication is manual "
-        "through the `Publish platform research image` workflow; implementation "
-        "does not dispatch it.",
         "- Submit repository `edullm-p1`, workload "
         "`mixlaw-validation-370m-8xa100`, dataset `olmo-127b-v1`, team "
         "`pre-training`, W&B project `mixlaw`, and fan-out size/parallelism `7`.",

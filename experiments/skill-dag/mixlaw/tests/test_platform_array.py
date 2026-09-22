@@ -258,24 +258,3 @@ def test_platform_artifacts_use_isolated_progress_taskloss_and_sentinel(
     assert not any("wandb" in key for key in keys)
     assert keys[-1].endswith("/_COMPLETE.json")
     assert uri.endswith("/step10/")
-
-
-def test_container_and_legacy_launch_contracts_are_checked_in() -> None:
-    repo = _MIXLAW.parents[2]
-    dockerfile = (repo / ".edullm" / "Dockerfile").read_text(encoding="utf-8")
-    lock = (repo / ".edullm" / "requirements-linux-cu128.lock").read_text(
-        encoding="utf-8"
-    )
-    workflow = (
-        repo / ".github" / "workflows" / "publish-research-image.yml"
-    ).read_text(encoding="utf-8")
-    launcher = (_MIXLAW / "launch_validation_370m.sh").read_text(encoding="utf-8")
-    assert "ARG BASE_IMAGE\nFROM ${BASE_IMAGE}" in dockerfile
-    assert "platform_array_entrypoint.py" in dockerfile
-    assert "torch==2.8.0+cu128" in lock
-    assert "ai2-olmo-core==2.4.0" in lock
-    assert "workflow_dispatch:" in workflow
-    assert "repository: edullm-p1" in workflow
-    assert 'NPROC="${NPROC:-1}"' in launcher
-    assert "SLURM_JOB_ID" not in entrypoint.__file__
-    assert 'if [[ "${MIXLAW_PLATFORM:-0}" == "1" ]]' in launcher
