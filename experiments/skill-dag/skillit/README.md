@@ -189,6 +189,27 @@ for how this drives each arm's contaminated exposure.
 
 ---
 
+## Training-code provenance
+
+The 370M runs were launched from a dedicated OLMo-core worktree, not from this
+repository; this repository holds the recipe, the launch wrappers and the
+analysis. The branch for Skill-It was **`OLMo-core-skillit-370m`**, whose FarmShare adapters live
+under its own `.edullm/farmshare/` (submitted with
+`ARM_INDEX=0 bash .edullm/farmshare/submit_from_laptop.sh`). Those submit
+scripts mint AWS credentials on the operator's machine, sync branch code to
+scratch, stage sealed `edullm-data` inputs via Slurm, delete the credentials,
+then launch 8-GPU training with PyTorch SDPA (FlashAttention is not used on
+FarmShare). Queue sizing is overridable before submit:
+
+```bash
+export TRAIN_GPUS=8 TRAIN_CPUS=64 TRAIN_MEM=384G TRAIN_TIME=72:00:00
+export STAGE_CPUS=8 STAGE_MEM=32G STAGE_TIME=06:00:00
+```
+
+The session-push helpers those scripts call are
+`scripts/farmshare/push_aws_session_to_farmshare.sh` and
+`scripts/farmshare/push_wandb_session_to_farmshare.sh` in this repository.
+
 ## Evaluation and uncertainty
 
 Same as MixLaw: power law \(y = a + b/\mathrm{step}^{\alpha}\) on steps ≥ 1000;

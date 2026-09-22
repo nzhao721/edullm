@@ -1,6 +1,6 @@
 """SmolLM2-style W&B helpers for token-selection trainers.
 
-Protocol (mirrors ``scripts/farmshare/train_smollm2_135m_ddp.py``):
+Protocol:
 
 * Local smoke runs may soft-disable W&B. Production online runs fail closed
   when W&B is unavailable or a checkpoint artifact upload does not complete.

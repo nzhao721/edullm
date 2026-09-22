@@ -50,6 +50,27 @@ Exact domain weights for these four arms are in Validated mixture weights below.
 
 ---
 
+## Training-code provenance
+
+The 370M runs were launched from a dedicated OLMo-core worktree, not from this
+repository; this repository holds the recipe, the launch wrappers and the
+analysis. The branch for MixLaw was **`OLMo-core`**, whose FarmShare adapters live
+under its own `.edullm/farmshare/` (submitted with
+`ARM_INDEX=0 bash .edullm/farmshare/submit_from_laptop.sh`). Those submit
+scripts mint AWS credentials on the operator's machine, sync branch code to
+scratch, stage sealed `edullm-data` inputs via Slurm, delete the credentials,
+then launch 8-GPU training with PyTorch SDPA (FlashAttention is not used on
+FarmShare). Queue sizing is overridable before submit:
+
+```bash
+export TRAIN_GPUS=8 TRAIN_CPUS=64 TRAIN_MEM=384G TRAIN_TIME=72:00:00
+export STAGE_CPUS=8 STAGE_MEM=32G STAGE_TIME=06:00:00
+```
+
+The session-push helpers those scripts call are
+`scripts/farmshare/push_aws_session_to_farmshare.sh` and
+`scripts/farmshare/push_wandb_session_to_farmshare.sh` in this repository.
+
 ## Proxy pilot (DataDecide-60M)
 
 24 designed mixtures over the same 7 domains, each trained with a **DataDecide-60M** proxy and scored on OLMo-ladder task-loss (bits-per-byte). Surrogates are fit on **Chinchilla-extrapolated** family losses (step 5806, tokens/param = 20).

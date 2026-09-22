@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Shared Weights & Biases helpers for mixlaw trainers (SmolLM2 protocol).
 
-Enablement mirrors ``scripts/farmshare/train_smollm2_135m_ddp.py``:
+Enablement protocol:
   * ``--wandb-mode online|offline|disabled`` (default online when API key present
     via launcher; trainers default to ``online`` CLI but no-op without key)
   * Requires ``wandb`` package + ``WANDB_API_KEY`` (FarmShare: ``wandb-session.env``)

@@ -67,7 +67,7 @@ for d in DOMAINS:
         infeasible.append(d)
     reuse = "" if total_demand[d] <= avail else " (cross-mix overlap)"
     print(f"{d:<18}{avail/1e9:>11.1f}B{peak[d]/1e6:>12.1f}M{total_demand[d]/1e6:>13.1f}M  {ok}{reuse}")
-assert not infeasible, f"tokens/param={TPP:g} is infeasible for {infeasible}; see budget_calculator.py"
+assert not infeasible, f"tokens/param={TPP:g} is infeasible for {infeasible}"
 
 print()
 print("=" * 70)

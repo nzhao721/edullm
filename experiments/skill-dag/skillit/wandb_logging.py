@@ -1,6 +1,6 @@
 """Shared W&B helpers for Skill-It 370M train + probe final-eval logging.
 
-Mirrors ``scripts/farmshare/train_smollm2_135m_ddp.py`` enablement:
+Enablement protocol:
   - online/offline/disabled via ``--wandb-mode`` / ``WANDB_MODE``
   - online production runs require ``WANDB_API_KEY`` and fail closed
   - artifact uploads wait for W&B acknowledgement before training advances
