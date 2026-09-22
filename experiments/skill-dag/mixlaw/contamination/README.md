@@ -117,10 +117,13 @@ Index construction
 - `item_identity.py` -- shared normalizer, exemplar-stripping, hashing.
   Stdlib only.
 - `dump_eval_items.py` -- reads eval item text off ai2-olmo's own task
-  objects; writes `eval_items.jsonl.gz`. **Requires ai2-olmo + torch**; see
-  Dependencies below.
+  objects; writes the full-text `eval_items.jsonl.gz`, committed here only
+  in hash-only form (see
+  [below](#committed-eval-item-dump-is-hash-only)). **Requires ai2-olmo +
+  torch**; see Dependencies below.
 - `build_item_index.py` -- builds the length-floored, provenance-tagged
-  n-gram index from `eval_items.jsonl.gz`. Stdlib only.
+  n-gram index from a full-text `eval_items.jsonl.gz`; refuses the committed
+  hash-only file with an explicit error. Stdlib only.
 - `verify_item_identity.py` -- asserts a training run scored the same item
   set this index was built from. Stdlib only; not needed to reproduce the
   numbers above.
@@ -141,29 +144,99 @@ Scanning, aggregation, exposure
 
 Everything above is **stdlib-only** except `dump_eval_items.py`, which needs
 `torch` and `ai2-olmo` (`olmo.config`, `olmo.eval`, `olmo.tokenizer`)
-importable. Its output, `eval_items.jsonl.gz`, is committed here so
-everything downstream is runnable with the stdlib alone, without ai2-olmo,
-from that file.
+importable. Its output is committed here in hash-only form (next section):
+`verify_item_identity.py` and `aggregate_by_domain.py` run from the
+committed file with the stdlib alone, but rebuilding the index needs a
+full-text dump regenerated with ai2-olmo.
 
 Not vendored: the raw 127B reservoir itself (115 GB; FarmShare path
 above); `item_index.pkl` (172 MB, larger than GitHub's per-file limit --
-regenerates from the committed `eval_items.jsonl.gz` via
-`build_item_index.py`); and raw per-shard hit files and `DONE` sentinels
-(regenerable from `scan_corpus.py` against the committed index and the
-reservoir).
+regenerates via `build_item_index.py` from a regenerated full-text dump);
+and raw per-shard hit files and `DONE` sentinels (regenerable from
+`scan_corpus.py` against that index and the reservoir).
+
+## Committed eval-item dump is hash-only
+
+`eval_items.jsonl.gz` here is deliberately **hash-only**, so this public
+repo does not republish the benchmark items or their answers (7 of the 20
+labels are test splits). Each of its 40,582 rows keeps `label`, `doc_id`,
+`stem_sha256`, `gold_sha256`, `full_context_sha256`, `stem_words`,
+`gold_words` and `n_candidates`, in the original row order; the `stem` and
+`gold` text that `dump_eval_items.py` writes is dropped. The
+`example_stem` / `example_gold` fields are likewise dropped from
+`eval_items_summary.json`; every count, statistic and the
+`normalizer_fingerprint` are kept.
+
+Still supported from the committed file:
+
+- `verify_item_identity.py`, which reads only `label`, `doc_id`,
+  `full_context_sha256` and `gold_sha256`.
+- `aggregate_by_domain.py`, which reads only `label`, `stem_words` and
+  `gold_words`.
+- The per-item hash record itself: exact-match identity of any candidate
+  text against an indexed item (normalize and hash it as `item_identity.py`
+  does, then compare).
+
+Not supported: rebuilding the 13-gram span index offline.
+`build_item_index.py` indexes the literal strings, so it needs a full-text
+dump regenerated with `dump_eval_items.py` (commands under Reproducing
+below). Write that dump outside this checkout and do not commit it.
+
+The project's evaluator environment pins
+`ai2-olmo @ https://github.com/allenai/OLMo/archive/090253dac6688f2532509daa7aa2eb5fae50e956.tar.gz`
+(`experiments/token-selection/olmo_core_token_selection/requirements-token-selection-eval.txt`);
+`dump_eval_items.py` also needs `torch`. That is the pinned evaluator
+environment, not a record of the build that produced the committed dump,
+which this repo does not record. The script forces HuggingFace offline mode
+unless `HF_DATASETS_OFFLINE` / `HF_HUB_OFFLINE` are already set, so run it
+where the eval datasets and `allenai/dolma2-tokenizer` are cached, or set
+both to `0`. Every hash is taken under the committed normalizer
+(`normalizer_fingerprint`), so a regenerated dump can be checked item by
+item against the committed one; any differing row is an item whose
+evaluator text changed:
+
+```bash
+# FULLTEXT and CONTAM as under Reproducing below.
+python - "$FULLTEXT" "$CONTAM" <<'EOF'
+import gzip, json, sys
+from pathlib import Path
+
+regen, committed = map(Path, sys.argv[1:])
+KEEP = ("label", "doc_id", "stem_sha256", "gold_sha256", "full_context_sha256",
+        "stem_words", "gold_words", "n_candidates")
+
+def rows(d):
+    with gzip.open(d / "eval_items.jsonl.gz", "rt", encoding="utf-8") as fh:
+        return [tuple(json.loads(line)[k] for k in KEEP) for line in fh]
+
+def fingerprint(d):
+    summary = json.loads((d / "eval_items_summary.json").read_text(encoding="utf-8"))
+    return summary["normalizer_fingerprint"]
+
+assert fingerprint(regen) == fingerprint(committed), "normalizer changed"
+new, old = rows(regen), rows(committed)
+bad = [i for i, (a, b) in enumerate(zip(new, old)) if a != b]
+print(f"{len(new)} vs {len(old)} rows; {len(bad)} differ (first rows: {bad[:5]})")
+sys.exit(1 if bad or len(new) != len(old) else 0)
+EOF
+```
 
 ## Reproducing
 
 ```bash
 CONTAM=path/to/this/directory   # experiments/skill-dag/mixlaw/contamination
+FULLTEXT=path/outside/this/checkout   # full-text dump; never commit it
 
-# Dump eval item text (needs ai2-olmo; produces the committed eval_items.jsonl.gz)
+# Dump eval item text (needs ai2-olmo; the committed eval_items.jsonl.gz is
+# this output with the text dropped -- see "Committed eval-item dump is
+# hash-only" above)
 python "$CONTAM/dump_eval_items.py" \
-  --out "$CONTAM/eval_items.jsonl.gz" --summary "$CONTAM/eval_items_summary.json"
+  --out "$FULLTEXT/eval_items.jsonl.gz" --summary "$FULLTEXT/eval_items_summary.json"
 
-# Build the index (stdlib only; not committed, see Dependencies above)
+# Build the index from the full-text dump (stdlib only; not committed, see
+# Dependencies above)
 python "$CONTAM/build_item_index.py" \
-  --items "$CONTAM/eval_items.jsonl.gz" \
+  --items "$FULLTEXT/eval_items.jsonl.gz" \
   --out /path/to/item_index.pkl --summary "$CONTAM/item_index_summary.json"
 
 # One task-list TSV: one line per domain shard file.

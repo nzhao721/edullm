@@ -177,11 +177,14 @@ Index construction (section 4a/4b of the methodology)
 - `item_identity.py` -- the shared normalizer, exemplar-stripping and hashing
   logic. Stdlib only. Imported by every other file here.
 - `dump_eval_items.py` -- reads the eval item text ai2-olmo actually scores
-  off its own task objects; writes `eval_items.jsonl.gz` and a per-label
-  summary. **Requires ai2-olmo + torch**; see
+  off its own task objects; writes the full-text `eval_items.jsonl.gz` and a
+  per-label summary, both committed here only in hash-only form (see
+  [Committed eval-item dump is hash-only](#committed-eval-item-dump-is-hash-only)).
+  **Requires ai2-olmo + torch**; see
   [Dependencies](#dependencies-and-whats-not-vendored).
 - `build_item_index.py` -- builds the length-floored, provenance-tagged n-gram
-  index from `eval_items.jsonl.gz`. Stdlib only.
+  index from a full-text `eval_items.jsonl.gz`. Stdlib only. Refuses the
+  committed hash-only file with an explicit error rather than a `KeyError`.
 - `verify_item_identity.py` -- asserts a training run scored the same item
   set this index was built from (doc_id digests + sampled content hashes).
   Stdlib only; not needed to reproduce the numbers in this README, included
@@ -208,9 +211,11 @@ importable -- the same training environment the runs in this experiment
 used. That dependency is real and disclosed, not a hidden path: reading eval
 item text from ai2-olmo's own task objects rather than reconstructing it from
 HuggingFace fields is the fix this methodology makes (see Methodology
-above). Its output, `eval_items.jsonl.gz`, **is committed in this directory**
-precisely so everything downstream is runnable with the stdlib alone, without
-ai2-olmo, starting from that file.
+above). Its output, `eval_items.jsonl.gz`, **is committed in this directory
+in hash-only form** (see the next section): `verify_item_identity.py` and
+`aggregate_by_domain.py` run from the committed file with the stdlib alone,
+but rebuilding the n-gram index needs the item text, and so needs a full-text
+dump regenerated with ai2-olmo.
 
 Not vendored, and why:
 
@@ -219,29 +224,115 @@ Not vendored, and why:
   should carry. Their FarmShare paths are recorded above for provenance.
 - **`item_index.pkl`** (172 MB; see `item_index_summary.json` ->
   `index_bytes_on_disk`) -- larger than GitHub's per-file limit, and it
-  regenerates deterministically from the committed `eval_items.jsonl.gz` via
-  `build_item_index.py` in well under a minute.
+  regenerates deterministically via `build_item_index.py`, in well under a
+  minute, from a regenerated full-text dump.
 - **Raw per-shard hit files and `DONE` sentinels** -- regenerable from
-  `scan_corpus.py` against the committed index and the corpora above; the
-  reduced `results_*.json` tables are what the paper's numbers cite.
+  `scan_corpus.py` against that index and the corpora above; the reduced
+  `results_*.json` tables are what the paper's numbers cite.
+
+## Committed eval-item dump is hash-only
+
+`eval_items.jsonl.gz` in this directory is deliberately **hash-only**. The
+full-text dump `dump_eval_items.py` writes carries every evaluation item's
+normalized `stem` and `gold` -- the benchmark questions and their answers,
+including 7 test-split labels of the 20 -- and committing that to a public
+repository republishes the benchmark into the crawl path of future training
+corpora, which is the very contamination this directory measures. So each of
+the committed file's 40,582 rows keeps only `label`, `doc_id`,
+`stem_sha256`, `gold_sha256`, `full_context_sha256`, `stem_words`,
+`gold_words` and `n_candidates`, in the original row order, and the `stem`
+and `gold` text fields are dropped. `eval_items_summary.json` drops its
+per-label `example_stem` / `example_gold` for the same reason; every count,
+every statistic, and the `normalizer_fingerprint` are kept.
+
+What the committed file still supports:
+
+- **`verify_item_identity.py`** reads only `label`, `doc_id`,
+  `full_context_sha256` and `gold_sha256`, so the section 4b identity check
+  -- that a training run scored the same item set this scan indexed -- runs
+  unchanged against it.
+- **`aggregate_by_domain.py`** reads only `label`, `stem_words` and
+  `gold_words`, so re-reducing hit files into the `results_*.json` tables
+  also runs from it.
+- **The per-item hash record itself**: exact-match identity of any candidate
+  text against an item this audit indexed. Normalize and hash the candidate
+  the way `item_identity.py` does (`normalize`, then `sha256`) and compare
+  against `stem_sha256` / `gold_sha256`.
+
+What it does not support: **rebuilding the 13-gram span index offline.**
+`build_item_index.py` indexes the literal strings, so it cannot run from a
+file that no longer has them; it refuses the committed file with an error
+that says so rather than failing on a `KeyError`. Rebuilding the index
+therefore starts by regenerating the full-text dump with `dump_eval_items.py`
+(step 4a under [Reproducing](#reproducing)), written outside this checkout
+and never committed.
+
+That regeneration needs the evaluator environment. The project's evaluator
+environment pins
+`ai2-olmo @ https://github.com/allenai/OLMo/archive/090253dac6688f2532509daa7aa2eb5fae50e956.tar.gz`
+([`../olmo_core_token_selection/requirements-token-selection-eval.txt`](../olmo_core_token_selection/requirements-token-selection-eval.txt)),
+and `dump_eval_items.py` also needs `torch`. That pin describes the pinned
+evaluator environment; this repository does not record which ai2-olmo build
+produced the committed dump, so the pin alone does not establish that a
+regenerated dump reproduces it. The per-item hashes do: every hash is taken
+after the committed normalizer, whose behavior is pinned by
+`normalizer_fingerprint`, so a regenerated dump can be checked item by item
+against the committed one, and any row that differs names an item whose
+evaluator-side text changed. The script also forces HuggingFace offline mode
+unless `HF_DATASETS_OFFLINE` / `HF_HUB_OFFLINE` are already set, so run it
+where the eval datasets and `allenai/dolma2-tokenizer` are cached, or set both
+to `0`. With `$FULLTEXT` and `$CONTAM` as under Reproducing:
+
+```bash
+python - "$FULLTEXT" "$CONTAM" <<'EOF'
+import gzip, json, sys
+from pathlib import Path
+
+regen, committed = map(Path, sys.argv[1:])
+KEEP = ("label", "doc_id", "stem_sha256", "gold_sha256", "full_context_sha256",
+        "stem_words", "gold_words", "n_candidates")
+
+def rows(d):
+    with gzip.open(d / "eval_items.jsonl.gz", "rt", encoding="utf-8") as fh:
+        return [tuple(json.loads(line)[k] for k in KEEP) for line in fh]
+
+def fingerprint(d):
+    summary = json.loads((d / "eval_items_summary.json").read_text(encoding="utf-8"))
+    return summary["normalizer_fingerprint"]
+
+assert fingerprint(regen) == fingerprint(committed), "normalizer changed"
+new, old = rows(regen), rows(committed)
+bad = [i for i, (a, b) in enumerate(zip(new, old)) if a != b]
+print(f"{len(new)} vs {len(old)} rows; {len(bad)} differ (first rows: {bad[:5]})")
+sys.exit(1 if bad or len(new) != len(old) else 0)
+EOF
+```
 
 ## Reproducing
 
 Exact commands run for this paper, paths as on FarmShare. `dump_eval_items.py`
-needs the private training monorepo's environment (ai2-olmo + torch); every
-step after it needs only this directory and Python's stdlib.
+needs the private training monorepo's environment (ai2-olmo + torch; see
+[Committed eval-item dump is hash-only](#committed-eval-item-dump-is-hash-only)
+for the pinned evaluator); every step after it needs only this directory,
+step 4a's full-text output, and Python's stdlib. The one departure from the
+commands as run is that step 4a now writes to `$FULLTEXT`, outside this
+checkout, rather than into `$CONTAM`, so a rerun does not overwrite the
+committed hash-only files.
 
 ```bash
 CONTAM=path/to/this/directory   # experiments/token-selection/contamination
+FULLTEXT=path/outside/this/checkout   # full-text dump; never commit it
 
-# 4a. Dump eval item text (needs ai2-olmo; produces the committed eval_items.jsonl.gz)
+# 4a. Dump eval item text (needs ai2-olmo). The committed eval_items.jsonl.gz
+# is this output with the stem/gold text dropped.
 python "$CONTAM/dump_eval_items.py" \
-  --out "$CONTAM/eval_items.jsonl.gz" \
-  --summary "$CONTAM/eval_items_summary.json"
+  --out "$FULLTEXT/eval_items.jsonl.gz" \
+  --summary "$FULLTEXT/eval_items_summary.json"
 
-# 4a/6.5. Build the index (stdlib only; not committed, see Dependencies above)
+# 4a/6.5. Build the index from the full-text dump (stdlib only; not
+# committed, see Dependencies above)
 python "$CONTAM/build_item_index.py" \
-  --items "$CONTAM/eval_items.jsonl.gz" \
+  --items "$FULLTEXT/eval_items.jsonl.gz" \
   --out /path/to/item_index.pkl \
   --summary "$CONTAM/item_index_summary.json"
 

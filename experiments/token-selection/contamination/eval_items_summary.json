@@ -17,9 +17,7 @@
    "median_stem_words": 21,
    "median_gold_words": 5,
    "gold_under_8_words": 229,
-   "stem_under_8_words": 7,
-   "example_stem": "juan and lakeisha roll a few objects down a ramp they want to see which object rolls the farthest what should they do so they can repeat their investigation ans",
-   "example_gold": "record the details of the investigation"
+   "stem_under_8_words": 7
   },
   {
    "label": "arc_challenge_test_rc_5shot_bpb",
@@ -36,9 +34,7 @@
    "median_stem_words": 20,
    "median_gold_words": 5,
    "gold_under_8_words": 893,
-   "stem_under_8_words": 44,
-   "example_stem": "an astronomer observes that a planet rotates faster after a meteorite impact which is the most likely effect of this increase in rotation answer",
-   "example_gold": "planetary days will become shorter"
+   "stem_under_8_words": 44
   },
   {
    "label": "arc_easy_val_rc_5shot_bpb",
@@ -55,9 +51,7 @@
    "median_stem_words": 17,
    "median_gold_words": 3,
    "gold_under_8_words": 496,
-   "stem_under_8_words": 21,
-   "example_stem": "which technology was developed most recently answer",
-   "example_gold": "cellular telephone"
+   "stem_under_8_words": 21
   },
   {
    "label": "arc_easy_test_rc_5shot_bpb",
@@ -74,9 +68,7 @@
    "median_stem_words": 17,
    "median_gold_words": 3,
    "gold_under_8_words": 2066,
-   "stem_under_8_words": 78,
-   "example_stem": "which statement best explains why photosynthesis is the foundation of most food webs answer",
-   "example_gold": "sunlight is the source of energy for nearly all ecosystems"
+   "stem_under_8_words": 78
   },
   {
    "label": "boolq_val_rc_5shot_bpb",
@@ -93,9 +85,7 @@
    "median_stem_words": 98,
    "median_gold_words": 1,
    "gold_under_8_words": 3270,
-   "stem_under_8_words": 0,
-   "example_stem": "ethanol fuel all biomass goes through at least some of these steps it needs to be grown collected dried fermented distilled and burned all of these steps requir",
-   "example_gold": "no"
+   "stem_under_8_words": 0
   },
   {
    "label": "csqa_val_rc_5shot_bpb",
@@ -112,9 +102,7 @@
    "median_stem_words": 13,
    "median_gold_words": 1,
    "gold_under_8_words": 1221,
-   "stem_under_8_words": 60,
-   "example_stem": "a revolving door is convenient for two direction travel but it also serves as a security measure at a what answer",
-   "example_gold": "bank"
+   "stem_under_8_words": 60
   },
   {
    "label": "hellaswag_val_rc_5shot_bpb",
@@ -131,9 +119,7 @@
    "median_stem_words": 42,
    "median_gold_words": 26,
    "gold_under_8_words": 866,
-   "stem_under_8_words": 1,
-   "example_stem": "roof shingle removal a man is sitting on a roof he",
-   "example_gold": "starts pulling up roofing on a roof"
+   "stem_under_8_words": 1
   },
   {
    "label": "openbookqa_val_rc_5shot_bpb",
@@ -150,9 +136,7 @@
    "median_stem_words": 10,
    "median_gold_words": 3,
    "gold_under_8_words": 452,
-   "stem_under_8_words": 150,
-   "example_stem": "frilled sharks and angler fish live far beneath the surface of the ocean which is why they are known as answer",
-   "example_gold": "deep sea animals"
+   "stem_under_8_words": 150
   },
   {
    "label": "openbookqa_test_rc_5shot_bpb",
@@ -169,9 +153,7 @@
    "median_stem_words": 9,
    "median_gold_words": 3,
    "gold_under_8_words": 468,
-   "stem_under_8_words": 154,
-   "example_stem": "a person wants to start saving money so that they can afford a nice vacation at the end of the year after looking over their budget and expenses they decide the",
-   "example_gold": "quit eating lunch out"
+   "stem_under_8_words": 154
   },
   {
    "label": "piqa_val_rc_5shot_bpb",
@@ -188,9 +170,7 @@
    "median_stem_words": 8,
    "median_gold_words": 13,
    "gold_under_8_words": 499,
-   "stem_under_8_words": 847,
-   "example_stem": "how do i ready a guinea pig cage for it s new occupants answer",
-   "example_gold": "provide the guinea pig with a cage full of a few inches of bedding made of ripped paper strips you will also need to supply it with a water bottle and a food di"
+   "stem_under_8_words": 847
   },
   {
    "label": "socialiqa_val_rc_5shot_bpb",
@@ -207,9 +187,7 @@
    "median_stem_words": 21,
    "median_gold_words": 3,
    "gold_under_8_words": 1844,
-   "stem_under_8_words": 0,
-   "example_stem": "tracy didn t go home that evening and resisted riley s attacks what does tracy need to do before this answer",
-   "example_gold": "find somewhere to go"
+   "stem_under_8_words": 0
   },
   {
    "label": "winogrande_val_rc_5shot_bpb",
@@ -226,9 +204,7 @@
    "median_stem_words": 14,
    "median_gold_words": 4,
    "gold_under_8_words": 1136,
-   "stem_under_8_words": 9,
-   "example_stem": "sarah was a much better surgeon than maria so maria",
-   "example_gold": "always got the easier cases"
+   "stem_under_8_words": 9
   },
   {
    "label": "mmlu_stem_val_rc_5shot_bpb",
@@ -245,9 +221,7 @@
    "median_stem_words": 22,
    "median_gold_words": 3,
    "gold_under_8_words": 238,
-   "stem_under_8_words": 18,
-   "example_stem": "you cool a blackbody to half its original temperature how does its spectrum change answer",
-   "example_gold": "power emitted is 1 16 times as high peak emission wavelength is 2 times longer"
+   "stem_under_8_words": 18
   },
   {
    "label": "mmlu_stem_test_rc_5shot_bpb",
@@ -264,9 +238,7 @@
    "median_stem_words": 21,
    "median_gold_words": 3,
    "gold_under_8_words": 2339,
-   "stem_under_8_words": 334,
-   "example_stem": "true for a type ia type one a supernova answer",
-   "example_gold": "this type occurs in binary systems"
+   "stem_under_8_words": 334
   },
   {
    "label": "mmlu_humanities_val_rc_5shot_bpb",
@@ -283,9 +255,7 @@
    "median_stem_words": 34,
    "median_gold_words": 6,
    "gold_under_8_words": 283,
-   "stem_under_8_words": 16,
-   "example_stem": "italian nation has been at last united in our own days and we all rejoiced in its union yet we may be allowed to doubt whether the union was not a little too sp",
-   "example_gold": "giuseppe garibaldi"
+   "stem_under_8_words": 16
   },
   {
    "label": "mmlu_humanities_test_rc_5shot_bpb",
@@ -302,9 +272,7 @@
    "median_stem_words": 30,
    "median_gold_words": 6,
    "gold_under_8_words": 2521,
-   "stem_under_8_words": 316,
-   "example_stem": "order to make the title of this discourse generally intelligible i have translated the term protoplasm which is the scientific name of the substance of which i ",
-   "example_gold": "merely a property of a certain kind of matter"
+   "stem_under_8_words": 316
   },
   {
    "label": "mmlu_social_sciences_val_rc_5shot_bpb",
@@ -321,9 +289,7 @@
    "median_stem_words": 15,
    "median_gold_words": 5,
    "gold_under_8_words": 205,
-   "stem_under_8_words": 34,
-   "example_stem": "accurately describes congressional committees i the committee chairpersons always belong to the majority party ii seats on each committee are divided between th",
-   "example_gold": "i only"
+   "stem_under_8_words": 34
   },
   {
    "label": "mmlu_social_sciences_test_rc_5shot_bpb",
@@ -340,9 +306,7 @@
    "median_stem_words": 14,
    "median_gold_words": 5,
    "gold_under_8_words": 1919,
-   "stem_under_8_words": 433,
-   "example_stem": "describes the balance the supreme court has struck between the establishment clause and the free exercise clause answer",
-   "example_gold": "state sponsored prayer during school hours is prohibited but voluntary prayer by student groups before school is allowed"
+   "stem_under_8_words": 433
   },
   {
    "label": "mmlu_other_val_rc_5shot_bpb",
@@ -359,9 +323,7 @@
    "median_stem_words": 15,
    "median_gold_words": 3,
    "gold_under_8_words": 297,
-   "stem_under_8_words": 47,
-   "example_stem": "as of 2014 about what percentage of primary aged children in sub saharan africa were out of school answer",
-   "example_gold": "20"
+   "stem_under_8_words": 47
   },
   {
    "label": "mmlu_other_test_rc_5shot_bpb",
@@ -378,9 +340,7 @@
    "median_stem_words": 13,
    "median_gold_words": 3,
    "gold_under_8_words": 2623,
-   "stem_under_8_words": 548,
-   "example_stem": "2016 about what percentage of adults aged 18 years or older were overweight answer",
-   "example_gold": "40"
+   "stem_under_8_words": 548
   }
  ]
 }

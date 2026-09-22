@@ -13,7 +13,7 @@ MixLaw arms do, against the same 40,582-item eval suite, so the per-domain
 contamination rates are identical; only the mixture weights differ, and only
 because they change over time here. `../../mixlaw/contamination/` holds the
 scan, the eval-item index pipeline, and `results_olmo127b-reservoir.json`;
-this directory reads that file directly rather than duplicating a ~10 MB
+this directory reads that file directly rather than duplicating a ~5 MB
 eval-item dump and a 172 MB index for a scan that would produce the same
 numbers.
 
