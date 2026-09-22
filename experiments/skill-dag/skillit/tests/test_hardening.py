@@ -247,7 +247,8 @@ def test_resume_requires_exact_latest_update_snapshot(tmp_path: Path) -> None:
 def test_skillit_update_schedule_and_math_contract_unchanged() -> None:
     text = _TRAINER.read_text(encoding="utf-8")
     assert "SKILLIT_UPDATE_STEPS: tuple[int, ...] = (500, 875, 1250, 1625, 2000)" in text
-    assert "skillit_update(A, L, eta=eta, w=1.0)" in text
+    # Multiplicative Skill-It rule: the previous mixture must be fed back in.
+    assert "skillit_update(A, L, p_before=p_before, eta=eta, w=1.0)" in text
     recipe = json.loads(_RECIPE.read_text(encoding="utf-8"))
     assert recipe["skillit"] == {
         "update_steps": [500, 875, 1250, 1625, 2000],

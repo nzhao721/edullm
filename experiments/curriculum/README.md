@@ -72,6 +72,17 @@ Comparisons use the **random shuffle** full run (cosine LR, raw final — no EMA
 
 ---
 
+## Execution environment
+
+**Ephemeral runtime.** Training assumes job-scoped scratch that starts empty and is
+wiped when the job ends. Train and curriculum bytes are staged from validated
+`s3://edullm-data/` into a job-local cache; checkpoints, progress, metrics and
+task-loss outputs stay on that scratch and upload to the Weights & Biases project
+`curriculum`, so no run artifact is written back to S3. Local smoke runs pass
+`--wandb-mode disabled --allow-local-only`. Every launch picks its recovery
+explicitly: `FRESH=1` / `--fresh`, or `LOAD_PATH` / `--load-path` pointing at a
+local step directory or a `wandb-artifact://entity/project/name:version` reference.
+
 ## Evaluation and uncertainty
 
 Curriculum runs hold **constant LR** after LR warmup so that late, harder data is not deweighted by cosine decay ([Luo et al.](https://arxiv.org/abs/2511.18903)). With a flat LR, the last raw checkpoint is a noisy snapshot of an undamped optimizer trajectory. Instead of reporting that single checkpoint, the scientific final is a **post-hoc EMA** of late checkpoints (steps 2000, 2125, 2250, 2384; \(\alpha=0.8\)): averaging damps late-training noise while keeping the constant-LR curriculum protocol intact. The random-shuffle control already stabilizes via cosine LR decay, so its final is the raw last-checkpoint eval.

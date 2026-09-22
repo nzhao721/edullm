@@ -31,13 +31,9 @@ Reads a `validation_mixtures_*.json`-shaped file directly: a
 `validation_mixtures_10b.json` in this directory already uses, so it can be
 pointed at that file with no conversion step.
 
-`validation_mixtures_10b.json` catalogs more candidate mixtures than were
-actually trained at 370M -- `mix07`/`mix18` and one alternate candidate per
-search method were priced but not run; the four arms this experiment
-actually validated are named in its own `README.md`'s "Arms actually run
-(370M)" table. Pass `--include` with exactly those `run_name`s so the
-reported exposure numbers describe the experiment that was run, not every
-mixture that was ever considered.
+`validation_mixtures_10b.json` lists the four arms validated at 370M, the
+same four named in its own `README.md`'s "Arms actually run (370M)" table.
+Pass `--include` when you want exposure for a subset of them.
 """
 
 from __future__ import annotations

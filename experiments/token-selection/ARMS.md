@@ -32,7 +32,7 @@ scores against.
 | BLADE | `arms.py` `blade` | top-60% `L_proxy − L_ref` | RegMix proxy/penalty stream + pinned `pretrain/refhq-instruct/v3` updates; syncs 500/875/1250/1625/2000; K=75, τ=375, γ=0.6, λ=1.0; blade_start=500; pre/post-sync checkpoints |
 | RHO-1 | [`rho-1/`](rho-1/) | top-60% `L_curr − L_ref` | Frozen refhq-instruct v3 step940; `t0=0`; YAML spine |
 | REL exp-α | [`rel-ema-exp/`](rel-ema-exp/) | top-60% `L_curr − L_hist` | Bias-corrected EMA from zero; `α(t)=1−e^(−t/300)`; `t0=0` |
-| Middle PPL (token) | [`middle-ppl-token/`](middle-ppl-token/) | middle-60% by frozen RefHQ `L_ref` | Online scorer; `t0=0` |
+| Middle PPL (token) | [`middle-ppl-token/`](middle-ppl-token/) | middle-60% by frozen RefHQ `L_ref` | Offline precomputed masks; `t0=0` |
 | Attention | [`attention/`](attention/) | top-60% attn-received | `attention_topk`; FA-safe hook+recompute; `t0=0` |
 | Reference (RefHQ) | [`reference/`](reference/) | — | Frozen HQ 5.5B; arch / refs only |
 

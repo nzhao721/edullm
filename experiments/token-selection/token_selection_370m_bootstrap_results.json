@@ -1,13 +1,14 @@
 {
   "source": "wandb eduLLM/token-selection; full-loss control is full-loss-control-regmix10b-v3 (native FarmShare rerun 2026-09-14, matched to the selection arms on init, data seed, step count and eval grid; replaces the hpo-ladder-derived full-loss-control-regmix10b-v2); rel_ema re-run 2026-09-05 with corrected selection polarity (current-minus-history, matching rho_excess/blade), replaces the inverted-polarity run",
   "metric": "macro task-loss bits per byte (lower is better)",
-  "method": "Fit y = a + b*step^(-alpha) on steps >= 1000, profiling alpha over np.linspace(0.05, 6.0, 1192) with (a, b) from closed-form OLS at each grid point. Fitted final is evaluated at each arm's own final logged step. 95% CI = 2.5/97.5 percentile of 10,000 i.i.d. residual bootstrap draws with alpha RE-ESTIMATED on every draw (alpha-free), numpy default_rng seed 0. No arm's profiled optimum sits on a grid boundary (largest 3.502 for REL-EMA, smallest 0.794 for BLADE). Alpha-free was chosen over alpha-fixed because it is the more conservative of the two (mean CI width 0.01063 vs 0.00749 bpb).",
+  "method": "Fit y = a + b*step^(-alpha) on steps >= 1000, profiling alpha over np.linspace(0.05, 6.0, 1192) with (a, b) from closed-form OLS at each grid point. Fitted final is evaluated at each arm's own final logged step. 95% CI = 2.5/97.5 percentile of 10,000 i.i.d. residual bootstrap draws with alpha RE-ESTIMATED on every draw (alpha-free), numpy default_rng seed 0. Residuals are inflated by sqrt(n/(n-p)) with p=3 before resampling (1.173 at n=11, 1.076 at n=22 for the pooled random control). No arm's profiled optimum sits on a grid boundary (largest 3.502 for REL-EMA, smallest 0.794 for BLADE). Alpha-free was chosen over alpha-fixed because it is the more conservative of the two (mean CI width 0.01162 vs 0.00823 bpb).",
   "protocol": {
     "form": "y = a + b * step**(-alpha)",
     "fit_window": "steps >= 1000",
     "alpha_grid": "np.linspace(0.05, 6.0, 1192)",
     "n_boot": 10000,
     "resample": "i.i.d. residual bootstrap on the fit-window residuals",
+    "residual_rescaling": "residuals inflated by sqrt(n/(n-p)), p=3, before resampling; 1.173 at n=11 and 1.076 at n=22",
     "alpha_treatment": "re-estimated on every bootstrap draw (alpha-free)",
     "fitted_final_at": "each arm's own final logged step",
     "ci": "2.5/97.5 percentile of the bootstrap distribution",
@@ -24,8 +25,8 @@
       "alpha": 1.5937,
       "fitted_final": 1.6718,
       "observed": 1.6751,
-      "ci_lo": 1.6653,
-      "ci_hi": 1.6787
+      "ci_lo": 1.6642,
+      "ci_hi": 1.6798
     },
     {
       "key": "rho_1",
@@ -36,8 +37,8 @@
       "alpha": 1.279,
       "fitted_final": 1.6824,
       "observed": 1.6843,
-      "ci_lo": 1.6771,
-      "ci_hi": 1.6857
+      "ci_lo": 1.6762,
+      "ci_hi": 1.6863
     },
     {
       "key": "random_control",
@@ -48,8 +49,8 @@
       "alpha": 1.5587,
       "fitted_final": 1.69,
       "observed": 1.6911,
-      "ci_lo": 1.6841,
-      "ci_hi": 1.6947
+      "ci_lo": 1.6837,
+      "ci_hi": 1.695
     },
     {
       "key": "attention",
@@ -60,8 +61,8 @@
       "alpha": 1.0542,
       "fitted_final": 1.6991,
       "observed": 1.7005,
-      "ci_lo": 1.6935,
-      "ci_hi": 1.7037
+      "ci_lo": 1.6925,
+      "ci_hi": 1.7045
     },
     {
       "key": "blade",
@@ -72,8 +73,8 @@
       "alpha": 0.7944,
       "fitted_final": 1.709,
       "observed": 1.7115,
-      "ci_lo": 1.7028,
-      "ci_hi": 1.7182
+      "ci_lo": 1.702,
+      "ci_hi": 1.7197
     },
     {
       "key": "middle_ppl",
@@ -84,8 +85,8 @@
       "alpha": 2.1982,
       "fitted_final": 1.9047,
       "observed": 1.9001,
-      "ci_lo": 1.9007,
-      "ci_hi": 1.9093
+      "ci_lo": 1.9,
+      "ci_hi": 1.9101
     },
     {
       "key": "rel_ema",
@@ -96,8 +97,8 @@
       "alpha": 3.5021,
       "fitted_final": 1.9199,
       "observed": 1.9207,
-      "ci_lo": 1.918,
-      "ci_hi": 1.9217
+      "ci_lo": 1.9176,
+      "ci_hi": 1.922
     }
   ]
 }

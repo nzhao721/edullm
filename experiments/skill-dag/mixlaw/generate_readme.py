@@ -1,5 +1,19 @@
 #!/usr/bin/env python3
-"""Regenerate README.md from fit artifacts and mixtures.json."""
+"""Regenerate a README draft from fit artifacts and mixtures.json.
+
+**This no longer regenerates the checked-in README, and must not be pointed
+at it.** It has drifted ~800 diff lines from `README.md`: it emits a different
+title ("Skill-DAG mixing-law pilot"), a different structure, and it does not
+emit the hand-written "370M validation setup" section at all -- including the
+seed row and the "Read the seed row, not the code default" warning that
+records which seed each control actually ran with. It would also re-inject a
+"Platform three-arm array" section for a platform this repository no longer
+uses.
+
+`README.md` is hand-maintained. The tables this builds from the JSON artifacts
+are still useful to diff against by hand, so it writes `README.generated.md`.
+Pass --overwrite-readme only after reconciling the two.
+"""
 from __future__ import annotations
 
 import json
@@ -60,10 +74,10 @@ def validation_table_lines() -> list[str]:
     out = [
         "### 370M validation plan",
         "",
-        "Eight mixtures selected for OLMo-370M scale-up: the natural "
-        "**olmo-mix-1124** corpus mix (~95% DCLM), three pilot anchors "
-        "(mix01, mix07, mix18), plus mixing-law pilot_caps + near-opt 4; "
-        "LightGBM min1pct + near-opt 8).",
+        "Four mixtures validated at OLMo-370M scale: the natural "
+        "**olmo-mix-1124** corpus mix (~95% DCLM), the Data Mixing Laws "
+        "paper mixture (mix01), the mixing-law optimum (pilot_caps), and "
+        "the LightGBM optimum (min1pct).",
         "",
         f"| run | source | {domain_hdr} |",
         "|-----|--------|" + "|".join(["---:"] * len(VALIDATION_DOMAIN_COLS)) + "|",
@@ -94,9 +108,8 @@ def validation_corpora_lines() -> list[str]:
         "|---------|------|",
         "| `olmo-mix-1124` | Natural olmo-mix-1124 reference weights |",
         "| `mix01` | RegMix base weights (same proportions as pilot mix01) |",
-        "| `mix07`, `mix18` | Pilot grid points |",
-        "| `ML-pilot_caps`, `ML-near-opt-4` | Mixing-law surrogates |",
-        "| `LGB-min1pct`, `LGB-near-opt-8` | LightGBM surrogates |",
+        "| `ML-pilot_caps` | Mixing-law surrogate optimum |",
+        "| `LGB-min1pct` | LightGBM surrogate optimum |",
         "",
         "**Data source:** `s3://edullm-data/pretrain/olmo-127b/` (published+validated). "
         "Stage one peak-sized working pool from edullm-data, then train every arm from it.",
@@ -110,12 +123,11 @@ def validation_corpora_lines() -> list[str]:
         "3. **train** — `submit_mixlaw_validation_370m.sh` → "
         "`train_mixlaw_validation_370m.py` (`DomainMixtureStream`).",
         "",
-        "### Platform seven-arm array",
+        "### Platform three-arm array",
         "",
-        "The platform array runs indices `0..6` as `olmo-mix-1124`, `mix07`, "
-        "`mix18`, `ML-pilot_caps`, `ML-near-opt-4`, `LGB-min1pct`, and "
-        "`LGB-near-opt-8`. `mix01` is deliberately excluded because its control "
-        "run is already separate.",
+        "The platform array runs indices `0..2` as `olmo-mix-1124`, "
+        "`ML-pilot_caps`, and `LGB-min1pct`. `mix01` is deliberately excluded "
+        "because its control run is already separate.",
         "",
         "- Submit repository `edullm-p1`, workload "
         "`mixlaw-validation-370m-8xa100`, dataset `olmo-127b-v1`, team "
@@ -377,7 +389,7 @@ lines += [
     "| `build_working_pool_from_shards.py` | **Deprecated** — peak pool from `tokenized_manifest.json` |",
     "| `check_validation_pool.py` | Peak demand vs olmohq inventory |",
     "| `validation_mixtures_10b.json` | Eight 10B-mix recipe for 370M scale-up |",
-    "| `generate_readme.py` | Regenerate this README from JSON artifacts |",
+    "| `generate_readme.py` | Build `README.generated.md` from the JSON artifacts, to diff against by hand; it does **not** regenerate the hand-maintained README |",
     "",
     "---",
     "",
@@ -653,5 +665,15 @@ lines += [
 lines += validation_corpora_lines()
 lines += [""]
 
-(ROOT / "README.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
-print(f"wrote {ROOT / 'README.md'} ({len(lines)} lines)")
+import sys as _sys
+
+_name = "README.md" if "--overwrite-readme" in _sys.argv else "README.generated.md"
+_target = ROOT / _name
+if _name == "README.md":
+    print(
+        "WARNING: overwriting the hand-maintained README.md. This drops the "
+        "370M validation setup section, the seed row and the seed warning. "
+        "See this file's docstring."
+    )
+_target.write_text("\n".join(lines) + "\n", encoding="utf-8")
+print(f"wrote {_target} ({len(lines)} lines)")

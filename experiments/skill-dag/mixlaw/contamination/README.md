@@ -80,17 +80,13 @@ independent of anything the mixture-selection method itself is doing.
 
 ### Per-arm exposure
 
-`../validation_mixtures_10b.json` catalogs more candidate mixtures than
-were actually trained at 370M (`mix07`, `mix18`, and one alternate
-mixing-law and one alternate LightGBM candidate were priced but not run).
-The four arms this experiment actually validated are named in
-`../README.md`'s "Arms actually run (370M)" table, matched here to their
-`run_name` by their published weight vectors in "Validated mixture weights
-(370M)": `olmo-mix-1124` = OLMo Mix 1124 (control), `mix01` = Data Mixing
-Laws paper, `ML-pilot_caps` = MixLaw, `LGB-min1pct` = LightGBM.
-`exposure_by_arm.json` is built with `mixture_exposure.py --include`
-restricted to exactly these four (see Reproducing below); it does not
-report exposure for the untrained candidates.
+`../validation_mixtures_10b.json` lists the four arms validated at 370M,
+the same four named in `../README.md`'s "Arms actually run (370M)" table,
+matched here to their `run_name` by their published weight vectors in
+"Validated mixture weights (370M)": `olmo-mix-1124` = OLMo Mix 1124
+(control), `mix01` = Data Mixing Laws paper, `ML-pilot_caps` = MixLaw,
+`LGB-min1pct` = LightGBM. `exposure_by_arm.json` covers exactly these four
+(see Reproducing below).
 
 From `exposure_by_arm.json`, baseline `olmo-mix-1124` (tag `natural`, the
 published Dolma/OLMo-mix domain proportions with no re-weighting).
@@ -106,8 +102,8 @@ Span-rate spread across these four arms: **3.08x** (lowest `mix01`,
 highest `ML-pilot_caps`; `exposure_by_arm.json` ->
 `span_rate_spread_across_arms`). MixLaw's exposure is more than double the
 control's (2.12x) while LightGBM's is close to or below it (0.79x), yet the
-paper reports both beating the control by a comparable margin (1.6062 and
-1.6087 fitted-final bpb respectively) -- so a contamination-driven
+paper reports both beating the control by a comparable margin (1.6057 and
+1.6080 fitted-final bpb respectively) -- so a contamination-driven
 explanation for the win would have to apply very differently to the two
 search methods, which is weak evidence for one. The Data Mixing Laws paper
 mixture has the lowest exposure of any arm (0.69x control) and is the only

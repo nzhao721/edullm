@@ -1278,7 +1278,7 @@ def _apply_skillit_update(
         fit=fit,
     )
     L = losses_dict_to_vector(losses, CURVE_FAMILIES)
-    p_after = skillit_update(A, L, eta=eta, w=1.0)
+    p_after = skillit_update(A, L, p_before=p_before, eta=eta, w=1.0)
     stream.set_weights(p_after)
     record = write_skillit_snapshot(
         progress_dir,

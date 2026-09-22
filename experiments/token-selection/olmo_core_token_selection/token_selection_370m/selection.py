@@ -134,6 +134,11 @@ def selection_weights(
             raise ValueError("attention selection requires received-attention scores")
         mask = per_row_topk(attention, keep_fraction, valid)
     elif method == "blade":
+        # UNREACHABLE for the reported BLADE arm. recipe.py routes BLADE through
+        # method="full" plus BladeCallback, which thresholds scores once across the
+        # rank's whole batch; this branch instead selects per sequence, so it is NOT
+        # the rule the paper describes or that produced the reported BLADE run.
+        # Kept only so selection_weights stays total over ArmSpec.method values.
         if current is None or reference is None:
             raise ValueError("BLADE requires proxy and dynamic-reference losses")
         # BLADE minimizes L_ref - L_proxy over the mask (Equation 5), which is

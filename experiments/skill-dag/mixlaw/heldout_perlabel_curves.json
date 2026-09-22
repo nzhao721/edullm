@@ -1,0 +1,1446 @@
+{
+ "olmo_6198": {
+  "0": {
+   "boolq_val_rc_5shot_bpb": 6.669638633728027,
+   "csqa_val_rc_5shot_bpb": 3.078611373901367,
+   "hellaswag_val_rc_5shot_bpb": 3.7029290199279785,
+   "openbookqa_test_rc_5shot_bpb": 3.7979061603546143,
+   "openbookqa_val_rc_5shot_bpb": 3.563671827316284,
+   "piqa_val_rc_5shot_bpb": 3.898888111114502,
+   "socialiqa_val_rc_5shot_bpb": 3.4511897563934326,
+   "winogrande_val_rc_5shot_bpb": 4.552165508270264
+  },
+  "125": {
+   "boolq_val_rc_5shot_bpb": 4.956465244293213,
+   "csqa_val_rc_5shot_bpb": 2.953937530517578,
+   "hellaswag_val_rc_5shot_bpb": 1.7842320203781128,
+   "openbookqa_test_rc_5shot_bpb": 2.885859489440918,
+   "openbookqa_val_rc_5shot_bpb": 2.7861249446868896,
+   "piqa_val_rc_5shot_bpb": 2.1402764320373535,
+   "socialiqa_val_rc_5shot_bpb": 2.249584197998047,
+   "winogrande_val_rc_5shot_bpb": 2.1447346210479736
+  },
+  "250": {
+   "boolq_val_rc_5shot_bpb": 4.140175819396973,
+   "csqa_val_rc_5shot_bpb": 2.618818998336792,
+   "hellaswag_val_rc_5shot_bpb": 1.5160396099090576,
+   "openbookqa_test_rc_5shot_bpb": 2.507265567779541,
+   "openbookqa_val_rc_5shot_bpb": 2.425492286682129,
+   "piqa_val_rc_5shot_bpb": 1.8135626316070557,
+   "socialiqa_val_rc_5shot_bpb": 2.064978837966919,
+   "winogrande_val_rc_5shot_bpb": 1.9497305154800415
+  },
+  "375": {
+   "boolq_val_rc_5shot_bpb": 3.5826117992401123,
+   "csqa_val_rc_5shot_bpb": 2.2846219539642334,
+   "hellaswag_val_rc_5shot_bpb": 1.4009239673614502,
+   "openbookqa_test_rc_5shot_bpb": 2.422257900238037,
+   "openbookqa_val_rc_5shot_bpb": 2.3439218997955322,
+   "piqa_val_rc_5shot_bpb": 1.7174004316329956,
+   "socialiqa_val_rc_5shot_bpb": 1.9226865768432617,
+   "winogrande_val_rc_5shot_bpb": 1.8638007640838623
+  },
+  "500": {
+   "boolq_val_rc_5shot_bpb": 2.327207565307617,
+   "csqa_val_rc_5shot_bpb": 2.1479544639587402,
+   "hellaswag_val_rc_5shot_bpb": 1.2966400384902954,
+   "openbookqa_test_rc_5shot_bpb": 2.290163993835449,
+   "openbookqa_val_rc_5shot_bpb": 2.2060234546661377,
+   "piqa_val_rc_5shot_bpb": 1.6345722675323486,
+   "socialiqa_val_rc_5shot_bpb": 1.8110826015472412,
+   "winogrande_val_rc_5shot_bpb": 1.8597434759140015
+  },
+  "625": {
+   "boolq_val_rc_5shot_bpb": 1.4715465307235718,
+   "csqa_val_rc_5shot_bpb": 2.240344762802124,
+   "hellaswag_val_rc_5shot_bpb": 1.245760202407837,
+   "openbookqa_test_rc_5shot_bpb": 2.250718832015991,
+   "openbookqa_val_rc_5shot_bpb": 2.1672110557556152,
+   "piqa_val_rc_5shot_bpb": 1.5880521535873413,
+   "socialiqa_val_rc_5shot_bpb": 1.7690794467926025,
+   "winogrande_val_rc_5shot_bpb": 1.822797417640686
+  },
+  "750": {
+   "boolq_val_rc_5shot_bpb": 1.3879551887512207,
+   "csqa_val_rc_5shot_bpb": 2.1328957080841064,
+   "hellaswag_val_rc_5shot_bpb": 1.1973308324813843,
+   "openbookqa_test_rc_5shot_bpb": 2.142890691757202,
+   "openbookqa_val_rc_5shot_bpb": 2.0633983612060547,
+   "piqa_val_rc_5shot_bpb": 1.5362294912338257,
+   "socialiqa_val_rc_5shot_bpb": 1.7128896713256836,
+   "winogrande_val_rc_5shot_bpb": 1.8212343454360962
+  },
+  "875": {
+   "boolq_val_rc_5shot_bpb": 0.9489308595657349,
+   "csqa_val_rc_5shot_bpb": 2.1345465183258057,
+   "hellaswag_val_rc_5shot_bpb": 1.1643707752227783,
+   "openbookqa_test_rc_5shot_bpb": 2.1098358631134033,
+   "openbookqa_val_rc_5shot_bpb": 2.022218704223633,
+   "piqa_val_rc_5shot_bpb": 1.5088199377059937,
+   "socialiqa_val_rc_5shot_bpb": 1.7115882635116577,
+   "winogrande_val_rc_5shot_bpb": 1.7383953332901
+  },
+  "1000": {
+   "boolq_val_rc_5shot_bpb": 0.7508391737937927,
+   "csqa_val_rc_5shot_bpb": 2.0918145179748535,
+   "hellaswag_val_rc_5shot_bpb": 1.150383472442627,
+   "openbookqa_test_rc_5shot_bpb": 2.0834062099456787,
+   "openbookqa_val_rc_5shot_bpb": 2.0029454231262207,
+   "piqa_val_rc_5shot_bpb": 1.4953604936599731,
+   "socialiqa_val_rc_5shot_bpb": 1.660781979560852,
+   "winogrande_val_rc_5shot_bpb": 1.7405812740325928
+  },
+  "1125": {
+   "boolq_val_rc_5shot_bpb": 0.7023189663887024,
+   "csqa_val_rc_5shot_bpb": 2.019400119781494,
+   "hellaswag_val_rc_5shot_bpb": 1.1337385177612305,
+   "openbookqa_test_rc_5shot_bpb": 2.0597891807556152,
+   "openbookqa_val_rc_5shot_bpb": 1.9836171865463257,
+   "piqa_val_rc_5shot_bpb": 1.4686756134033203,
+   "socialiqa_val_rc_5shot_bpb": 1.6555613279342651,
+   "winogrande_val_rc_5shot_bpb": 1.7266641855239868
+  },
+  "1250": {
+   "boolq_val_rc_5shot_bpb": 0.5323651432991028,
+   "csqa_val_rc_5shot_bpb": 2.018206834793091,
+   "hellaswag_val_rc_5shot_bpb": 1.1198408603668213,
+   "openbookqa_test_rc_5shot_bpb": 2.0515859127044678,
+   "openbookqa_val_rc_5shot_bpb": 1.9773359298706055,
+   "piqa_val_rc_5shot_bpb": 1.4691580533981323,
+   "socialiqa_val_rc_5shot_bpb": 1.636427879333496,
+   "winogrande_val_rc_5shot_bpb": 1.7106739282608032
+  },
+  "1375": {
+   "boolq_val_rc_5shot_bpb": 0.5368874669075012,
+   "csqa_val_rc_5shot_bpb": 1.95703125,
+   "hellaswag_val_rc_5shot_bpb": 1.1095974445343018,
+   "openbookqa_test_rc_5shot_bpb": 2.015820264816284,
+   "openbookqa_val_rc_5shot_bpb": 1.956781268119812,
+   "piqa_val_rc_5shot_bpb": 1.4515948295593262,
+   "socialiqa_val_rc_5shot_bpb": 1.6239194869995117,
+   "winogrande_val_rc_5shot_bpb": 1.717476725578308
+  },
+  "1500": {
+   "boolq_val_rc_5shot_bpb": 0.6075586676597595,
+   "csqa_val_rc_5shot_bpb": 1.918247103691101,
+   "hellaswag_val_rc_5shot_bpb": 1.1001133918762207,
+   "openbookqa_test_rc_5shot_bpb": 1.9875469207763672,
+   "openbookqa_val_rc_5shot_bpb": 1.9242891073226929,
+   "piqa_val_rc_5shot_bpb": 1.4337021112442017,
+   "socialiqa_val_rc_5shot_bpb": 1.5958280563354492,
+   "winogrande_val_rc_5shot_bpb": 1.6980502605438232
+  },
+  "1625": {
+   "boolq_val_rc_5shot_bpb": 0.5870798230171204,
+   "csqa_val_rc_5shot_bpb": 1.920150637626648,
+   "hellaswag_val_rc_5shot_bpb": 1.1032520532608032,
+   "openbookqa_test_rc_5shot_bpb": 1.9669140577316284,
+   "openbookqa_val_rc_5shot_bpb": 1.9035078287124634,
+   "piqa_val_rc_5shot_bpb": 1.4393426179885864,
+   "socialiqa_val_rc_5shot_bpb": 1.5704344511032104,
+   "winogrande_val_rc_5shot_bpb": 1.6989567279815674
+  },
+  "1750": {
+   "boolq_val_rc_5shot_bpb": 0.6019683480262756,
+   "csqa_val_rc_5shot_bpb": 1.8852695226669312,
+   "hellaswag_val_rc_5shot_bpb": 1.0819432735443115,
+   "openbookqa_test_rc_5shot_bpb": 1.9656015634536743,
+   "openbookqa_val_rc_5shot_bpb": 1.908703088760376,
+   "piqa_val_rc_5shot_bpb": 1.4122177362442017,
+   "socialiqa_val_rc_5shot_bpb": 1.5669000148773193,
+   "winogrande_val_rc_5shot_bpb": 1.6816591024398804
+  },
+  "1875": {
+   "boolq_val_rc_5shot_bpb": 0.5779027938842773,
+   "csqa_val_rc_5shot_bpb": 1.8837306499481201,
+   "hellaswag_val_rc_5shot_bpb": 1.0829434394836426,
+   "openbookqa_test_rc_5shot_bpb": 1.9668047428131104,
+   "openbookqa_val_rc_5shot_bpb": 1.9043593406677246,
+   "piqa_val_rc_5shot_bpb": 1.4181004762649536,
+   "socialiqa_val_rc_5shot_bpb": 1.563814401626587,
+   "winogrande_val_rc_5shot_bpb": 1.6900142431259155
+  },
+  "2000": {
+   "boolq_val_rc_5shot_bpb": 0.6037772297859192,
+   "csqa_val_rc_5shot_bpb": 1.8692926168441772,
+   "hellaswag_val_rc_5shot_bpb": 1.0766878128051758,
+   "openbookqa_test_rc_5shot_bpb": 1.9498906135559082,
+   "openbookqa_val_rc_5shot_bpb": 1.8891797065734863,
+   "piqa_val_rc_5shot_bpb": 1.4070851802825928,
+   "socialiqa_val_rc_5shot_bpb": 1.5605168342590332,
+   "winogrande_val_rc_5shot_bpb": 1.6823620796203613
+  },
+  "2125": {
+   "boolq_val_rc_5shot_bpb": 0.5701322555541992,
+   "csqa_val_rc_5shot_bpb": 1.8761708736419678,
+   "hellaswag_val_rc_5shot_bpb": 1.0744794607162476,
+   "openbookqa_test_rc_5shot_bpb": 1.9423359632492065,
+   "openbookqa_val_rc_5shot_bpb": 1.8831093311309814,
+   "piqa_val_rc_5shot_bpb": 1.403028130531311,
+   "socialiqa_val_rc_5shot_bpb": 1.562837839126587,
+   "winogrande_val_rc_5shot_bpb": 1.6910701990127563
+  },
+  "2250": {
+   "boolq_val_rc_5shot_bpb": 0.579289436340332,
+   "csqa_val_rc_5shot_bpb": 1.8748527765274048,
+   "hellaswag_val_rc_5shot_bpb": 1.0769673585891724,
+   "openbookqa_test_rc_5shot_bpb": 1.9358359575271606,
+   "openbookqa_val_rc_5shot_bpb": 1.8759218454360962,
+   "piqa_val_rc_5shot_bpb": 1.4021142721176147,
+   "socialiqa_val_rc_5shot_bpb": 1.5616823434829712,
+   "winogrande_val_rc_5shot_bpb": 1.6791294813156128
+  },
+  "2375": {
+   "boolq_val_rc_5shot_bpb": 0.5883989334106445,
+   "csqa_val_rc_5shot_bpb": 1.8888270854949951,
+   "hellaswag_val_rc_5shot_bpb": 1.0724657773971558,
+   "openbookqa_test_rc_5shot_bpb": 1.9381797313690186,
+   "openbookqa_val_rc_5shot_bpb": 1.8787811994552612,
+   "piqa_val_rc_5shot_bpb": 1.403098225593567,
+   "socialiqa_val_rc_5shot_bpb": 1.5631437301635742,
+   "winogrande_val_rc_5shot_bpb": 1.6721385717391968
+  },
+  "2384": {
+   "boolq_val_rc_5shot_bpb": 0.5879076719284058,
+   "csqa_val_rc_5shot_bpb": 1.8879441022872925,
+   "hellaswag_val_rc_5shot_bpb": 1.0720584392547607,
+   "openbookqa_test_rc_5shot_bpb": 1.9394140243530273,
+   "openbookqa_val_rc_5shot_bpb": 1.8799843788146973,
+   "piqa_val_rc_5shot_bpb": 1.3999676704406738,
+   "socialiqa_val_rc_5shot_bpb": 1.5553841590881348,
+   "winogrande_val_rc_5shot_bpb": 1.684036135673523
+  }
+ },
+ "olmo_12345": {
+  "0": {
+   "boolq_val_rc_5shot_bpb": 6.555370807647705,
+   "csqa_val_rc_5shot_bpb": 3.088196039199829,
+   "hellaswag_val_rc_5shot_bpb": 3.7551844120025635,
+   "openbookqa_test_rc_5shot_bpb": 3.8136093616485596,
+   "openbookqa_val_rc_5shot_bpb": 3.570906162261963,
+   "piqa_val_rc_5shot_bpb": 3.9412405490875244,
+   "socialiqa_val_rc_5shot_bpb": 3.4595940113067627,
+   "winogrande_val_rc_5shot_bpb": 4.622989654541016
+  },
+  "125": {
+   "boolq_val_rc_5shot_bpb": 4.743229389190674,
+   "csqa_val_rc_5shot_bpb": 2.9516406059265137,
+   "hellaswag_val_rc_5shot_bpb": 1.8009593486785889,
+   "openbookqa_test_rc_5shot_bpb": 2.8689217567443848,
+   "openbookqa_val_rc_5shot_bpb": 2.770765542984009,
+   "piqa_val_rc_5shot_bpb": 2.15537428855896,
+   "socialiqa_val_rc_5shot_bpb": 2.297294855117798,
+   "winogrande_val_rc_5shot_bpb": 2.169562578201294
+  },
+  "250": {
+   "boolq_val_rc_5shot_bpb": 3.9433438777923584,
+   "csqa_val_rc_5shot_bpb": 2.5562422275543213,
+   "hellaswag_val_rc_5shot_bpb": 1.526666522026062,
+   "openbookqa_test_rc_5shot_bpb": 2.5459530353546143,
+   "openbookqa_val_rc_5shot_bpb": 2.4665780067443848,
+   "piqa_val_rc_5shot_bpb": 1.8177664279937744,
+   "socialiqa_val_rc_5shot_bpb": 2.095153331756592,
+   "winogrande_val_rc_5shot_bpb": 1.9909327030181885
+  },
+  "375": {
+   "boolq_val_rc_5shot_bpb": 3.323685884475708,
+   "csqa_val_rc_5shot_bpb": 2.4013617038726807,
+   "hellaswag_val_rc_5shot_bpb": 1.3992912769317627,
+   "openbookqa_test_rc_5shot_bpb": 2.4131717681884766,
+   "openbookqa_val_rc_5shot_bpb": 2.3310625553131104,
+   "piqa_val_rc_5shot_bpb": 1.689914345741272,
+   "socialiqa_val_rc_5shot_bpb": 1.9162235260009766,
+   "winogrande_val_rc_5shot_bpb": 1.937361240386963
+  },
+  "500": {
+   "boolq_val_rc_5shot_bpb": 2.6666882038116455,
+   "csqa_val_rc_5shot_bpb": 2.205575704574585,
+   "hellaswag_val_rc_5shot_bpb": 1.3044291734695435,
+   "openbookqa_test_rc_5shot_bpb": 2.46177339553833,
+   "openbookqa_val_rc_5shot_bpb": 2.3725860118865967,
+   "piqa_val_rc_5shot_bpb": 1.618624210357666,
+   "socialiqa_val_rc_5shot_bpb": 1.8035039901733398,
+   "winogrande_val_rc_5shot_bpb": 1.8546934127807617
+  },
+  "625": {
+   "boolq_val_rc_5shot_bpb": 1.2285126447677612,
+   "csqa_val_rc_5shot_bpb": 2.0021209716796875,
+   "hellaswag_val_rc_5shot_bpb": 1.2494549751281738,
+   "openbookqa_test_rc_5shot_bpb": 2.2748281955718994,
+   "openbookqa_val_rc_5shot_bpb": 2.1962032318115234,
+   "piqa_val_rc_5shot_bpb": 1.5672649145126343,
+   "socialiqa_val_rc_5shot_bpb": 1.744612455368042,
+   "winogrande_val_rc_5shot_bpb": 1.7975116968154907
+  },
+  "750": {
+   "boolq_val_rc_5shot_bpb": 1.0207998752593994,
+   "csqa_val_rc_5shot_bpb": 2.06341814994812,
+   "hellaswag_val_rc_5shot_bpb": 1.205747365951538,
+   "openbookqa_test_rc_5shot_bpb": 2.200507879257202,
+   "openbookqa_val_rc_5shot_bpb": 2.131960868835449,
+   "piqa_val_rc_5shot_bpb": 1.5346482992172241,
+   "socialiqa_val_rc_5shot_bpb": 1.756646990776062,
+   "winogrande_val_rc_5shot_bpb": 1.77359938621521
+  },
+  "875": {
+   "boolq_val_rc_5shot_bpb": 0.6772207021713257,
+   "csqa_val_rc_5shot_bpb": 2.0063536167144775,
+   "hellaswag_val_rc_5shot_bpb": 1.1787476539611816,
+   "openbookqa_test_rc_5shot_bpb": 2.12221097946167,
+   "openbookqa_val_rc_5shot_bpb": 2.0559375286102295,
+   "piqa_val_rc_5shot_bpb": 1.5251802206039429,
+   "socialiqa_val_rc_5shot_bpb": 1.7091083526611328,
+   "winogrande_val_rc_5shot_bpb": 1.7638568878173828
+  },
+  "1000": {
+   "boolq_val_rc_5shot_bpb": 0.5898647904396057,
+   "csqa_val_rc_5shot_bpb": 1.9691083431243896,
+   "hellaswag_val_rc_5shot_bpb": 1.1580513715744019,
+   "openbookqa_test_rc_5shot_bpb": 2.0758047103881836,
+   "openbookqa_val_rc_5shot_bpb": 2.0098280906677246,
+   "piqa_val_rc_5shot_bpb": 1.4900155067443848,
+   "socialiqa_val_rc_5shot_bpb": 1.6451529264450073,
+   "winogrande_val_rc_5shot_bpb": 1.7570571899414062
+  },
+  "1125": {
+   "boolq_val_rc_5shot_bpb": 0.5895147919654846,
+   "csqa_val_rc_5shot_bpb": 1.9499865770339966,
+   "hellaswag_val_rc_5shot_bpb": 1.1421658992767334,
+   "openbookqa_test_rc_5shot_bpb": 2.057523488998413,
+   "openbookqa_val_rc_5shot_bpb": 1.9973671436309814,
+   "piqa_val_rc_5shot_bpb": 1.483119010925293,
+   "socialiqa_val_rc_5shot_bpb": 1.6080706119537354,
+   "winogrande_val_rc_5shot_bpb": 1.7421443462371826
+  },
+  "1250": {
+   "boolq_val_rc_5shot_bpb": 0.7077142596244812,
+   "csqa_val_rc_5shot_bpb": 1.9091964960098267,
+   "hellaswag_val_rc_5shot_bpb": 1.132320761680603,
+   "openbookqa_test_rc_5shot_bpb": 2.05189847946167,
+   "openbookqa_val_rc_5shot_bpb": 1.9911249876022339,
+   "piqa_val_rc_5shot_bpb": 1.4596984386444092,
+   "socialiqa_val_rc_5shot_bpb": 1.5885683298110962,
+   "winogrande_val_rc_5shot_bpb": 1.7267104387283325
+  },
+  "1375": {
+   "boolq_val_rc_5shot_bpb": 0.6685296297073364,
+   "csqa_val_rc_5shot_bpb": 1.8933923244476318,
+   "hellaswag_val_rc_5shot_bpb": 1.116794228553772,
+   "openbookqa_test_rc_5shot_bpb": 2.025843858718872,
+   "openbookqa_val_rc_5shot_bpb": 1.9608594179153442,
+   "piqa_val_rc_5shot_bpb": 1.4508743286132812,
+   "socialiqa_val_rc_5shot_bpb": 1.5653496980667114,
+   "winogrande_val_rc_5shot_bpb": 1.7248328924179077
+  },
+  "1500": {
+   "boolq_val_rc_5shot_bpb": 0.6223453879356384,
+   "csqa_val_rc_5shot_bpb": 1.8756142854690552,
+   "hellaswag_val_rc_5shot_bpb": 1.1093499660491943,
+   "openbookqa_test_rc_5shot_bpb": 1.9911953210830688,
+   "openbookqa_val_rc_5shot_bpb": 1.9253672361373901,
+   "piqa_val_rc_5shot_bpb": 1.442160725593567,
+   "socialiqa_val_rc_5shot_bpb": 1.5242761373519897,
+   "winogrande_val_rc_5shot_bpb": 1.7116080522537231
+  },
+  "1625": {
+   "boolq_val_rc_5shot_bpb": 0.5764158368110657,
+   "csqa_val_rc_5shot_bpb": 1.8781319856643677,
+   "hellaswag_val_rc_5shot_bpb": 1.0966827869415283,
+   "openbookqa_test_rc_5shot_bpb": 2.0040390491485596,
+   "openbookqa_val_rc_5shot_bpb": 1.9381953477859497,
+   "piqa_val_rc_5shot_bpb": 1.4248929023742676,
+   "socialiqa_val_rc_5shot_bpb": 1.5257045030593872,
+   "winogrande_val_rc_5shot_bpb": 1.6886515617370605
+  },
+  "1750": {
+   "boolq_val_rc_5shot_bpb": 0.6132761836051941,
+   "csqa_val_rc_5shot_bpb": 1.8933123350143433,
+   "hellaswag_val_rc_5shot_bpb": 1.0925346612930298,
+   "openbookqa_test_rc_5shot_bpb": 2.0086171627044678,
+   "openbookqa_val_rc_5shot_bpb": 1.9431718587875366,
+   "piqa_val_rc_5shot_bpb": 1.4244742393493652,
+   "socialiqa_val_rc_5shot_bpb": 1.515679955482483,
+   "winogrande_val_rc_5shot_bpb": 1.701777696609497
+  },
+  "1875": {
+   "boolq_val_rc_5shot_bpb": 0.5910941958427429,
+   "csqa_val_rc_5shot_bpb": 1.8778345584869385,
+   "hellaswag_val_rc_5shot_bpb": 1.0907334089279175,
+   "openbookqa_test_rc_5shot_bpb": 1.9721719026565552,
+   "openbookqa_val_rc_5shot_bpb": 1.9069921970367432,
+   "piqa_val_rc_5shot_bpb": 1.4063222408294678,
+   "socialiqa_val_rc_5shot_bpb": 1.5032585859298706,
+   "winogrande_val_rc_5shot_bpb": 1.6913954019546509
+  },
+  "2000": {
+   "boolq_val_rc_5shot_bpb": 0.6261467933654785,
+   "csqa_val_rc_5shot_bpb": 1.8747568130493164,
+   "hellaswag_val_rc_5shot_bpb": 1.085922360420227,
+   "openbookqa_test_rc_5shot_bpb": 1.977789044380188,
+   "openbookqa_val_rc_5shot_bpb": 1.913742184638977,
+   "piqa_val_rc_5shot_bpb": 1.4073848724365234,
+   "socialiqa_val_rc_5shot_bpb": 1.5006576776504517,
+   "winogrande_val_rc_5shot_bpb": 1.6909807920455933
+  },
+  "2125": {
+   "boolq_val_rc_5shot_bpb": 0.6570518612861633,
+   "csqa_val_rc_5shot_bpb": 1.8513705730438232,
+   "hellaswag_val_rc_5shot_bpb": 1.079769492149353,
+   "openbookqa_test_rc_5shot_bpb": 1.9561327695846558,
+   "openbookqa_val_rc_5shot_bpb": 1.8984296321868896,
+   "piqa_val_rc_5shot_bpb": 1.4003480672836304,
+   "socialiqa_val_rc_5shot_bpb": 1.5067399740219116,
+   "winogrande_val_rc_5shot_bpb": 1.6758644580841064
+  },
+  "2250": {
+   "boolq_val_rc_5shot_bpb": 0.6512226462364197,
+   "csqa_val_rc_5shot_bpb": 1.8790310621261597,
+   "hellaswag_val_rc_5shot_bpb": 1.0796927213668823,
+   "openbookqa_test_rc_5shot_bpb": 1.9867421388626099,
+   "openbookqa_val_rc_5shot_bpb": 1.9209843873977661,
+   "piqa_val_rc_5shot_bpb": 1.4012237787246704,
+   "socialiqa_val_rc_5shot_bpb": 1.503927230834961,
+   "winogrande_val_rc_5shot_bpb": 1.673188328742981
+  },
+  "2384": {
+   "boolq_val_rc_5shot_bpb": 0.6350851655006409,
+   "csqa_val_rc_5shot_bpb": 1.8718743324279785,
+   "hellaswag_val_rc_5shot_bpb": 1.074411153793335,
+   "openbookqa_test_rc_5shot_bpb": 1.9616484642028809,
+   "openbookqa_val_rc_5shot_bpb": 1.9008828401565552,
+   "piqa_val_rc_5shot_bpb": 1.3965736627578735,
+   "socialiqa_val_rc_5shot_bpb": 1.4885741472244263,
+   "winogrande_val_rc_5shot_bpb": 1.6682169437408447
+  }
+ },
+ "dml_paper": {
+  "0": {
+   "boolq_val_rc_5shot_bpb": 6.669638633728027,
+   "csqa_val_rc_5shot_bpb": 3.078611373901367,
+   "hellaswag_val_rc_5shot_bpb": 3.7029290199279785,
+   "openbookqa_test_rc_5shot_bpb": 3.7979061603546143,
+   "openbookqa_val_rc_5shot_bpb": 3.563671827316284,
+   "piqa_val_rc_5shot_bpb": 3.898888111114502,
+   "socialiqa_val_rc_5shot_bpb": 3.4511897563934326,
+   "winogrande_val_rc_5shot_bpb": 4.552165508270264
+  },
+  "125": {
+   "boolq_val_rc_5shot_bpb": 4.355910778045654,
+   "csqa_val_rc_5shot_bpb": 2.9592931270599365,
+   "hellaswag_val_rc_5shot_bpb": 1.855344295501709,
+   "openbookqa_test_rc_5shot_bpb": 2.9512500762939453,
+   "openbookqa_val_rc_5shot_bpb": 2.858046770095825,
+   "piqa_val_rc_5shot_bpb": 2.244368076324463,
+   "socialiqa_val_rc_5shot_bpb": 2.3100850582122803,
+   "winogrande_val_rc_5shot_bpb": 2.1815619468688965
+  },
+  "250": {
+   "boolq_val_rc_5shot_bpb": 4.589024066925049,
+   "csqa_val_rc_5shot_bpb": 2.6894514560699463,
+   "hellaswag_val_rc_5shot_bpb": 1.5830037593841553,
+   "openbookqa_test_rc_5shot_bpb": 2.548015594482422,
+   "openbookqa_val_rc_5shot_bpb": 2.4796719551086426,
+   "piqa_val_rc_5shot_bpb": 1.8850270509719849,
+   "socialiqa_val_rc_5shot_bpb": 2.1792757511138916,
+   "winogrande_val_rc_5shot_bpb": 2.0445456504821777
+  },
+  "375": {
+   "boolq_val_rc_5shot_bpb": 1.1605241298675537,
+   "csqa_val_rc_5shot_bpb": 2.2474725246429443,
+   "hellaswag_val_rc_5shot_bpb": 1.4278993606567383,
+   "openbookqa_test_rc_5shot_bpb": 2.3286561965942383,
+   "openbookqa_val_rc_5shot_bpb": 2.2603983879089355,
+   "piqa_val_rc_5shot_bpb": 1.7680329084396362,
+   "socialiqa_val_rc_5shot_bpb": 1.8708598613739014,
+   "winogrande_val_rc_5shot_bpb": 1.914215087890625
+  },
+  "500": {
+   "boolq_val_rc_5shot_bpb": 0.9639239311218262,
+   "csqa_val_rc_5shot_bpb": 2.3189847469329834,
+   "hellaswag_val_rc_5shot_bpb": 1.3450970649719238,
+   "openbookqa_test_rc_5shot_bpb": 2.3199923038482666,
+   "openbookqa_val_rc_5shot_bpb": 2.2383124828338623,
+   "piqa_val_rc_5shot_bpb": 1.6792815923690796,
+   "socialiqa_val_rc_5shot_bpb": 1.8153266906738281,
+   "winogrande_val_rc_5shot_bpb": 1.8972305059432983
+  },
+  "625": {
+   "boolq_val_rc_5shot_bpb": 1.0567737817764282,
+   "csqa_val_rc_5shot_bpb": 2.19577956199646,
+   "hellaswag_val_rc_5shot_bpb": 1.2900408506393433,
+   "openbookqa_test_rc_5shot_bpb": 2.2521562576293945,
+   "openbookqa_val_rc_5shot_bpb": 2.1740000247955322,
+   "piqa_val_rc_5shot_bpb": 1.620579481124878,
+   "socialiqa_val_rc_5shot_bpb": 1.7767900228500366,
+   "winogrande_val_rc_5shot_bpb": 1.8652513027191162
+  },
+  "750": {
+   "boolq_val_rc_5shot_bpb": 0.8887202739715576,
+   "csqa_val_rc_5shot_bpb": 2.1544840335845947,
+   "hellaswag_val_rc_5shot_bpb": 1.251318335533142,
+   "openbookqa_test_rc_5shot_bpb": 2.209625005722046,
+   "openbookqa_val_rc_5shot_bpb": 2.1304140090942383,
+   "piqa_val_rc_5shot_bpb": 1.6101230382919312,
+   "socialiqa_val_rc_5shot_bpb": 1.7536743879318237,
+   "winogrande_val_rc_5shot_bpb": 1.8157988786697388
+  },
+  "875": {
+   "boolq_val_rc_5shot_bpb": 0.7430774569511414,
+   "csqa_val_rc_5shot_bpb": 2.073770761489868,
+   "hellaswag_val_rc_5shot_bpb": 1.2342828512191772,
+   "openbookqa_test_rc_5shot_bpb": 2.161109447479248,
+   "openbookqa_val_rc_5shot_bpb": 2.0869140625,
+   "piqa_val_rc_5shot_bpb": 1.5801715850830078,
+   "socialiqa_val_rc_5shot_bpb": 1.6965858936309814,
+   "winogrande_val_rc_5shot_bpb": 1.7919312715530396
+  },
+  "1000": {
+   "boolq_val_rc_5shot_bpb": 0.718330979347229,
+   "csqa_val_rc_5shot_bpb": 2.0531005859375,
+   "hellaswag_val_rc_5shot_bpb": 1.2051434516906738,
+   "openbookqa_test_rc_5shot_bpb": 2.136359453201294,
+   "openbookqa_val_rc_5shot_bpb": 2.0649921894073486,
+   "piqa_val_rc_5shot_bpb": 1.5447646379470825,
+   "socialiqa_val_rc_5shot_bpb": 1.6773945093154907,
+   "winogrande_val_rc_5shot_bpb": 1.7522938251495361
+  },
+  "1125": {
+   "boolq_val_rc_5shot_bpb": 0.6370811462402344,
+   "csqa_val_rc_5shot_bpb": 1.953870415687561,
+   "hellaswag_val_rc_5shot_bpb": 1.1786985397338867,
+   "openbookqa_test_rc_5shot_bpb": 2.106234312057495,
+   "openbookqa_val_rc_5shot_bpb": 2.039843797683716,
+   "piqa_val_rc_5shot_bpb": 1.5360190868377686,
+   "socialiqa_val_rc_5shot_bpb": 1.642415165901184,
+   "winogrande_val_rc_5shot_bpb": 1.748125433921814
+  },
+  "1250": {
+   "boolq_val_rc_5shot_bpb": 0.5211812257766724,
+   "csqa_val_rc_5shot_bpb": 1.9570504426956177,
+   "hellaswag_val_rc_5shot_bpb": 1.1753851175308228,
+   "openbookqa_test_rc_5shot_bpb": 2.0987110137939453,
+   "openbookqa_val_rc_5shot_bpb": 2.0324766635894775,
+   "piqa_val_rc_5shot_bpb": 1.5298813581466675,
+   "socialiqa_val_rc_5shot_bpb": 1.6361650228500366,
+   "winogrande_val_rc_5shot_bpb": 1.7482565641403198
+  },
+  "1375": {
+   "boolq_val_rc_5shot_bpb": 0.4955711364746094,
+   "csqa_val_rc_5shot_bpb": 1.920486569404602,
+   "hellaswag_val_rc_5shot_bpb": 1.1588677167892456,
+   "openbookqa_test_rc_5shot_bpb": 2.0825624465942383,
+   "openbookqa_val_rc_5shot_bpb": 2.010812520980835,
+   "piqa_val_rc_5shot_bpb": 1.5308972597122192,
+   "socialiqa_val_rc_5shot_bpb": 1.6360141038894653,
+   "winogrande_val_rc_5shot_bpb": 1.747555136680603
+  },
+  "1500": {
+   "boolq_val_rc_5shot_bpb": 0.5303599238395691,
+   "csqa_val_rc_5shot_bpb": 1.9300713539123535,
+   "hellaswag_val_rc_5shot_bpb": 1.1582995653152466,
+   "openbookqa_test_rc_5shot_bpb": 2.0590782165527344,
+   "openbookqa_val_rc_5shot_bpb": 1.9871875047683716,
+   "piqa_val_rc_5shot_bpb": 1.5145347118377686,
+   "socialiqa_val_rc_5shot_bpb": 1.621492624282837,
+   "winogrande_val_rc_5shot_bpb": 1.746030569076538
+  },
+  "1625": {
+   "boolq_val_rc_5shot_bpb": 0.50516277551651,
+   "csqa_val_rc_5shot_bpb": 1.8916391134262085,
+   "hellaswag_val_rc_5shot_bpb": 1.1449947357177734,
+   "openbookqa_test_rc_5shot_bpb": 2.0518906116485596,
+   "openbookqa_val_rc_5shot_bpb": 1.9749687910079956,
+   "piqa_val_rc_5shot_bpb": 1.5021167993545532,
+   "socialiqa_val_rc_5shot_bpb": 1.6163908243179321,
+   "winogrande_val_rc_5shot_bpb": 1.7591520547866821
+  },
+  "1750": {
+   "boolq_val_rc_5shot_bpb": 0.49356022477149963,
+   "csqa_val_rc_5shot_bpb": 1.8810465335845947,
+   "hellaswag_val_rc_5shot_bpb": 1.1460438966751099,
+   "openbookqa_test_rc_5shot_bpb": 2.044210910797119,
+   "openbookqa_val_rc_5shot_bpb": 1.9613046646118164,
+   "piqa_val_rc_5shot_bpb": 1.4941895008087158,
+   "socialiqa_val_rc_5shot_bpb": 1.6097278594970703,
+   "winogrande_val_rc_5shot_bpb": 1.7387020587921143
+  },
+  "1875": {
+   "boolq_val_rc_5shot_bpb": 0.5104689002037048,
+   "csqa_val_rc_5shot_bpb": 1.8493678569793701,
+   "hellaswag_val_rc_5shot_bpb": 1.1427052021026611,
+   "openbookqa_test_rc_5shot_bpb": 2.0390233993530273,
+   "openbookqa_val_rc_5shot_bpb": 1.9580937623977661,
+   "piqa_val_rc_5shot_bpb": 1.5001509189605713,
+   "socialiqa_val_rc_5shot_bpb": 1.600012183189392,
+   "winogrande_val_rc_5shot_bpb": 1.7347726821899414
+  },
+  "2000": {
+   "boolq_val_rc_5shot_bpb": 0.4769865870475769,
+   "csqa_val_rc_5shot_bpb": 1.8526630401611328,
+   "hellaswag_val_rc_5shot_bpb": 1.134688138961792,
+   "openbookqa_test_rc_5shot_bpb": 2.0458126068115234,
+   "openbookqa_val_rc_5shot_bpb": 1.958554744720459,
+   "piqa_val_rc_5shot_bpb": 1.4876670837402344,
+   "socialiqa_val_rc_5shot_bpb": 1.59201979637146,
+   "winogrande_val_rc_5shot_bpb": 1.7259504795074463
+  },
+  "2125": {
+   "boolq_val_rc_5shot_bpb": 0.5224595665931702,
+   "csqa_val_rc_5shot_bpb": 1.8442875146865845,
+   "hellaswag_val_rc_5shot_bpb": 1.1326866149902344,
+   "openbookqa_test_rc_5shot_bpb": 2.0387656688690186,
+   "openbookqa_val_rc_5shot_bpb": 1.9541562795639038,
+   "piqa_val_rc_5shot_bpb": 1.4895224571228027,
+   "socialiqa_val_rc_5shot_bpb": 1.5939289331436157,
+   "winogrande_val_rc_5shot_bpb": 1.7256946563720703
+  },
+  "2250": {
+   "boolq_val_rc_5shot_bpb": 0.5355822443962097,
+   "csqa_val_rc_5shot_bpb": 1.8448537588119507,
+   "hellaswag_val_rc_5shot_bpb": 1.1328116655349731,
+   "openbookqa_test_rc_5shot_bpb": 2.0337891578674316,
+   "openbookqa_val_rc_5shot_bpb": 1.9493671655654907,
+   "piqa_val_rc_5shot_bpb": 1.4893162250518799,
+   "socialiqa_val_rc_5shot_bpb": 1.5912331342697144,
+   "winogrande_val_rc_5shot_bpb": 1.7226516008377075
+  },
+  "2375": {
+   "boolq_val_rc_5shot_bpb": 0.5224795937538147,
+   "csqa_val_rc_5shot_bpb": 1.84616219997406,
+   "hellaswag_val_rc_5shot_bpb": 1.1271204948425293,
+   "openbookqa_test_rc_5shot_bpb": 2.030250072479248,
+   "openbookqa_val_rc_5shot_bpb": 1.947015643119812,
+   "piqa_val_rc_5shot_bpb": 1.4814761877059937,
+   "socialiqa_val_rc_5shot_bpb": 1.5859484672546387,
+   "winogrande_val_rc_5shot_bpb": 1.7264083623886108
+  },
+  "2384": {
+   "boolq_val_rc_5shot_bpb": 0.5126182436943054,
+   "csqa_val_rc_5shot_bpb": 1.8498317003250122,
+   "hellaswag_val_rc_5shot_bpb": 1.1256059408187866,
+   "openbookqa_test_rc_5shot_bpb": 2.0370702743530273,
+   "openbookqa_val_rc_5shot_bpb": 1.9511640071868896,
+   "piqa_val_rc_5shot_bpb": 1.4832783937454224,
+   "socialiqa_val_rc_5shot_bpb": 1.5857895612716675,
+   "winogrande_val_rc_5shot_bpb": 1.7288841009140015
+  }
+ },
+ "mixlaw": {
+  "0": {
+   "boolq_val_rc_5shot_bpb": 6.669638633728027,
+   "csqa_val_rc_5shot_bpb": 3.078611373901367,
+   "hellaswag_val_rc_5shot_bpb": 3.7029290199279785,
+   "openbookqa_test_rc_5shot_bpb": 3.7979061603546143,
+   "openbookqa_val_rc_5shot_bpb": 3.563671827316284,
+   "piqa_val_rc_5shot_bpb": 3.898888111114502,
+   "socialiqa_val_rc_5shot_bpb": 3.4511897563934326,
+   "winogrande_val_rc_5shot_bpb": 4.552165508270264
+  },
+  "125": {
+   "boolq_val_rc_5shot_bpb": 4.814831733703613,
+   "csqa_val_rc_5shot_bpb": 2.899857997894287,
+   "hellaswag_val_rc_5shot_bpb": 1.8222792148590088,
+   "openbookqa_test_rc_5shot_bpb": 2.8241875171661377,
+   "openbookqa_val_rc_5shot_bpb": 2.7270469665527344,
+   "piqa_val_rc_5shot_bpb": 2.1724488735198975,
+   "socialiqa_val_rc_5shot_bpb": 2.3165900707244873,
+   "winogrande_val_rc_5shot_bpb": 2.207848310470581
+  },
+  "250": {
+   "boolq_val_rc_5shot_bpb": 4.0224103927612305,
+   "csqa_val_rc_5shot_bpb": 2.6552071571350098,
+   "hellaswag_val_rc_5shot_bpb": 1.5557746887207031,
+   "openbookqa_test_rc_5shot_bpb": 2.4978437423706055,
+   "openbookqa_val_rc_5shot_bpb": 2.410031318664551,
+   "piqa_val_rc_5shot_bpb": 1.8647136688232422,
+   "socialiqa_val_rc_5shot_bpb": 2.1138410568237305,
+   "winogrande_val_rc_5shot_bpb": 2.0124247074127197
+  },
+  "375": {
+   "boolq_val_rc_5shot_bpb": 4.087457180023193,
+   "csqa_val_rc_5shot_bpb": 2.4800047874450684,
+   "hellaswag_val_rc_5shot_bpb": 1.4248946905136108,
+   "openbookqa_test_rc_5shot_bpb": 2.430859327316284,
+   "openbookqa_val_rc_5shot_bpb": 2.359562397003174,
+   "piqa_val_rc_5shot_bpb": 1.7318267822265625,
+   "socialiqa_val_rc_5shot_bpb": 2.0933761596679688,
+   "winogrande_val_rc_5shot_bpb": 1.9477943181991577
+  },
+  "500": {
+   "boolq_val_rc_5shot_bpb": 2.5915591716766357,
+   "csqa_val_rc_5shot_bpb": 2.287853240966797,
+   "hellaswag_val_rc_5shot_bpb": 1.3444151878356934,
+   "openbookqa_test_rc_5shot_bpb": 2.325624942779541,
+   "openbookqa_val_rc_5shot_bpb": 2.249336004257202,
+   "piqa_val_rc_5shot_bpb": 1.6691652536392212,
+   "socialiqa_val_rc_5shot_bpb": 1.8622556924819946,
+   "winogrande_val_rc_5shot_bpb": 1.8510630130767822
+  },
+  "625": {
+   "boolq_val_rc_5shot_bpb": 1.0185465812683105,
+   "csqa_val_rc_5shot_bpb": 2.1748950481414795,
+   "hellaswag_val_rc_5shot_bpb": 1.2881172895431519,
+   "openbookqa_test_rc_5shot_bpb": 2.2814061641693115,
+   "openbookqa_val_rc_5shot_bpb": 2.1931796073913574,
+   "piqa_val_rc_5shot_bpb": 1.6305830478668213,
+   "socialiqa_val_rc_5shot_bpb": 1.7206470966339111,
+   "winogrande_val_rc_5shot_bpb": 1.8239752054214478
+  },
+  "750": {
+   "boolq_val_rc_5shot_bpb": 0.8602747917175293,
+   "csqa_val_rc_5shot_bpb": 2.089277505874634,
+   "hellaswag_val_rc_5shot_bpb": 1.2377398014068604,
+   "openbookqa_test_rc_5shot_bpb": 2.2169530391693115,
+   "openbookqa_val_rc_5shot_bpb": 2.1260859966278076,
+   "piqa_val_rc_5shot_bpb": 1.57273530960083,
+   "socialiqa_val_rc_5shot_bpb": 1.6932414770126343,
+   "winogrande_val_rc_5shot_bpb": 1.8034049272537231
+  },
+  "875": {
+   "boolq_val_rc_5shot_bpb": 0.6076903343200684,
+   "csqa_val_rc_5shot_bpb": 2.0626022815704346,
+   "hellaswag_val_rc_5shot_bpb": 1.217496633529663,
+   "openbookqa_test_rc_5shot_bpb": 2.171781301498413,
+   "openbookqa_val_rc_5shot_bpb": 2.0831406116485596,
+   "piqa_val_rc_5shot_bpb": 1.569538950920105,
+   "socialiqa_val_rc_5shot_bpb": 1.6412307024002075,
+   "winogrande_val_rc_5shot_bpb": 1.7825788259506226
+  },
+  "1000": {
+   "boolq_val_rc_5shot_bpb": 0.6543813943862915,
+   "csqa_val_rc_5shot_bpb": 2.063098192214966,
+   "hellaswag_val_rc_5shot_bpb": 1.1854631900787354,
+   "openbookqa_test_rc_5shot_bpb": 2.1308202743530273,
+   "openbookqa_val_rc_5shot_bpb": 2.051992177963257,
+   "piqa_val_rc_5shot_bpb": 1.512213945388794,
+   "socialiqa_val_rc_5shot_bpb": 1.6555123329162598,
+   "winogrande_val_rc_5shot_bpb": 1.7743700742721558
+  },
+  "1125": {
+   "boolq_val_rc_5shot_bpb": 0.5651606321334839,
+   "csqa_val_rc_5shot_bpb": 1.9819339513778687,
+   "hellaswag_val_rc_5shot_bpb": 1.1736963987350464,
+   "openbookqa_test_rc_5shot_bpb": 2.079148530960083,
+   "openbookqa_val_rc_5shot_bpb": 2.0043437480926514,
+   "piqa_val_rc_5shot_bpb": 1.5096296072006226,
+   "socialiqa_val_rc_5shot_bpb": 1.6087552309036255,
+   "winogrande_val_rc_5shot_bpb": 1.7501881122589111
+  },
+  "1250": {
+   "boolq_val_rc_5shot_bpb": 0.49837806820869446,
+   "csqa_val_rc_5shot_bpb": 2.024467706680298,
+   "hellaswag_val_rc_5shot_bpb": 1.1546344757080078,
+   "openbookqa_test_rc_5shot_bpb": 2.0693905353546143,
+   "openbookqa_val_rc_5shot_bpb": 1.997249960899353,
+   "piqa_val_rc_5shot_bpb": 1.4874353408813477,
+   "socialiqa_val_rc_5shot_bpb": 1.6065322160720825,
+   "winogrande_val_rc_5shot_bpb": 1.7264900207519531
+  },
+  "1375": {
+   "boolq_val_rc_5shot_bpb": 0.5535761117935181,
+   "csqa_val_rc_5shot_bpb": 1.9512406587600708,
+   "hellaswag_val_rc_5shot_bpb": 1.1432948112487793,
+   "openbookqa_test_rc_5shot_bpb": 2.024726629257202,
+   "openbookqa_val_rc_5shot_bpb": 1.9512343406677246,
+   "piqa_val_rc_5shot_bpb": 1.482177495956421,
+   "socialiqa_val_rc_5shot_bpb": 1.6093930006027222,
+   "winogrande_val_rc_5shot_bpb": 1.7198675870895386
+  },
+  "1500": {
+   "boolq_val_rc_5shot_bpb": 0.5272801518440247,
+   "csqa_val_rc_5shot_bpb": 1.9009777307510376,
+   "hellaswag_val_rc_5shot_bpb": 1.1335101127624512,
+   "openbookqa_test_rc_5shot_bpb": 2.0312578678131104,
+   "openbookqa_val_rc_5shot_bpb": 1.9572187662124634,
+   "piqa_val_rc_5shot_bpb": 1.4689199924468994,
+   "socialiqa_val_rc_5shot_bpb": 1.5891720056533813,
+   "winogrande_val_rc_5shot_bpb": 1.7175846099853516
+  },
+  "1625": {
+   "boolq_val_rc_5shot_bpb": 0.4915151000022888,
+   "csqa_val_rc_5shot_bpb": 1.9033610820770264,
+   "hellaswag_val_rc_5shot_bpb": 1.1256572008132935,
+   "openbookqa_test_rc_5shot_bpb": 1.9957343339920044,
+   "openbookqa_val_rc_5shot_bpb": 1.9305546283721924,
+   "piqa_val_rc_5shot_bpb": 1.4530080556869507,
+   "socialiqa_val_rc_5shot_bpb": 1.572912335395813,
+   "winogrande_val_rc_5shot_bpb": 1.6963622570037842
+  },
+  "1750": {
+   "boolq_val_rc_5shot_bpb": 0.539696216583252,
+   "csqa_val_rc_5shot_bpb": 1.908882975578308,
+   "hellaswag_val_rc_5shot_bpb": 1.1227176189422607,
+   "openbookqa_test_rc_5shot_bpb": 1.9790390729904175,
+   "openbookqa_val_rc_5shot_bpb": 1.912679672241211,
+   "piqa_val_rc_5shot_bpb": 1.4590821266174316,
+   "socialiqa_val_rc_5shot_bpb": 1.5576821565628052,
+   "winogrande_val_rc_5shot_bpb": 1.6873505115509033
+  },
+  "1875": {
+   "boolq_val_rc_5shot_bpb": 0.5283707976341248,
+   "csqa_val_rc_5shot_bpb": 1.877882480621338,
+   "hellaswag_val_rc_5shot_bpb": 1.1198759078979492,
+   "openbookqa_test_rc_5shot_bpb": 1.9630000591278076,
+   "openbookqa_val_rc_5shot_bpb": 1.895734429359436,
+   "piqa_val_rc_5shot_bpb": 1.4382990598678589,
+   "socialiqa_val_rc_5shot_bpb": 1.551205039024353,
+   "winogrande_val_rc_5shot_bpb": 1.6790986061096191
+  },
+  "2000": {
+   "boolq_val_rc_5shot_bpb": 0.5180438756942749,
+   "csqa_val_rc_5shot_bpb": 1.8846168518066406,
+   "hellaswag_val_rc_5shot_bpb": 1.1115241050720215,
+   "openbookqa_test_rc_5shot_bpb": 1.9722890853881836,
+   "openbookqa_val_rc_5shot_bpb": 1.902273416519165,
+   "piqa_val_rc_5shot_bpb": 1.4367667436599731,
+   "socialiqa_val_rc_5shot_bpb": 1.5447319746017456,
+   "winogrande_val_rc_5shot_bpb": 1.6773196458816528
+  },
+  "2125": {
+   "boolq_val_rc_5shot_bpb": 0.5175991654396057,
+   "csqa_val_rc_5shot_bpb": 1.895046353340149,
+   "hellaswag_val_rc_5shot_bpb": 1.1107789278030396,
+   "openbookqa_test_rc_5shot_bpb": 1.9639140367507935,
+   "openbookqa_val_rc_5shot_bpb": 1.8989921808242798,
+   "piqa_val_rc_5shot_bpb": 1.4332664012908936,
+   "socialiqa_val_rc_5shot_bpb": 1.5407297611236572,
+   "winogrande_val_rc_5shot_bpb": 1.6738450527191162
+  },
+  "2250": {
+   "boolq_val_rc_5shot_bpb": 0.5075041651725769,
+   "csqa_val_rc_5shot_bpb": 1.8495917320251465,
+   "hellaswag_val_rc_5shot_bpb": 1.1050715446472168,
+   "openbookqa_test_rc_5shot_bpb": 1.9416406154632568,
+   "openbookqa_val_rc_5shot_bpb": 1.8737422227859497,
+   "piqa_val_rc_5shot_bpb": 1.435072898864746,
+   "socialiqa_val_rc_5shot_bpb": 1.5380239486694336,
+   "winogrande_val_rc_5shot_bpb": 1.6682554483413696
+  },
+  "2375": {
+   "boolq_val_rc_5shot_bpb": 0.5465604066848755,
+   "csqa_val_rc_5shot_bpb": 1.8562365770339966,
+   "hellaswag_val_rc_5shot_bpb": 1.1033726930618286,
+   "openbookqa_test_rc_5shot_bpb": 1.9457656145095825,
+   "openbookqa_val_rc_5shot_bpb": 1.8800312280654907,
+   "piqa_val_rc_5shot_bpb": 1.429443120956421,
+   "socialiqa_val_rc_5shot_bpb": 1.5316938161849976,
+   "winogrande_val_rc_5shot_bpb": 1.6718965768814087
+  },
+  "2384": {
+   "boolq_val_rc_5shot_bpb": 0.5356746912002563,
+   "csqa_val_rc_5shot_bpb": 1.8546944856643677,
+   "hellaswag_val_rc_5shot_bpb": 1.1055971384048462,
+   "openbookqa_test_rc_5shot_bpb": 1.9398984909057617,
+   "openbookqa_val_rc_5shot_bpb": 1.8744609355926514,
+   "piqa_val_rc_5shot_bpb": 1.426535725593567,
+   "socialiqa_val_rc_5shot_bpb": 1.535870909690857,
+   "winogrande_val_rc_5shot_bpb": 1.6761281490325928
+  }
+ },
+ "lightgbm": {
+  "0": {
+   "boolq_val_rc_5shot_bpb": 6.669638633728027,
+   "csqa_val_rc_5shot_bpb": 3.078611373901367,
+   "hellaswag_val_rc_5shot_bpb": 3.7029290199279785,
+   "openbookqa_test_rc_5shot_bpb": 3.7979061603546143,
+   "openbookqa_val_rc_5shot_bpb": 3.563671827316284,
+   "piqa_val_rc_5shot_bpb": 3.898888111114502,
+   "socialiqa_val_rc_5shot_bpb": 3.4511897563934326,
+   "winogrande_val_rc_5shot_bpb": 4.552165508270264
+  },
+  "125": {
+   "boolq_val_rc_5shot_bpb": 4.567813396453857,
+   "csqa_val_rc_5shot_bpb": 2.9525234699249268,
+   "hellaswag_val_rc_5shot_bpb": 1.836255669593811,
+   "openbookqa_test_rc_5shot_bpb": 2.908203125,
+   "openbookqa_val_rc_5shot_bpb": 2.818453073501587,
+   "piqa_val_rc_5shot_bpb": 2.206584930419922,
+   "socialiqa_val_rc_5shot_bpb": 2.3031880855560303,
+   "winogrande_val_rc_5shot_bpb": 2.194566488265991
+  },
+  "250": {
+   "boolq_val_rc_5shot_bpb": 4.606111526489258,
+   "csqa_val_rc_5shot_bpb": 2.6314945220947266,
+   "hellaswag_val_rc_5shot_bpb": 1.5850498676300049,
+   "openbookqa_test_rc_5shot_bpb": 2.5576250553131104,
+   "openbookqa_val_rc_5shot_bpb": 2.4746251106262207,
+   "piqa_val_rc_5shot_bpb": 1.8763878345489502,
+   "socialiqa_val_rc_5shot_bpb": 2.2356064319610596,
+   "winogrande_val_rc_5shot_bpb": 2.0199196338653564
+  },
+  "375": {
+   "boolq_val_rc_5shot_bpb": 2.245288610458374,
+   "csqa_val_rc_5shot_bpb": 2.283409357070923,
+   "hellaswag_val_rc_5shot_bpb": 1.4267343282699585,
+   "openbookqa_test_rc_5shot_bpb": 2.384929656982422,
+   "openbookqa_val_rc_5shot_bpb": 2.315312385559082,
+   "piqa_val_rc_5shot_bpb": 1.7572768926620483,
+   "socialiqa_val_rc_5shot_bpb": 1.886396884918213,
+   "winogrande_val_rc_5shot_bpb": 1.897216558456421
+  },
+  "500": {
+   "boolq_val_rc_5shot_bpb": 1.0996081829071045,
+   "csqa_val_rc_5shot_bpb": 2.132591724395752,
+   "hellaswag_val_rc_5shot_bpb": 1.3166455030441284,
+   "openbookqa_test_rc_5shot_bpb": 2.2620155811309814,
+   "openbookqa_val_rc_5shot_bpb": 2.2044765949249268,
+   "piqa_val_rc_5shot_bpb": 1.6612337827682495,
+   "socialiqa_val_rc_5shot_bpb": 1.7738553285598755,
+   "winogrande_val_rc_5shot_bpb": 1.8215272426605225
+  },
+  "625": {
+   "boolq_val_rc_5shot_bpb": 0.890084445476532,
+   "csqa_val_rc_5shot_bpb": 2.126215696334839,
+   "hellaswag_val_rc_5shot_bpb": 1.262568473815918,
+   "openbookqa_test_rc_5shot_bpb": 2.173851490020752,
+   "openbookqa_val_rc_5shot_bpb": 2.1127967834472656,
+   "piqa_val_rc_5shot_bpb": 1.6097404956817627,
+   "socialiqa_val_rc_5shot_bpb": 1.7334014177322388,
+   "winogrande_val_rc_5shot_bpb": 1.8092796802520752
+  },
+  "750": {
+   "boolq_val_rc_5shot_bpb": 0.6223743557929993,
+   "csqa_val_rc_5shot_bpb": 2.1364691257476807,
+   "hellaswag_val_rc_5shot_bpb": 1.2378654479980469,
+   "openbookqa_test_rc_5shot_bpb": 2.159367084503174,
+   "openbookqa_val_rc_5shot_bpb": 2.0946719646453857,
+   "piqa_val_rc_5shot_bpb": 1.5835912227630615,
+   "socialiqa_val_rc_5shot_bpb": 1.6824802160263062,
+   "winogrande_val_rc_5shot_bpb": 1.7918064594268799
+  },
+  "875": {
+   "boolq_val_rc_5shot_bpb": 0.9016709327697754,
+   "csqa_val_rc_5shot_bpb": 2.072340726852417,
+   "hellaswag_val_rc_5shot_bpb": 1.2029531002044678,
+   "openbookqa_test_rc_5shot_bpb": 2.1259922981262207,
+   "openbookqa_val_rc_5shot_bpb": 2.0624217987060547,
+   "piqa_val_rc_5shot_bpb": 1.5403971672058105,
+   "socialiqa_val_rc_5shot_bpb": 1.6544607877731323,
+   "winogrande_val_rc_5shot_bpb": 1.7580482959747314
+  },
+  "1000": {
+   "boolq_val_rc_5shot_bpb": 0.7315480709075928,
+   "csqa_val_rc_5shot_bpb": 2.0167768001556396,
+   "hellaswag_val_rc_5shot_bpb": 1.1770762205123901,
+   "openbookqa_test_rc_5shot_bpb": 2.0894219875335693,
+   "openbookqa_val_rc_5shot_bpb": 2.019726514816284,
+   "piqa_val_rc_5shot_bpb": 1.5259708166122437,
+   "socialiqa_val_rc_5shot_bpb": 1.6474839448928833,
+   "winogrande_val_rc_5shot_bpb": 1.7608493566513062
+  },
+  "1125": {
+   "boolq_val_rc_5shot_bpb": 0.6947287917137146,
+   "csqa_val_rc_5shot_bpb": 1.9360411167144775,
+   "hellaswag_val_rc_5shot_bpb": 1.1659448146820068,
+   "openbookqa_test_rc_5shot_bpb": 2.053257703781128,
+   "openbookqa_val_rc_5shot_bpb": 1.9837968349456787,
+   "piqa_val_rc_5shot_bpb": 1.4987609386444092,
+   "socialiqa_val_rc_5shot_bpb": 1.6208758354187012,
+   "winogrande_val_rc_5shot_bpb": 1.721535563468933
+  },
+  "1250": {
+   "boolq_val_rc_5shot_bpb": 0.6229676008224487,
+   "csqa_val_rc_5shot_bpb": 1.9058213233947754,
+   "hellaswag_val_rc_5shot_bpb": 1.1491215229034424,
+   "openbookqa_test_rc_5shot_bpb": 2.044538974761963,
+   "openbookqa_val_rc_5shot_bpb": 1.9724531173706055,
+   "piqa_val_rc_5shot_bpb": 1.4850656986236572,
+   "socialiqa_val_rc_5shot_bpb": 1.5776351690292358,
+   "winogrande_val_rc_5shot_bpb": 1.7348313331604004
+  },
+  "1375": {
+   "boolq_val_rc_5shot_bpb": 0.6801808476448059,
+   "csqa_val_rc_5shot_bpb": 1.8832284212112427,
+   "hellaswag_val_rc_5shot_bpb": 1.138371229171753,
+   "openbookqa_test_rc_5shot_bpb": 2.0241639614105225,
+   "openbookqa_val_rc_5shot_bpb": 1.9491015672683716,
+   "piqa_val_rc_5shot_bpb": 1.4659106731414795,
+   "socialiqa_val_rc_5shot_bpb": 1.5831007957458496,
+   "winogrande_val_rc_5shot_bpb": 1.7277926206588745
+  },
+  "1500": {
+   "boolq_val_rc_5shot_bpb": 0.6456917524337769,
+   "csqa_val_rc_5shot_bpb": 1.8467092514038086,
+   "hellaswag_val_rc_5shot_bpb": 1.1290274858474731,
+   "openbookqa_test_rc_5shot_bpb": 2.0157032012939453,
+   "openbookqa_val_rc_5shot_bpb": 1.9371484518051147,
+   "piqa_val_rc_5shot_bpb": 1.4605357646942139,
+   "socialiqa_val_rc_5shot_bpb": 1.556996464729309,
+   "winogrande_val_rc_5shot_bpb": 1.7257670164108276
+  },
+  "1625": {
+   "boolq_val_rc_5shot_bpb": 0.7028657793998718,
+   "csqa_val_rc_5shot_bpb": 1.8451288938522339,
+   "hellaswag_val_rc_5shot_bpb": 1.121516466140747,
+   "openbookqa_test_rc_5shot_bpb": 1.986234426498413,
+   "openbookqa_val_rc_5shot_bpb": 1.9247812032699585,
+   "piqa_val_rc_5shot_bpb": 1.4490699768066406,
+   "socialiqa_val_rc_5shot_bpb": 1.5474817752838135,
+   "winogrande_val_rc_5shot_bpb": 1.721953272819519
+  },
+  "1750": {
+   "boolq_val_rc_5shot_bpb": 0.6824233531951904,
+   "csqa_val_rc_5shot_bpb": 1.8063223361968994,
+   "hellaswag_val_rc_5shot_bpb": 1.1123319864273071,
+   "openbookqa_test_rc_5shot_bpb": 2.0052108764648438,
+   "openbookqa_val_rc_5shot_bpb": 1.9319530725479126,
+   "piqa_val_rc_5shot_bpb": 1.4373129606246948,
+   "socialiqa_val_rc_5shot_bpb": 1.5436464548110962,
+   "winogrande_val_rc_5shot_bpb": 1.6894731521606445
+  },
+  "1875": {
+   "boolq_val_rc_5shot_bpb": 0.6775878667831421,
+   "csqa_val_rc_5shot_bpb": 1.7957649230957031,
+   "hellaswag_val_rc_5shot_bpb": 1.1096633672714233,
+   "openbookqa_test_rc_5shot_bpb": 1.9612499475479126,
+   "openbookqa_val_rc_5shot_bpb": 1.8987030982971191,
+   "piqa_val_rc_5shot_bpb": 1.4313898086547852,
+   "socialiqa_val_rc_5shot_bpb": 1.5247509479522705,
+   "winogrande_val_rc_5shot_bpb": 1.6923496723175049
+  },
+  "2000": {
+   "boolq_val_rc_5shot_bpb": 0.6600790619850159,
+   "csqa_val_rc_5shot_bpb": 1.7937685251235962,
+   "hellaswag_val_rc_5shot_bpb": 1.1075232028961182,
+   "openbookqa_test_rc_5shot_bpb": 1.9682188034057617,
+   "openbookqa_val_rc_5shot_bpb": 1.901546835899353,
+   "piqa_val_rc_5shot_bpb": 1.4321507215499878,
+   "socialiqa_val_rc_5shot_bpb": 1.5344746112823486,
+   "winogrande_val_rc_5shot_bpb": 1.7046310901641846
+  },
+  "2125": {
+   "boolq_val_rc_5shot_bpb": 0.6894347667694092,
+   "csqa_val_rc_5shot_bpb": 1.7869925498962402,
+   "hellaswag_val_rc_5shot_bpb": 1.1032466888427734,
+   "openbookqa_test_rc_5shot_bpb": 1.9552500247955322,
+   "openbookqa_val_rc_5shot_bpb": 1.8893202543258667,
+   "piqa_val_rc_5shot_bpb": 1.4168487787246704,
+   "socialiqa_val_rc_5shot_bpb": 1.5418782234191895,
+   "winogrande_val_rc_5shot_bpb": 1.6960909366607666
+  },
+  "2250": {
+   "boolq_val_rc_5shot_bpb": 0.7213428020477295,
+   "csqa_val_rc_5shot_bpb": 1.7649531364440918,
+   "hellaswag_val_rc_5shot_bpb": 1.0999526977539062,
+   "openbookqa_test_rc_5shot_bpb": 1.9522031545639038,
+   "openbookqa_val_rc_5shot_bpb": 1.891992211341858,
+   "piqa_val_rc_5shot_bpb": 1.42379629611969,
+   "socialiqa_val_rc_5shot_bpb": 1.5222680568695068,
+   "winogrande_val_rc_5shot_bpb": 1.6804382801055908
+  },
+  "2375": {
+   "boolq_val_rc_5shot_bpb": 0.7238975763320923,
+   "csqa_val_rc_5shot_bpb": 1.7623330354690552,
+   "hellaswag_val_rc_5shot_bpb": 1.0980110168457031,
+   "openbookqa_test_rc_5shot_bpb": 1.9450078010559082,
+   "openbookqa_val_rc_5shot_bpb": 1.8821797370910645,
+   "piqa_val_rc_5shot_bpb": 1.419898509979248,
+   "socialiqa_val_rc_5shot_bpb": 1.5191774368286133,
+   "winogrande_val_rc_5shot_bpb": 1.6959799528121948
+  },
+  "2384": {
+   "boolq_val_rc_5shot_bpb": 0.7393202185630798,
+   "csqa_val_rc_5shot_bpb": 1.7615123987197876,
+   "hellaswag_val_rc_5shot_bpb": 1.0941383838653564,
+   "openbookqa_test_rc_5shot_bpb": 1.9418749809265137,
+   "openbookqa_val_rc_5shot_bpb": 1.8818984031677246,
+   "piqa_val_rc_5shot_bpb": 1.4187167882919312,
+   "socialiqa_val_rc_5shot_bpb": 1.5050687789916992,
+   "winogrande_val_rc_5shot_bpb": 1.6937801837921143
+  }
+ },
+ "probe": {
+  "0": {
+   "boolq_val_rc_5shot_bpb": 6.555370807647705,
+   "csqa_val_rc_5shot_bpb": 3.088196039199829,
+   "hellaswag_val_rc_5shot_bpb": 3.7551844120025635,
+   "openbookqa_test_rc_5shot_bpb": 3.8136093616485596,
+   "openbookqa_val_rc_5shot_bpb": 3.570906162261963,
+   "piqa_val_rc_5shot_bpb": 3.9412405490875244,
+   "socialiqa_val_rc_5shot_bpb": 3.4595940113067627,
+   "winogrande_val_rc_5shot_bpb": 4.622989654541016
+  },
+  "125": {
+   "boolq_val_rc_5shot_bpb": 4.3532490730285645,
+   "csqa_val_rc_5shot_bpb": 2.775049924850464,
+   "hellaswag_val_rc_5shot_bpb": 1.8094844818115234,
+   "openbookqa_test_rc_5shot_bpb": 2.822499990463257,
+   "openbookqa_val_rc_5shot_bpb": 2.725749969482422,
+   "piqa_val_rc_5shot_bpb": 2.1752073764801025,
+   "socialiqa_val_rc_5shot_bpb": 2.240636110305786,
+   "winogrande_val_rc_5shot_bpb": 2.1439146995544434
+  },
+  "250": {
+   "boolq_val_rc_5shot_bpb": 3.382798194885254,
+   "csqa_val_rc_5shot_bpb": 2.350829839706421,
+   "hellaswag_val_rc_5shot_bpb": 1.545228362083435,
+   "openbookqa_test_rc_5shot_bpb": 2.4784998893737793,
+   "openbookqa_val_rc_5shot_bpb": 2.404039144515991,
+   "piqa_val_rc_5shot_bpb": 1.8619976043701172,
+   "socialiqa_val_rc_5shot_bpb": 2.038902521133423,
+   "winogrande_val_rc_5shot_bpb": 1.9619780778884888
+  },
+  "375": {
+   "boolq_val_rc_5shot_bpb": 1.3708679676055908,
+   "csqa_val_rc_5shot_bpb": 2.3115339279174805,
+   "hellaswag_val_rc_5shot_bpb": 1.3962863683700562,
+   "openbookqa_test_rc_5shot_bpb": 2.3238046169281006,
+   "openbookqa_val_rc_5shot_bpb": 2.250164031982422,
+   "piqa_val_rc_5shot_bpb": 1.736585259437561,
+   "socialiqa_val_rc_5shot_bpb": 1.8366731405258179,
+   "winogrande_val_rc_5shot_bpb": 1.8710968494415283
+  },
+  "500": {
+   "boolq_val_rc_5shot_bpb": 0.7526107430458069,
+   "csqa_val_rc_5shot_bpb": 2.2176270484924316,
+   "hellaswag_val_rc_5shot_bpb": 1.3057013750076294,
+   "openbookqa_test_rc_5shot_bpb": 2.257859468460083,
+   "openbookqa_val_rc_5shot_bpb": 2.1944453716278076,
+   "piqa_val_rc_5shot_bpb": 1.6563796997070312,
+   "socialiqa_val_rc_5shot_bpb": 1.7726877927780151,
+   "winogrande_val_rc_5shot_bpb": 1.8198338747024536
+  },
+  "625": {
+   "boolq_val_rc_5shot_bpb": 0.5383899807929993,
+   "csqa_val_rc_5shot_bpb": 2.1618549823760986,
+   "hellaswag_val_rc_5shot_bpb": 1.274953842163086,
+   "openbookqa_test_rc_5shot_bpb": 2.2487499713897705,
+   "openbookqa_val_rc_5shot_bpb": 2.1782264709472656,
+   "piqa_val_rc_5shot_bpb": 1.6359153985977173,
+   "socialiqa_val_rc_5shot_bpb": 1.728651523590088,
+   "winogrande_val_rc_5shot_bpb": 1.8124136924743652
+  },
+  "750": {
+   "boolq_val_rc_5shot_bpb": 0.5582930445671082,
+   "csqa_val_rc_5shot_bpb": 2.1031365394592285,
+   "hellaswag_val_rc_5shot_bpb": 1.2300472259521484,
+   "openbookqa_test_rc_5shot_bpb": 2.1723670959472656,
+   "openbookqa_val_rc_5shot_bpb": 2.117398500442505,
+   "piqa_val_rc_5shot_bpb": 1.5860075950622559,
+   "socialiqa_val_rc_5shot_bpb": 1.705609917640686,
+   "winogrande_val_rc_5shot_bpb": 1.7936933040618896
+  },
+  "875": {
+   "boolq_val_rc_5shot_bpb": 0.5341776013374329,
+   "csqa_val_rc_5shot_bpb": 2.028658628463745,
+   "hellaswag_val_rc_5shot_bpb": 1.1922682523727417,
+   "openbookqa_test_rc_5shot_bpb": 2.110515594482422,
+   "openbookqa_val_rc_5shot_bpb": 2.0568594932556152,
+   "piqa_val_rc_5shot_bpb": 1.5616648197174072,
+   "socialiqa_val_rc_5shot_bpb": 1.6888563632965088,
+   "winogrande_val_rc_5shot_bpb": 1.7470171451568604
+  },
+  "1000": {
+   "boolq_val_rc_5shot_bpb": 0.5331117510795593,
+   "csqa_val_rc_5shot_bpb": 1.9988610744476318,
+   "hellaswag_val_rc_5shot_bpb": 1.172437071800232,
+   "openbookqa_test_rc_5shot_bpb": 2.0894999504089355,
+   "openbookqa_val_rc_5shot_bpb": 2.039109468460083,
+   "piqa_val_rc_5shot_bpb": 1.5254565477371216,
+   "socialiqa_val_rc_5shot_bpb": 1.63048255443573,
+   "winogrande_val_rc_5shot_bpb": 1.734424352645874
+  },
+  "1125": {
+   "boolq_val_rc_5shot_bpb": 0.5975750088691711,
+   "csqa_val_rc_5shot_bpb": 1.93670654296875,
+   "hellaswag_val_rc_5shot_bpb": 1.1647322177886963,
+   "openbookqa_test_rc_5shot_bpb": 2.056851625442505,
+   "openbookqa_val_rc_5shot_bpb": 1.9976718425750732,
+   "piqa_val_rc_5shot_bpb": 1.5079973936080933,
+   "socialiqa_val_rc_5shot_bpb": 1.6163119077682495,
+   "winogrande_val_rc_5shot_bpb": 1.7089643478393555
+  },
+  "1250": {
+   "boolq_val_rc_5shot_bpb": 0.5595019459724426,
+   "csqa_val_rc_5shot_bpb": 1.9279887676239014,
+   "hellaswag_val_rc_5shot_bpb": 1.1399949789047241,
+   "openbookqa_test_rc_5shot_bpb": 2.0244531631469727,
+   "openbookqa_val_rc_5shot_bpb": 1.969546914100647,
+   "piqa_val_rc_5shot_bpb": 1.5008267164230347,
+   "socialiqa_val_rc_5shot_bpb": 1.6135112047195435,
+   "winogrande_val_rc_5shot_bpb": 1.6874244213104248
+  },
+  "1375": {
+   "boolq_val_rc_5shot_bpb": 0.6080194711685181,
+   "csqa_val_rc_5shot_bpb": 1.9270353317260742,
+   "hellaswag_val_rc_5shot_bpb": 1.1329857110977173,
+   "openbookqa_test_rc_5shot_bpb": 2.007625102996826,
+   "openbookqa_val_rc_5shot_bpb": 1.9459452629089355,
+   "piqa_val_rc_5shot_bpb": 1.4768027067184448,
+   "socialiqa_val_rc_5shot_bpb": 1.6180400848388672,
+   "winogrande_val_rc_5shot_bpb": 1.688119649887085
+  },
+  "1500": {
+   "boolq_val_rc_5shot_bpb": 0.6067842841148376,
+   "csqa_val_rc_5shot_bpb": 1.9379510879516602,
+   "hellaswag_val_rc_5shot_bpb": 1.1167237758636475,
+   "openbookqa_test_rc_5shot_bpb": 1.9846874475479126,
+   "openbookqa_val_rc_5shot_bpb": 1.9225703477859497,
+   "piqa_val_rc_5shot_bpb": 1.4676363468170166,
+   "socialiqa_val_rc_5shot_bpb": 1.6385868787765503,
+   "winogrande_val_rc_5shot_bpb": 1.6796319484710693
+  },
+  "1625": {
+   "boolq_val_rc_5shot_bpb": 0.5415921807289124,
+   "csqa_val_rc_5shot_bpb": 1.915159821510315,
+   "hellaswag_val_rc_5shot_bpb": 1.1081225872039795,
+   "openbookqa_test_rc_5shot_bpb": 1.9773437976837158,
+   "openbookqa_val_rc_5shot_bpb": 1.9157344102859497,
+   "piqa_val_rc_5shot_bpb": 1.4585933685302734,
+   "socialiqa_val_rc_5shot_bpb": 1.643609642982483,
+   "winogrande_val_rc_5shot_bpb": 1.6795549392700195
+  },
+  "1750": {
+   "boolq_val_rc_5shot_bpb": 0.5473670363426208,
+   "csqa_val_rc_5shot_bpb": 1.8974745273590088,
+   "hellaswag_val_rc_5shot_bpb": 1.100955605506897,
+   "openbookqa_test_rc_5shot_bpb": 1.981671929359436,
+   "openbookqa_val_rc_5shot_bpb": 1.9238125085830688,
+   "piqa_val_rc_5shot_bpb": 1.4509912729263306,
+   "socialiqa_val_rc_5shot_bpb": 1.6169426441192627,
+   "winogrande_val_rc_5shot_bpb": 1.6885359287261963
+  },
+  "1875": {
+   "boolq_val_rc_5shot_bpb": 0.5684558153152466,
+   "csqa_val_rc_5shot_bpb": 1.8691421747207642,
+   "hellaswag_val_rc_5shot_bpb": 1.0928722620010376,
+   "openbookqa_test_rc_5shot_bpb": 1.9615390300750732,
+   "openbookqa_val_rc_5shot_bpb": 1.9076093435287476,
+   "piqa_val_rc_5shot_bpb": 1.4461158514022827,
+   "socialiqa_val_rc_5shot_bpb": 1.6104685068130493,
+   "winogrande_val_rc_5shot_bpb": 1.6754852533340454
+  },
+  "2000": {
+   "boolq_val_rc_5shot_bpb": 0.5438501834869385,
+   "csqa_val_rc_5shot_bpb": 1.8904330730438232,
+   "hellaswag_val_rc_5shot_bpb": 1.090898036956787,
+   "openbookqa_test_rc_5shot_bpb": 1.963687539100647,
+   "openbookqa_val_rc_5shot_bpb": 1.91196870803833,
+   "piqa_val_rc_5shot_bpb": 1.4376572370529175,
+   "socialiqa_val_rc_5shot_bpb": 1.6323916912078857,
+   "winogrande_val_rc_5shot_bpb": 1.659123420715332
+  },
+  "2125": {
+   "boolq_val_rc_5shot_bpb": 0.5521352887153625,
+   "csqa_val_rc_5shot_bpb": 1.8737810850143433,
+   "hellaswag_val_rc_5shot_bpb": 1.08883798122406,
+   "openbookqa_test_rc_5shot_bpb": 1.952054738998413,
+   "openbookqa_val_rc_5shot_bpb": 1.8942577838897705,
+   "piqa_val_rc_5shot_bpb": 1.4368666410446167,
+   "socialiqa_val_rc_5shot_bpb": 1.6154073476791382,
+   "winogrande_val_rc_5shot_bpb": 1.6648240089416504
+  },
+  "2250": {
+   "boolq_val_rc_5shot_bpb": 0.5304877161979675,
+   "csqa_val_rc_5shot_bpb": 1.8731188774108887,
+   "hellaswag_val_rc_5shot_bpb": 1.0833991765975952,
+   "openbookqa_test_rc_5shot_bpb": 1.9501640796661377,
+   "openbookqa_val_rc_5shot_bpb": 1.889968752861023,
+   "piqa_val_rc_5shot_bpb": 1.429925560951233,
+   "socialiqa_val_rc_5shot_bpb": 1.6219323873519897,
+   "winogrande_val_rc_5shot_bpb": 1.658292531967163
+  }
+ },
+ "derivative": {
+  "0": {
+   "boolq_val_rc_5shot_bpb": 6.555370807647705,
+   "csqa_val_rc_5shot_bpb": 3.088196039199829,
+   "hellaswag_val_rc_5shot_bpb": 3.7551844120025635,
+   "openbookqa_test_rc_5shot_bpb": 3.8136093616485596,
+   "openbookqa_val_rc_5shot_bpb": 3.570906162261963,
+   "piqa_val_rc_5shot_bpb": 3.9412405490875244,
+   "socialiqa_val_rc_5shot_bpb": 3.4595940113067627,
+   "winogrande_val_rc_5shot_bpb": 4.622989654541016
+  },
+  "125": {
+   "boolq_val_rc_5shot_bpb": 4.288020610809326,
+   "csqa_val_rc_5shot_bpb": 2.8066134452819824,
+   "hellaswag_val_rc_5shot_bpb": 1.818332552909851,
+   "openbookqa_test_rc_5shot_bpb": 2.808687448501587,
+   "openbookqa_val_rc_5shot_bpb": 2.7120156288146973,
+   "piqa_val_rc_5shot_bpb": 2.180155038833618,
+   "socialiqa_val_rc_5shot_bpb": 2.243546962738037,
+   "winogrande_val_rc_5shot_bpb": 2.160560131072998
+  },
+  "250": {
+   "boolq_val_rc_5shot_bpb": 3.5429139137268066,
+   "csqa_val_rc_5shot_bpb": 2.5226633548736572,
+   "hellaswag_val_rc_5shot_bpb": 1.545614242553711,
+   "openbookqa_test_rc_5shot_bpb": 2.528843641281128,
+   "openbookqa_val_rc_5shot_bpb": 2.457531213760376,
+   "piqa_val_rc_5shot_bpb": 1.8509483337402344,
+   "socialiqa_val_rc_5shot_bpb": 2.0668041706085205,
+   "winogrande_val_rc_5shot_bpb": 1.9360201358795166
+  },
+  "375": {
+   "boolq_val_rc_5shot_bpb": 1.3765182495117188,
+   "csqa_val_rc_5shot_bpb": 2.4032394886016846,
+   "hellaswag_val_rc_5shot_bpb": 1.4054110050201416,
+   "openbookqa_test_rc_5shot_bpb": 2.4095702171325684,
+   "openbookqa_val_rc_5shot_bpb": 2.340250015258789,
+   "piqa_val_rc_5shot_bpb": 1.737259030342102,
+   "socialiqa_val_rc_5shot_bpb": 1.8556987047195435,
+   "winogrande_val_rc_5shot_bpb": 1.8936156034469604
+  },
+  "500": {
+   "boolq_val_rc_5shot_bpb": 0.6264938116073608,
+   "csqa_val_rc_5shot_bpb": 2.300832509994507,
+   "hellaswag_val_rc_5shot_bpb": 1.312936782836914,
+   "openbookqa_test_rc_5shot_bpb": 2.26590633392334,
+   "openbookqa_val_rc_5shot_bpb": 2.214203119277954,
+   "piqa_val_rc_5shot_bpb": 1.6467925310134888,
+   "socialiqa_val_rc_5shot_bpb": 1.790556788444519,
+   "winogrande_val_rc_5shot_bpb": 1.8225678205490112
+  },
+  "625": {
+   "boolq_val_rc_5shot_bpb": 0.47846245765686035,
+   "csqa_val_rc_5shot_bpb": 2.202833890914917,
+   "hellaswag_val_rc_5shot_bpb": 1.2775911092758179,
+   "openbookqa_test_rc_5shot_bpb": 2.243546962738037,
+   "openbookqa_val_rc_5shot_bpb": 2.176710844039917,
+   "piqa_val_rc_5shot_bpb": 1.6358855962753296,
+   "socialiqa_val_rc_5shot_bpb": 1.7325718402862549,
+   "winogrande_val_rc_5shot_bpb": 1.835268497467041
+  },
+  "750": {
+   "boolq_val_rc_5shot_bpb": 0.5223698616027832,
+   "csqa_val_rc_5shot_bpb": 2.1094038486480713,
+   "hellaswag_val_rc_5shot_bpb": 1.2364814281463623,
+   "openbookqa_test_rc_5shot_bpb": 2.164632797241211,
+   "openbookqa_val_rc_5shot_bpb": 2.107726573944092,
+   "piqa_val_rc_5shot_bpb": 1.5766288042068481,
+   "socialiqa_val_rc_5shot_bpb": 1.7266074419021606,
+   "winogrande_val_rc_5shot_bpb": 1.7789623737335205
+  },
+  "875": {
+   "boolq_val_rc_5shot_bpb": 0.46786466240882874,
+   "csqa_val_rc_5shot_bpb": 2.0848240852355957,
+   "hellaswag_val_rc_5shot_bpb": 1.2034456729888916,
+   "openbookqa_test_rc_5shot_bpb": 2.135023355484009,
+   "openbookqa_val_rc_5shot_bpb": 2.0637967586517334,
+   "piqa_val_rc_5shot_bpb": 1.5496612787246704,
+   "socialiqa_val_rc_5shot_bpb": 1.734153151512146,
+   "winogrande_val_rc_5shot_bpb": 1.7189149856567383
+  },
+  "1000": {
+   "boolq_val_rc_5shot_bpb": 0.5640783309936523,
+   "csqa_val_rc_5shot_bpb": 2.0240676403045654,
+   "hellaswag_val_rc_5shot_bpb": 1.1924903392791748,
+   "openbookqa_test_rc_5shot_bpb": 2.0957655906677246,
+   "openbookqa_val_rc_5shot_bpb": 2.048062562942505,
+   "piqa_val_rc_5shot_bpb": 1.5194292068481445,
+   "socialiqa_val_rc_5shot_bpb": 1.681121826171875,
+   "winogrande_val_rc_5shot_bpb": 1.7210561037063599
+  },
+  "1125": {
+   "boolq_val_rc_5shot_bpb": 0.5700491070747375,
+   "csqa_val_rc_5shot_bpb": 1.9838407039642334,
+   "hellaswag_val_rc_5shot_bpb": 1.1682651042938232,
+   "openbookqa_test_rc_5shot_bpb": 2.092390537261963,
+   "openbookqa_val_rc_5shot_bpb": 2.0325937271118164,
+   "piqa_val_rc_5shot_bpb": 1.4967206716537476,
+   "socialiqa_val_rc_5shot_bpb": 1.6680916547775269,
+   "winogrande_val_rc_5shot_bpb": 1.6957441568374634
+  },
+  "1250": {
+   "boolq_val_rc_5shot_bpb": 0.587334394454956,
+   "csqa_val_rc_5shot_bpb": 1.9969735145568848,
+   "hellaswag_val_rc_5shot_bpb": 1.1559683084487915,
+   "openbookqa_test_rc_5shot_bpb": 2.079507827758789,
+   "openbookqa_val_rc_5shot_bpb": 2.018367290496826,
+   "piqa_val_rc_5shot_bpb": 1.4955220222473145,
+   "socialiqa_val_rc_5shot_bpb": 1.6632388830184937,
+   "winogrande_val_rc_5shot_bpb": 1.6729618310928345
+  },
+  "1375": {
+   "boolq_val_rc_5shot_bpb": 0.5604347586631775,
+   "csqa_val_rc_5shot_bpb": 1.9713797569274902,
+   "hellaswag_val_rc_5shot_bpb": 1.1417680978775024,
+   "openbookqa_test_rc_5shot_bpb": 2.048445224761963,
+   "openbookqa_val_rc_5shot_bpb": 1.9859530925750732,
+   "piqa_val_rc_5shot_bpb": 1.4786155223846436,
+   "socialiqa_val_rc_5shot_bpb": 1.6246562004089355,
+   "winogrande_val_rc_5shot_bpb": 1.6691803932189941
+  },
+  "1500": {
+   "boolq_val_rc_5shot_bpb": 0.5699270963668823,
+   "csqa_val_rc_5shot_bpb": 1.8971450328826904,
+   "hellaswag_val_rc_5shot_bpb": 1.1328603029251099,
+   "openbookqa_test_rc_5shot_bpb": 2.0081796646118164,
+   "openbookqa_val_rc_5shot_bpb": 1.9565625190734863,
+   "piqa_val_rc_5shot_bpb": 1.4644441604614258,
+   "socialiqa_val_rc_5shot_bpb": 1.6294020414352417,
+   "winogrande_val_rc_5shot_bpb": 1.661656141281128
+  },
+  "1625": {
+   "boolq_val_rc_5shot_bpb": 0.5540062785148621,
+   "csqa_val_rc_5shot_bpb": 1.864029884338379,
+   "hellaswag_val_rc_5shot_bpb": 1.1257270574569702,
+   "openbookqa_test_rc_5shot_bpb": 2.008078098297119,
+   "openbookqa_val_rc_5shot_bpb": 1.9547734260559082,
+   "piqa_val_rc_5shot_bpb": 1.4555903673171997,
+   "socialiqa_val_rc_5shot_bpb": 1.612998366355896,
+   "winogrande_val_rc_5shot_bpb": 1.673159122467041
+  },
+  "1750": {
+   "boolq_val_rc_5shot_bpb": 0.5935064554214478,
+   "csqa_val_rc_5shot_bpb": 1.8597012758255005,
+   "hellaswag_val_rc_5shot_bpb": 1.1184064149856567,
+   "openbookqa_test_rc_5shot_bpb": 1.999750018119812,
+   "openbookqa_val_rc_5shot_bpb": 1.9477187395095825,
+   "piqa_val_rc_5shot_bpb": 1.4468469619750977,
+   "socialiqa_val_rc_5shot_bpb": 1.5951184034347534,
+   "winogrande_val_rc_5shot_bpb": 1.6654869318008423
+  },
+  "1875": {
+   "boolq_val_rc_5shot_bpb": 0.5703193545341492,
+   "csqa_val_rc_5shot_bpb": 1.8404388427734375,
+   "hellaswag_val_rc_5shot_bpb": 1.1128571033477783,
+   "openbookqa_test_rc_5shot_bpb": 1.985124945640564,
+   "openbookqa_val_rc_5shot_bpb": 1.9395703077316284,
+   "piqa_val_rc_5shot_bpb": 1.4394148588180542,
+   "socialiqa_val_rc_5shot_bpb": 1.5900466442108154,
+   "winogrande_val_rc_5shot_bpb": 1.6599018573760986
+  },
+  "2000": {
+   "boolq_val_rc_5shot_bpb": 0.5531754493713379,
+   "csqa_val_rc_5shot_bpb": 1.8469876050949097,
+   "hellaswag_val_rc_5shot_bpb": 1.1095727682113647,
+   "openbookqa_test_rc_5shot_bpb": 1.986507773399353,
+   "openbookqa_val_rc_5shot_bpb": 1.9387344121932983,
+   "piqa_val_rc_5shot_bpb": 1.4365946054458618,
+   "socialiqa_val_rc_5shot_bpb": 1.581363558769226,
+   "winogrande_val_rc_5shot_bpb": 1.6431639194488525
+  },
+  "2125": {
+   "boolq_val_rc_5shot_bpb": 0.6021493077278137,
+   "csqa_val_rc_5shot_bpb": 1.8319193124771118,
+   "hellaswag_val_rc_5shot_bpb": 1.1070352792739868,
+   "openbookqa_test_rc_5shot_bpb": 1.9756015539169312,
+   "openbookqa_val_rc_5shot_bpb": 1.9259063005447388,
+   "piqa_val_rc_5shot_bpb": 1.4342929124832153,
+   "socialiqa_val_rc_5shot_bpb": 1.5687452554702759,
+   "winogrande_val_rc_5shot_bpb": 1.6472089290618896
+  },
+  "2250": {
+   "boolq_val_rc_5shot_bpb": 0.6035735607147217,
+   "csqa_val_rc_5shot_bpb": 1.8305723667144775,
+   "hellaswag_val_rc_5shot_bpb": 1.105916142463684,
+   "openbookqa_test_rc_5shot_bpb": 1.9769452810287476,
+   "openbookqa_val_rc_5shot_bpb": 1.9276249408721924,
+   "piqa_val_rc_5shot_bpb": 1.4337106943130493,
+   "socialiqa_val_rc_5shot_bpb": 1.5716859102249146,
+   "winogrande_val_rc_5shot_bpb": 1.6472798585891724
+  },
+  "2384": {
+   "boolq_val_rc_5shot_bpb": 0.5789448022842407,
+   "csqa_val_rc_5shot_bpb": 1.8170173168182373,
+   "hellaswag_val_rc_5shot_bpb": 1.1039661169052124,
+   "openbookqa_test_rc_5shot_bpb": 1.9687578678131104,
+   "openbookqa_val_rc_5shot_bpb": 1.918468713760376,
+   "piqa_val_rc_5shot_bpb": 1.4315662384033203,
+   "socialiqa_val_rc_5shot_bpb": 1.570050597190857,
+   "winogrande_val_rc_5shot_bpb": 1.6485068798065186
+  }
+ }
+}

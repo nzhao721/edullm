@@ -1,0 +1,30 @@
+{
+  "source": "wandb.eduLLM/mixlaw-1, group mixlaw-370m-runpod",
+  "metric": "eval/macro_bpb",
+  "final_step": 2384,
+  "note": "Step 2375 deliberately omitted: it is a near-duplicate checkpoint 9 steps from the true final step (2384), so keeping both put extra weight on the end-of-run result. All fits already excluded it from the fit window before this data point was physically removed here.",
+  "steps": [
+    0, 125, 250, 375, 500, 625, 750, 875, 1000, 1125, 1250, 1375, 1500, 1625,
+    1750, 1875, 2000, 2125, 2250, 2384
+  ],
+  "runs": {
+    "ML-pilot_caps": {
+      "label": "MixLaw optimized mix",
+      "run_id": "83772a7c",
+      "curve": [
+        4.426135, 2.651544, 2.342648, 2.244573, 2.071939, 1.924767, 1.835818,
+        1.786977, 1.746919, 1.708274, 1.692978, 1.671373, 1.663887, 1.644306,
+        1.636254, 1.623973, 1.626354, 1.619463, 1.607352, 1.604829
+      ]
+    },
+    "olmo-mix-1124": {
+      "label": "Control (olmo-mix-1124)",
+      "run_id": "f8adf30b",
+      "curve": [
+        4.426135, 2.682668, 2.339392, 2.187189, 2.029042, 1.927281, 1.854915,
+        1.801895, 1.767333, 1.729474, 1.717138, 1.697052, 1.679972, 1.670788,
+        1.650263, 1.651802, 1.642259, 1.638649, 1.635199, 1.636967
+      ]
+    }
+  }
+}

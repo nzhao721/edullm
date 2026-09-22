@@ -16,7 +16,7 @@
 | Global batch / seq / LR      | 4,194,304 / 2048 / 4\times10^{-4} cosine (warmup 24, \alpha_f=0.1)                              |
 | Steps                        | 2360 = 9,898,557,440 tokens for every arm — one epoch, no wrap |
 | FLOPs / arm                  | **analytic**, 26.03-49.21\times10^{18} depending on arm - see [Cost and FLOPs](#cost-and-flops). The logged W&B throughput counter (2.63\times10^{19} for every arm) **excludes the scoring forward passes** and so understates every selection arm. |
-| Keep rate (where applicable) | top / middle **60%** of valid target tokens per sequence; **realized 0.599609** (1228 of 2047 target positions per sequence) — see [Realized keep rate](#realized-keep-rate) |
+| Keep rate (where applicable) | top / middle **60%** of valid target tokens per sequence; **realized 0.599609** (1228 kept of 2047 valid target positions, logged over all 2048 positions) — see [Realized keep rate](#realized-keep-rate) |
 | Primary metric               | Macro mean CE bits-per-byte over the **20 (task, split) labels** of the OLMo ladder — 10 OLMES benchmarks × val/test. MMLU supplies 8 of the 20 (**40% of the macro weight**), and 7 of the 20 are **test** splits, so "validation macro bpb" is a misnomer. |
 
 
@@ -234,8 +234,10 @@ The four online-scoring arms all realized a keep rate of exactly **0.599609** --
 **1228 of 2047** target positions per 2048-token sequence -- and it was **constant at
 every logged step**. This is the W&B metric `train/selected token fraction`, and it is
 identical for `rho-1`, `attention`, `rel_ema` and `random_control`. The value is
-`round(2047 * 0.6) / 2047`: the nominal 0.6 applied to the 2047 valid next-token
-targets in a 2048-token sequence, rounded to an integer count per row. Because the
+`round(2047 * 0.6) / 2048`: the nominal 0.6 is applied to the 2047 valid next-token
+targets in a 2048-token sequence and rounded to an integer count per row (1228), while
+the logged metric divides by all 2048 positions. Against the 2047 valid targets the
+realized rate is 1228/2047 = 0.599902. Because the
 count is fixed per row rather than thresholded on the score, the keep rate carries no
 information about the scorer -- the arms differ only in *which* 1228 tokens they keep.
 
@@ -283,8 +285,10 @@ premium.
 
 **BLADE's K-update overhead, itemized.** 5 syncs x 75 K-steps x 2 streams (proxy and
 reference) = **750 full batches** of 4,194,304 tokens = **3,145,728,000 tokens** of
-forward+backward, on top of the 2360 training steps. That accounts for the 39.71 vs
-34.71 in-run difference.
+forward+backward, on top of the 2360 training steps. At 2.6298e9 FLOPs/token that is
+8.27e18, which accounts for the **47.98 vs 39.71** total-column difference -- not the
+39.71 vs 34.71 in-run difference, which is BLADE's second per-step scoring pass over the
+1860 steps after step 500 (13.68e18 vs 8.68e18 for a single-scoring arm).
 
 ### Takeaways
 

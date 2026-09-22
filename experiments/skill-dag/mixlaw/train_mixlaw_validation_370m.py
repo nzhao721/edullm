@@ -555,7 +555,7 @@ def _ensure_pool(args: argparse.Namespace) -> tuple[Path, dict[str, Any]]:
 
 def parse_args() -> argparse.Namespace:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--name", required=True, help="Run id (e.g. mixlaw-370m-ML-near-opt-4)")
+    ap.add_argument("--name", required=True, help="Run id (e.g. mixlaw-370m-ML-pilot_caps)")
     ap.add_argument("--mix-name", required=True, help="Recipe run_name (for metadata)")
     ap.add_argument(
         "--dataset-id",

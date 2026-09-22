@@ -59,23 +59,33 @@ def skillit_update(
     A: np.ndarray,
     losses: Union[np.ndarray, Sequence[float]],
     *,
+    p_before: Union[np.ndarray, Sequence[float]],
     eta: float = ETA_DEFAULT,
     w: float = 1.0,
 ) -> np.ndarray:
-    """Skill-It domain-weight update (eta, w=1).
+    """Skill-It multiplicative-weights domain update (Chen et al., Eq. 3).
 
-    ``p_i ∝ exp( eta * w * sum_j A_ij * L_j )``
+    ``p_i(t+1) ∝ p_i(t) * exp( eta * w * sum_j A_ij * L_j )``
+
+    The previous mixture ``p_before`` is part of the update: the rule scales the
+    current weights, it does not rebuild them from ``A @ L`` alone. Computed in
+    log space for numerical stability.
     """
     A_arr = np.asarray(A, dtype=np.float64)
     L = np.asarray(losses, dtype=np.float64).reshape(-1)
+    p = np.asarray(p_before, dtype=np.float64).reshape(-1)
     if A_arr.ndim != 2:
         raise ValueError(f"A must be 2-D, got shape {A_arr.shape}")
     if A_arr.shape[1] != L.shape[0]:
         raise ValueError(f"A columns {A_arr.shape[1]} != len(losses) {L.shape[0]}")
+    if p.shape[0] != A_arr.shape[0]:
+        raise ValueError(f"len(p_before) {p.shape[0]} != A rows {A_arr.shape[0]}")
+    if not np.isfinite(p).all() or np.any(p <= 0):
+        raise ValueError("p_before must be finite and strictly positive")
     if eta < 0:
         raise ValueError(f"eta must be >= 0, got {eta}")
-    scores = (A_arr @ L) * float(eta) * float(w)
-    return softmax_weights(scores)
+    logits = np.log(p) + float(eta) * float(w) * (A_arr @ L)
+    return softmax_weights(logits)
 
 
 def load_offline_A(

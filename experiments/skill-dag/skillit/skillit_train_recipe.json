@@ -19,14 +19,15 @@
     "mode": "domain_stratified_stream",
     "reader": "edullm_data.read.dataset_paths"
   },
+  "initial_weights_source": "mixlaw/validation_mixtures_10b.json :: LGB-min1pct (id 27)",
   "initial_weights": [
-    0.375,
-    0.25,
-    0.1406,
-    0.0938,
-    0.0635,
-    0.0615,
-    0.0156
+    0.5528505096102141,
+    0.21178482308348515,
+    0.08723935826031831,
+    0.08163337756774411,
+    0.041786239404329344,
+    0.013571059505826967,
+    0.01113463256808213
   ],
   "pool_peak_recipes": [
     "../mixlaw/validation_mixtures_10b.json",

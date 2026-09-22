@@ -62,9 +62,8 @@ p = Path("validation_mixtures_10b.json")
 recipe = json.loads(p.read_text(encoding="utf-8"))
 names = [m["run_name"] for m in recipe["mixtures"]]
 print("validation recipe mixes:", ", ".join(names))
-assert len(names) == 8, names
-assert "ML-pilot_caps" in names and "ML-near-opt-4" in names, names
-assert "LGB-min1pct" in names and "LGB-near-opt-8" in names, names
+assert len(names) == 4, names
+assert "ML-pilot_caps" in names and "LGB-min1pct" in names, names
 PY
 
 aws s3 cp "s3://${SRC_BUCKET}/${SRC_PREFIX}/plan/tokenized_manifest.json" \

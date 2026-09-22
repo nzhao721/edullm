@@ -11,7 +11,7 @@
 #   resume requires EXTRA_ARGS='--load-path .../stepN' or durable metadata.
 #
 # Required:
-#   MIX_NAME            e.g. ML-pilot_caps | mix01 | mix07
+#   MIX_NAME            e.g. ML-pilot_caps | LGB-min1pct | mix01
 #   MIX_WEIGHTS_JSON    per-arm sidecar from prepare_validation_370m_data.py
 #   SAVE_FOLDER         job-scoped checkpoint root (wiped with scratch)
 #   PROGRESS_DIR        job-scoped metrics / run_meta
@@ -36,8 +36,8 @@
 #   bash scripts/farmshare/push_wandb_session_to_farmshare.sh "$RUN_DIR"
 #
 # Example (clean machine — let the trainer stage from edullm-data):
-#   MIX_NAME=ML-near-opt-4 \
-#   MIX_WEIGHTS_JSON=/work/ML-near-opt-4/mix_weights.json \
+#   MIX_NAME=LGB-min1pct \
+#   MIX_WEIGHTS_JSON=/work/LGB-min1pct/mix_weights.json \
 #   SAVE_FOLDER=/scratch/job/ckpts PROGRESS_DIR=/scratch/job/progress \
 #   STAGE_DIR=/scratch/job/pool NPROC=4 bash launch_validation_370m.sh
 set -euo pipefail

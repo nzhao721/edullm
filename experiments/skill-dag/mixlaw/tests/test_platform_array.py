@@ -1,4 +1,4 @@
-"""Focused local contracts for the seven-arm platform runtime."""
+"""Focused local contracts for the three-arm platform runtime."""
 from __future__ import annotations
 
 import json
@@ -32,31 +32,27 @@ def _platform_env(index: str = "0") -> dict[str, str]:
 
 
 def test_array_manifest_is_explicit_complete_and_excludes_mix01() -> None:
-    resolved = [entrypoint.array_arm(str(index)) for index in range(7)]
+    resolved = [entrypoint.array_arm(str(index)) for index in range(3)]
     assert [name for _, _, name in resolved] == [
         "olmo-mix-1124",
-        "mix07",
-        "mix18",
         "ML-pilot_caps",
-        "ML-near-opt-4",
         "LGB-min1pct",
-        "LGB-near-opt-8",
     ]
-    assert len({mix_id for _, mix_id, _ in resolved}) == 7
+    assert len({mix_id for _, mix_id, _ in resolved}) == 3
     assert "mix01" not in {name for _, _, name in resolved}
 
 
-@pytest.mark.parametrize("value", [None, "", "-1", "7", "01", "x", "1.0"])
+@pytest.mark.parametrize("value", [None, "", "-1", "3", "01", "x", "1.0"])
 def test_array_index_is_required_and_bounded(value: str | None) -> None:
     with pytest.raises(entrypoint.PlatformLaunchError):
         entrypoint.array_arm(value)
 
 
 def test_platform_launch_isolated_paths_and_bounded_threads(tmp_path: Path) -> None:
-    launch = entrypoint.prepare_launch(_platform_env("3"), scratch_root=tmp_path)
+    launch = entrypoint.prepare_launch(_platform_env("1"), scratch_root=tmp_path)
     env = launch.environment
     assert launch.mix_name == "ML-pilot_caps"
-    assert launch.scratch_dir == tmp_path / "batch-child-3"
+    assert launch.scratch_dir == tmp_path / "batch-child-1"
     assert env["SAVE_FOLDER"].startswith(str(launch.scratch_dir))
     assert env["POOL_DIR"].startswith(str(launch.scratch_dir))
     assert env["NPROC"] == "8"
@@ -67,8 +63,8 @@ def test_platform_launch_isolated_paths_and_bounded_threads(tmp_path: Path) -> N
     assert env["WANDB_PROJECT"] == "mixlaw"
     assert env["WANDB_GROUP"] == "370m-validation"
     assert env["WANDB_RUN_ID"].endswith("-ML-pilot_caps")
-    assert env["CHECKPOINT_PREFIX"].endswith("/array/03-ML-pilot_caps/")
-    assert env["OUTPUT_PREFIX"].endswith("/array/03-ML-pilot_caps/")
+    assert env["CHECKPOINT_PREFIX"].endswith("/array/01-ML-pilot_caps/")
+    assert env["OUTPUT_PREFIX"].endswith("/array/01-ML-pilot_caps/")
 
 
 def test_platform_refuses_unpinned_dataset_or_wrong_project(tmp_path: Path) -> None:
@@ -88,23 +84,23 @@ def test_selected_sidecar_is_deterministic_and_arm_specific(tmp_path: Path) -> N
     first = entrypoint.write_selected_sidecar(
         recipe,
         tmp_path / "one.json",
-        mix_id=7,
-        mix_name="mix07",
+        mix_id=27,
+        mix_name="LGB-min1pct",
         dataset_id="pretrain/olmo-127b",
         dataset_version="v1",
     )
     second = entrypoint.write_selected_sidecar(
         recipe,
         tmp_path / "two.json",
-        mix_id=7,
-        mix_name="mix07",
+        mix_id=27,
+        mix_name="LGB-min1pct",
         dataset_id="pretrain/olmo-127b",
         dataset_version="v1",
     )
     assert first.read_bytes() == second.read_bytes()
     payload = json.loads(first.read_text(encoding="utf-8"))
-    assert payload["run_name"] == "mix07"
-    assert payload["stream_seed"] == 6198 + 7
+    assert payload["run_name"] == "LGB-min1pct"
+    assert payload["stream_seed"] == 6198 + 27
     assert payload["dataset_version"] == "v1"
 
 
@@ -126,7 +122,7 @@ def _inventory(tokens: int = 100) -> dict[str, dict]:
 
 def test_selected_arm_demand_and_shard_prefixes_are_deterministic() -> None:
     recipe = _MIXLAW / "validation_mixtures_10b.json"
-    selected_demand = staging.arm_tokens_from_mixtures(recipe, 10_000_000_000, "mix07")
+    selected_demand = staging.arm_tokens_from_mixtures(recipe, 10_000_000_000, "LGB-min1pct")
     shared_demand = staging.peak_tokens_from_mixtures(recipe, 10_000_000_000)
     assert all(selected_demand[domain] <= shared_demand[domain] for domain in DOMAINS)
 
@@ -201,12 +197,12 @@ def test_selected_stage_deletes_temporary_shards(
         budget_tokens=staging.SEQ_LEN,
         dataset_id="pretrain/olmo-127b",
         dataset_version="v1",
-        mix_name="mix07",
+        mix_name="LGB-min1pct",
         deterministic_prefix=True,
         delete_shards=True,
         s3=object(),
     )
-    assert summary["mix_name"] == "mix07"
+    assert summary["mix_name"] == "LGB-min1pct"
     assert summary["selection"] == "deterministic_domain_prefix"
     assert not (out / "shards").exists()
     assert staging.pool_is_ready(out)
@@ -242,19 +238,19 @@ def test_platform_artifacts_use_isolated_progress_taskloss_and_sentinel(
     artifacts.upload_run_outputs(
         progress,
         task_loss,
-        "s3://outputs/run/array/00-mix07/",
+        "s3://outputs/run/array/00-LGB-min1pct/",
         client=fake,
     )
     uri = artifacts.upload_checkpoint(
         checkpoint,
-        "s3://outputs/run/checkpoints/array/00-mix07/step10/",
+        "s3://outputs/run/checkpoints/array/00-LGB-min1pct/step10/",
         step=10,
-        mix_name="mix07",
+        mix_name="LGB-min1pct",
         client=fake,
     )
     keys = [key for _, key in fake.calls]
-    assert "run/array/00-mix07/progress/run_meta.json" in keys
-    assert "run/array/00-mix07/task-loss/step10_task_loss.json" in keys
+    assert "run/array/00-LGB-min1pct/progress/run_meta.json" in keys
+    assert "run/array/00-LGB-min1pct/task-loss/step10_task_loss.json" in keys
     assert not any("wandb" in key for key in keys)
     assert keys[-1].endswith("/_COMPLETE.json")
     assert uri.endswith("/step10/")

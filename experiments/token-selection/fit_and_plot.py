@@ -29,12 +29,19 @@ by profiling ``alpha`` over a grid: for each candidate ``alpha`` the model is
 linear in ``(a, b)`` given the regressor ``X = step ** (-alpha)``, so ``(a, b)``
 come from closed-form OLS and we keep the grid point with the lowest SSE.
 
-  * Fit window: ``step >= 1000``. Earlier points are dominated by warmup and
-    are not yet in the asymptotic power-law regime.
+  * Fit window: ``step >= 1000``. Not because of warmup -- that is 24 steps --
+    but because the early curve is far noisier: the two random-control seeds
+    differ by 0.0181 bpb on average over steps 125-875 against 0.0047 bpb
+    inside the window.
   * Alpha grid: ``np.linspace(0.05, 6.0, 1192)``.
   * 10,000 i.i.d. residual bootstrap draws. Residuals are resampled with
     replacement from the fit-window residuals and added back to the fitted
-    curve.
+    curve. The residuals are first inflated by ``sqrt(n / (n - p))`` with
+    ``p = 3`` (the small-sample rescaling): OLS residuals are shrunk relative
+    to the true errors by that factor, so resampling them raw understates the
+    spread. With 11 fit points the factor is 1.173 and with 22 it is 1.076, so
+    the intervals here are roughly 17% (single-run) and 8% (pooled random
+    control) wider than an unrescaled bootstrap would give.
   * ``alpha`` is RE-ESTIMATED on every bootstrap draw ("alpha-free"), rather
     than being frozen at the point-estimate value.
   * The fitted final value is evaluated at each arm's OWN final logged step
@@ -57,9 +64,11 @@ WHY ALPHA IS RE-ESTIMATED PER DRAW (ALPHA-FREE)
 Freezing ``alpha`` at its point estimate treats a quantity that was estimated
 from the same 11 points as if it were known exactly, so it understates
 uncertainty. Re-estimating it per draw propagates that uncertainty. It is also
-the more conservative of the two variants: mean CI width is 0.01063 bpb
-alpha-free vs 0.00749 bpb alpha-fixed, so every interval reported here is the
+the more conservative of the two variants: mean CI width is 0.01162 bpb
+alpha-free vs 0.00823 bpb alpha-fixed, so every interval reported here is the
 WIDER of the two. That is the basis on which the protocol was chosen.
+(Both figures are measured with the small-sample rescaling on; without it they
+are 0.01007 and 0.00710.)
 
 Data source
 -----------
@@ -93,6 +102,23 @@ FIG_DIR = ROOT / "figures"
 MIN_STEP = 1000
 N_BOOT = 10_000
 SEED = 0
+# Free parameters of the fitted model (alpha, a, b). Used for the small-sample
+# residual rescaling below.
+N_PARAMS = 3
+# Inflate the fit-window residuals by sqrt(n / (n - p)) before resampling.
+# OLS residuals are shrunk relative to the true errors by exactly this factor
+# on average, so resampling them unrescaled understates the spread -- badly
+# here, where n is 11 (22 for the pooled random control) against p = 3.
+RESCALE_RESIDUALS = True
+# Font scale, applied to the original (1.0x) sizes in each figure. Figure 2 has
+# room for the full 1.5. Figure 1 does not: its legend sits inside the axes and
+# widens toward the inset as the type grows, and once the last legend entry
+# reaches the inset's topmost y-ticklabel the two overprint. Measured on the
+# rendered figure, 1.28 clears it by ~24px and 1.29 does not -- the legend wraps
+# wider there. Anchoring the legend at the axes' left edge and tightening its
+# internal padding (both below) are what raise the ceiling from ~1.05 to this.
+F1 = 1.28
+F2 = 1.5
 # Wide enough that no arm's profiled optimum lands on a boundary; see docstring.
 ALPHA_GRID = np.linspace(0.05, 6.0, 1192)
 ALPHA_FREE = True
@@ -124,9 +150,9 @@ RANDOM_SEED_LABEL = {
 # family and are shared between Figure 1 and Figure 2.
 ARMS = [
     # key,             bar/table label,     figure-1 legend label,          color,     ls,   marker
-    ("control",        "Full-loss control", "Full-loss control (baseline)", "#000000", "--", "s"),
+    ("control",        "Full-loss control", "Full-loss control", "#000000", "--", "s"),
     ("rho_1",          "RHO-1",             "RHO-1",                        "#1f77b4", "-",  "o"),
-    ("random_control", "Random control",    "Random control (baseline, 2-seed mean)", "#7f7f7f", ":",  "^"),
+    ("random_control", "Random control",    "Random control (2-seed mean)", "#7f7f7f", ":",  "^"),
     ("attention",      "Attention",         "Attention",                    "#d62728", "-",  "D"),
     ("blade",          "BLADE",             "BLADE",                        "#9467bd", "-",  "v"),
     ("middle_ppl",     "Perplexity",        "Perplexity",                   "#2ca02c", "-",  "P"),
@@ -159,7 +185,10 @@ def load_curves_from_wandb() -> dict[str, tuple[np.ndarray, np.ndarray]]:
 
     api = wandb.Api()
     out: dict[str, tuple[np.ndarray, np.ndarray]] = {}
-    for key in ORDER:
+    # ORDER holds only the seven *reported* arms; the random control's second seed is
+    # reported inside the pooled two-run fit, so it must be pulled as well or fit_all
+    # silently falls back to the seed-42-only control (see RANDOM_SEED_KEYS).
+    for key in [*ORDER, *(k for k in RANDOM_SEED_KEYS if k not in ORDER)]:
         run = api.run(f"{WANDB_PROJECT}/{WANDB_RUNS[key]}")
         rows = [
             (int(r["_step"]), float(r["eval/macro_bpb"]))
@@ -216,14 +245,21 @@ def bootstrap_arm(
     alpha_free: bool = ALPHA_FREE,
     n_boot: int = N_BOOT,
     seed: int = SEED,
+    rescale_residuals: bool = RESCALE_RESIDUALS,
 ) -> dict:
     """Residual-bootstrap the fitted final value for a single arm."""
     alpha, a, b = profile_fit(steps, loss)
     pred = a + b * steps ** (-alpha)
     resid = loss - pred
 
+    n = resid.size
+    if rescale_residuals:
+        if n <= N_PARAMS:
+            raise ValueError(f"need more than {N_PARAMS} fit points, got {n}")
+        resid = resid * np.sqrt(n / (n - N_PARAMS))
+
     rng = np.random.default_rng(seed)
-    draws = pred[None, :] + resid[rng.integers(0, resid.size, (n_boot, resid.size))]
+    draws = pred[None, :] + resid[rng.integers(0, n, (n_boot, n))]
 
     if alpha_free:
         # Re-profile alpha independently for every bootstrap draw.
@@ -439,33 +475,66 @@ def figure1(results: dict[str, dict], fig_dir: Path) -> None:
             label=LEGEND[key],
         )
 
-    ax.set_xlabel("Training step", fontsize=17)
-    ax.set_ylabel("Macro task-loss bits-per-byte (lower is better)", fontsize=15)
-    ax.set_title(
-        "Training curves: macro task-loss bpb by token-filtering arm\n"
-        "(370M OLMo2, 10B-token corpus)",
-        fontsize=19,
-    )
+    ax.set_xlabel("Training step", fontsize=17 * F1)
+    ax.set_ylabel("Macro task-loss bits-per-byte (lower is better)", fontsize=15 * F1)
+    # No in-figure title: the LaTeX caption carries it, and duplicating it both
+    # wastes vertical space and reads as a typo in print.
     ax.set_xlim(500, 2420)
-    ax.tick_params(labelsize=14)
+    ax.tick_params(labelsize=14 * F1)
     for side in ("top", "right"):
         ax.spines[side].set_visible(False)
-    ax.legend(fontsize=12.5, ncol=2, loc="upper center", bbox_to_anchor=(0.32, 0.99))
+    # Headroom above the highest curve so the legend does not sit on top of
+    # REL-EMA's first few points.
+    vals = [r["loss"][r["steps"] >= 500] for r in (results[k] for k in ORDER)]
+    ax.set_ylim(min(v.min() for v in vals) - 0.02, max(v.max() for v in vals) + 0.20)
+    # Anchored at the axes' left edge rather than centred, and with tighter
+    # internal padding than the matplotlib defaults. Both exist to widen the gap
+    # to the inset: the legend now grows rightward only, from a fixed left edge,
+    # so the larger type still clears the inset's y-ticklabels.
+    ax.legend(
+        fontsize=12.5 * F1,
+        ncol=2,
+        loc="upper left",
+        bbox_to_anchor=(0.005, 0.99),
+        columnspacing=1.0,
+        handletextpad=0.4,
+        handlelength=1.6,
+        borderpad=0.35,
+        labelspacing=0.35,
+    )
 
     # Rescaled inset over the final steps.
     lo_x, hi_x = 1880, 2420
     inset = ax.inset_axes((0.60, 0.50, 0.38, 0.37))
     for key in ORDER:
         r = results[key]
-        m = r["steps"] >= lo_x
+        steps, loss = r["steps"], r["loss"]
+        m = steps >= lo_x
+        xs, ys = steps[m], loss[m]
+        # The inset window starts between two evaluated checkpoints, so without this
+        # every line would begin partway in. Walk the real segment from the last
+        # point left of the window and clip it at the border, so the slope shown is
+        # the true slope into the first in-window point rather than an invention.
+        prev = np.flatnonzero(steps < lo_x)
+        added = False
+        if prev.size and xs.size:
+            i = prev[-1]
+            x0, y0, x1, y1 = steps[i], loss[i], xs[0], ys[0]
+            if x1 != x0:
+                y_edge = y0 + (y1 - y0) * (lo_x - x0) / (x1 - x0)
+                xs = np.concatenate(([lo_x], xs))
+                ys = np.concatenate(([y_edge], ys))
+                added = True
         inset.plot(
-            r["steps"][m],
-            r["loss"][m],
+            xs,
+            ys,
             color=COLOR[key],
             linestyle=LINESTYLE[key],
             marker=MARKER[key],
             markersize=9 if MARKER[key] == "*" else 6,
             linewidth=1.6,
+            # the border point is a clip, not an evaluated checkpoint: no marker
+            markevery=slice(1, None) if added else None,
         )
     tail = [
         v
@@ -474,9 +543,15 @@ def figure1(results: dict[str, dict], fig_dir: Path) -> None:
         if s >= lo_x and v < 1.80
     ]
     inset.set_xlim(lo_x, hi_x)
-    inset.set_ylim(min(tail) - 0.008, max(tail) + 0.010)
-    inset.set_title("final steps, rescaled", fontsize=12.5, style="italic")
-    inset.tick_params(labelsize=11)
+    # Headroom matters here: with a tick sitting flush against the top spine the
+    # topmost label is drawn over the inset frame and reads as clipped.
+    inset.set_ylim(min(tail) - 0.012, max(tail) + 0.024)
+    inset.set_yticks(np.arange(1.66, 1.741, 0.02))
+    inset.set_title("final steps, rescaled", fontsize=12.5 * F1, style="italic")
+    inset.tick_params(labelsize=11 * F1)
+    inset.set_facecolor("white")
+    inset.set_zorder(6)
+    inset.patch.set_alpha(1.0)
 
     # Indicate the inset region on the main axes.
     y0, y1 = inset.get_ylim()
@@ -498,67 +573,70 @@ def figure1(results: dict[str, dict], fig_dir: Path) -> None:
 
 
 def figure2(results: dict[str, dict], fig_dir: Path) -> None:
-    """Fitted-final bar chart with 95% bootstrap CI error bars."""
+    """Fitted-final estimates with 95% bootstrap CIs, as a dot-and-interval plot.
+
+    Deliberately not a bar chart. The arms span roughly 1.67 to 1.92 bpb, so bars
+    would need a truncated baseline, and a bar encodes its *length*: on a baseline
+    near 1.6 the Perplexity bar looks several times the control's when the real
+    gap is 14%. A point with its interval encodes position instead, which is the
+    quantity that actually carries meaning here.
+    """
     import matplotlib.pyplot as plt
 
-    fitted = np.array([results[k]["fitted_final"] for k in ORDER])
-    ci_lo = np.array([results[k]["ci_lo"] for k in ORDER])
-    ci_hi = np.array([results[k]["ci_hi"] for k in ORDER])
+    order = list(ORDER)[::-1]  # lowest (best) bpb at the top of the panel
+    fitted = np.array([results[k]["fitted_final"] for k in order])
+    ci_lo = np.array([results[k]["ci_lo"] for k in order])
+    ci_hi = np.array([results[k]["ci_hi"] for k in order])
 
-    fig, ax = plt.subplots(figsize=(12, 10), dpi=150)
-    x = np.arange(len(ORDER))
+    fig, ax = plt.subplots(figsize=(11, 4.6), dpi=150)
+    y = np.arange(len(order))
 
-    ax.bar(
-        x,
-        fitted,
-        width=0.8,
-        color=[COLOR[k] for k in ORDER],
-        edgecolor="black",
+    ax.axvline(
+        results["control"]["fitted_final"],
+        color="#999999",
+        linestyle="--",
         linewidth=1.2,
-        zorder=3,
+        zorder=1,
+        label="full-loss control",
     )
     ax.errorbar(
-        x,
         fitted,
-        yerr=[fitted - ci_lo, ci_hi - fitted],
+        y,
+        xerr=[fitted - ci_lo, ci_hi - fitted],
         fmt="none",
         ecolor="black",
         elinewidth=1.8,
-        capsize=6,
+        capsize=5,
         capthick=1.8,
-        zorder=4,
+        zorder=3,
     )
-
-    # The bars are deliberately not zero-based: the between-arm differences are
-    # small relative to the absolute bpb level. Pad the CI span so the panel is
-    # filled the way the published figure was.
-    span = ci_hi.max() - ci_lo.min()
-    ax.set_ylim(ci_lo.min() - 0.34 * span, ci_hi.max() + 0.43 * span)
-
-    for xi, val, hi in zip(x, fitted, ci_hi):
-        ax.text(
-            xi,
-            hi + 0.012 * span,
-            f"{val:.4f}",
-            ha="center",
-            va="bottom",
-            fontsize=21,
-            fontweight="bold",
+    for yi, key in zip(y, order):
+        ax.plot(
+            [results[key]["fitted_final"]],
+            [yi],
+            marker="o",
+            markersize=9,
+            color=COLOR[key],
+            markeredgecolor="black",
+            markeredgewidth=1.0,
+            zorder=4,
         )
+    for yi, val, hi in zip(y, fitted, ci_hi):
+        ax.text(hi + 0.0045, yi, f"{val:.4f}", va="center", ha="left", fontsize=12 * F2)
 
-    ax.set_xticks(x)
-    ax.set_xticklabels([LABEL[k] for k in ORDER], fontsize=16, rotation=20, ha="right")
-    ax.set_ylabel("Fitted-final macro task-loss bpb (lower is better)", fontsize=15)
-    ax.set_title(
-        "Final macro-bpb by arm: power-law fit ± 95% CI\n"
-        "(370M OLMo2, 10B-token corpus)",
-        fontsize=20,
-    )
-    ax.tick_params(axis="y", labelsize=14.5)
-    for side in ("top", "right"):
+    ax.set_yticks(y)
+    ax.set_yticklabels([LABEL[k] for k in order], fontsize=13 * F2)
+    ax.set_ylim(-0.65, len(order) - 0.35)
+    ax.set_xlim(ci_lo.min() - 0.012, ci_hi.max() + 0.075)
+    ax.set_xlabel("Fitted-final macro task-loss bpb (lower is better)", fontsize=13 * F2)
+    ax.tick_params(axis="x", labelsize=12 * F2)
+    ax.grid(axis="x", color="#dddddd", linewidth=0.8)
+    ax.set_axisbelow(True)
+    for side in ("top", "right", "left"):
         ax.spines[side].set_visible(False)
 
     fig.tight_layout()
+    # Filename kept for the existing \includegraphics in the paper source.
     _save(fig, fig_dir, "figure2_final_bar_chart")
     plt.close(fig)
 
@@ -567,7 +645,7 @@ def _save(fig, fig_dir: Path, stem: str) -> None:
     fig_dir.mkdir(parents=True, exist_ok=True)
     for ext in ("png", "pdf"):
         path = fig_dir / f"{stem}.{ext}"
-        fig.savefig(path, facecolor="white")
+        fig.savefig(path, facecolor="white", bbox_inches="tight")
         print(f"  wrote {path}")
 
 
@@ -588,10 +666,12 @@ METHOD_STRING = (
     "np.linspace(0.05, 6.0, 1192) with (a, b) from closed-form OLS at each grid "
     "point. Fitted final is evaluated at each arm's own final logged step. "
     "95% CI = 2.5/97.5 percentile of 10,000 i.i.d. residual bootstrap draws with "
-    "alpha RE-ESTIMATED on every draw (alpha-free), numpy default_rng seed 0. No "
+    "alpha RE-ESTIMATED on every draw (alpha-free), numpy default_rng seed 0. "
+    "Residuals are inflated by sqrt(n/(n-p)) with p=3 before resampling "
+    "(1.173 at n=11, 1.076 at n=22 for the pooled random control). No "
     "arm's profiled optimum sits on a grid boundary (largest 3.502 for REL-EMA, "
     "smallest 0.794 for BLADE). Alpha-free was chosen over alpha-fixed because it "
-    "is the more conservative of the two (mean CI width 0.01063 vs 0.00749 bpb)."
+    "is the more conservative of the two (mean CI width 0.01162 vs 0.00823 bpb)."
 )
 
 
@@ -606,6 +686,10 @@ def write_bootstrap_json(results: dict[str, dict]) -> None:
             "alpha_grid": "np.linspace(0.05, 6.0, 1192)",
             "n_boot": N_BOOT,
             "resample": "i.i.d. residual bootstrap on the fit-window residuals",
+            "residual_rescaling": (
+                "residuals inflated by sqrt(n/(n-p)), p=3, before resampling; "
+                "1.173 at n=11 and 1.076 at n=22"
+            ),
             "alpha_treatment": "re-estimated on every bootstrap draw (alpha-free)",
             "fitted_final_at": "each arm's own final logged step",
             "ci": "2.5/97.5 percentile of the bootstrap distribution",

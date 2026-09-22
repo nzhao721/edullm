@@ -18,8 +18,6 @@ FIT = json.loads((ROOT / "mixlaw_fit_chinchilla.json").read_text(encoding="utf-8
 LGB = json.loads((ROOT / "mixlaw_fit_lightgbm_chinchilla.json").read_text(encoding="utf-8"))
 MIX = json.loads((ROOT / "mixtures.json").read_text(encoding="utf-8"))
 
-ML_NEAR_OPT_INDEX = 3  # near-opt 4
-LGB_NEAR_OPT_INDEX = 7  # near-opt 8
 
 
 def wlist(d: dict[str, float]) -> list[float]:
@@ -37,7 +35,7 @@ def main() -> None:
             "weights": wlist(OLMO_MIX_1124_WEIGHTS),
         }
     ]
-    for pid, tag in ((1, "base"), (7, "C1-dclm60"), (18, "C1")):
+    for pid, tag in ((1, "base"),):
         m = next(x for x in MIX["mixtures"] if x["id"] == pid)
         w = dict(zip(MIX["domain_order"], m["weights"]))
         rows.append(
@@ -53,19 +51,7 @@ def main() -> None:
 
     surrogates = [
         (25, "ML-pilot_caps", "mixing-law", FIT["optimization"]["pilot_caps"]["weights"]),
-        (
-            26,
-            "ML-near-opt-4",
-            "mixing-law",
-            FIT["near_optimal_balanced_samples"][ML_NEAR_OPT_INDEX]["weights"],
-        ),
         (27, "LGB-min1pct", "lightgbm", LGB["optimization"]["min1pct"]["weights"]),
-        (
-            28,
-            "LGB-near-opt-8",
-            "lightgbm",
-            LGB["near_optimal_balanced_samples"][LGB_NEAR_OPT_INDEX]["weights"],
-        ),
     ]
     for mid, name, source, weights in surrogates:
         rows.append(

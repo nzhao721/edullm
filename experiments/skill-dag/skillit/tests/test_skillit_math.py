@@ -30,7 +30,7 @@ def test_softmax_sums_to_one():
 
 
 def test_skillit_update_toy():
-    # Domain 0 helps family 0 only; high L_0 → mass on domain 0.
+    # Domain 0 helps family 0 only; high L_0 → mass moves onto domain 0.
     A = np.array(
         [
             [1.0, 0.0],
@@ -40,19 +40,71 @@ def test_skillit_update_toy():
         dtype=np.float64,
     )
     losses = np.array([2.0, 0.5], dtype=np.float64)
-    p = skillit_update(A, losses, eta=ETA_DEFAULT, w=1.0)
+    p_before = np.array([0.2, 0.3, 0.5], dtype=np.float64)
+    p = skillit_update(A, losses, p_before=p_before, eta=ETA_DEFAULT, w=1.0)
     assert p.shape == (3,)
     assert pytest.approx(float(p.sum()), abs=1e-12) == 1.0
-    # score_0 = 0.2 * 2.0 = 0.4; score_1 = 0.2 * 0.5 = 0.1; score_2 = 0
-    expected = softmax_weights(np.array([0.4, 0.1, 0.0]))
+    # Multiplicative rule: p_i(t+1) ∝ p_i(t) * exp(eta * sum_j A_ij L_j).
+    # score = 0.2 * [2.0, 0.5, 0.0] = [0.4, 0.1, 0.0]
+    expected = softmax_weights(np.log(p_before) + np.array([0.4, 0.1, 0.0]))
     assert np.allclose(p, expected)
-    assert p[0] > p[1] > p[2]
 
 
-def test_skillit_update_eta_zero_is_uniform_when_scores_zero():
+def test_skillit_update_carries_previous_weights():
+    """A zero row must not reset a domain to parity — it keeps its prior share."""
     A = np.zeros((3, 2))
-    p = skillit_update(A, [1.0, 1.0], eta=0.0)
-    assert np.allclose(p, 1.0 / 3.0)
+    p_before = np.array([0.7, 0.2, 0.1], dtype=np.float64)
+    p = skillit_update(A, [1.0, 1.0], p_before=p_before, eta=ETA_DEFAULT)
+    # No adjacency signal anywhere → mixture is unchanged, NOT uniform.
+    assert np.allclose(p, p_before)
+
+
+def test_skillit_update_preserves_ratio_of_zero_rows():
+    """Domains with all-zero A rows keep their relative ratio across an update.
+
+    This is the signature that distinguishes the multiplicative rule from a
+    plain softmax over ``A @ L``, and it is what the logged runs show.
+    """
+    A = np.array([[1.0, 0.0], [0.0, 0.0], [0.0, 0.0]], dtype=np.float64)
+    p_before = np.array([0.5, 0.4, 0.1], dtype=np.float64)
+    p = skillit_update(A, [2.0, 1.0], p_before=p_before, eta=ETA_DEFAULT)
+    assert pytest.approx(p[1] / p[2], rel=1e-12) == p_before[1] / p_before[2]
+
+
+def test_skillit_update_reproduces_logged_derivative_step500():
+    """Regression: replay the real online-derivative run's step 0 → 500 transition.
+
+    Logged mixtures from ``contamination/skillit_updates_online-derivative.jsonl``.
+    In that arm's adjacency the arxiv, starcoder and algebraic-stack rows are all
+    zero, so the multiplicative rule must leave their *ratios* untouched while
+    rescaling them by a common factor. A plain softmax over ``A @ L`` would
+    instead collapse all three to equal weight, which the log rules out.
+
+    Domain order: dclm, arxiv, starcoder, pes2o, open-web-math,
+    algebraic-stack, wiki.
+    """
+    p_before = np.array(
+        [0.5528505096, 0.2117848231, 0.0872393583, 0.0816333776,
+         0.0417862394, 0.0135710595, 0.0111346326],
+        dtype=np.float64,
+    )
+    p_after = np.array(
+        [0.5561979154, 0.1995353085, 0.0821934831, 0.0864803692,
+         0.0471215188, 0.0127861171, 0.0156852878],
+        dtype=np.float64,
+    )
+    zero_rows = [1, 2, 5]  # arxiv, starcoder, algebraic-stack
+    for a, b in zip(zero_rows, zero_rows[1:]):
+        assert (
+            pytest.approx(p_after[a] / p_after[b], rel=1e-6)
+            == p_before[a] / p_before[b]
+        )
+    # Those three are rescaled by one common factor, as a shared normalizer implies.
+    factors = [p_after[i] / p_before[i] for i in zero_rows]
+    assert pytest.approx(factors[1], rel=1e-6) == factors[0]
+    assert pytest.approx(factors[2], rel=1e-6) == factors[0]
+    # And that factor is < 1: mass flowed to wiki / open-web-math.
+    assert factors[0] < 1.0 < p_after[6] / p_before[6]
 
 
 def test_load_offline_A_requires_7_by_6_shape(tmp_path: Path):

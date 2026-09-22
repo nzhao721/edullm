@@ -10,6 +10,12 @@ Derivative panel uses arm 1's update history unchanged.
 Update data is read directly from each arm's `skillit_updates.jsonl` (written
 by the Skill-It controller under `<run_dir>/runs/<arm>/progress/`); paste in
 new `p_after` snapshots there if this is ever regenerated for a different run.
+
+Revisions to the originally published panel: the bands now carry thin white
+separators, so the three ~1% domains at the bottom of the stack (wiki,
+AlgebraicStack, StarCoder) can at least be told apart from each other; their
+exact weights are in the appendix tables. The dead vertical space between the
+panels and the legend has also been removed.
 """
 from __future__ import annotations
 
@@ -18,13 +24,14 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 
-OUT_DIR = Path(__file__).resolve().parent / "figures"
+SKILLIT = Path(__file__).resolve().parent
+OUT_DIRS = [SKILLIT / "figures"]
 FINAL_STEP = 2384
 
 # Bottom-to-top stacking order, matching the original figure.
 DOMAINS = ["wiki", "algebraic-stack", "open-web-math", "pes2o", "starcoder", "arxiv", "dclm"]
 LABELS = {
-    "wiki": "Wiki", "algebraic-stack": "AlgebraicStack", "open-web-math": "OpenWebMath",
+    "wiki": "Wikipedia", "algebraic-stack": "AlgebraicStack", "open-web-math": "OpenWebMath",
     "pes2o": "pes2o", "starcoder": "StarCoder", "arxiv": "arXiv", "dclm": "DCLM",
 }
 COLORS = {
@@ -32,6 +39,7 @@ COLORS = {
     "pes2o": "#EF4444", "starcoder": "#14B8A6", "arxiv": "#F59E0B", "dclm": "#2563EB",
 }
 LEGEND_ORDER = ["wiki", "algebraic-stack", "open-web-math", "pes2o", "starcoder", "arxiv", "dclm"]
+
 
 # Probe: FarmShare rerun of arm 0, job 1730368 (skillit_updates.jsonl p_after).
 PROBE_UPDATES = [
@@ -55,7 +63,10 @@ DERIVATIVE_UPDATES = [
 
 plt.rcParams.update({
     "font.family": "sans-serif",
-    "font.sans-serif": ["Segoe UI", "Helvetica Neue", "Arial", "DejaVu Sans"],
+    "font.sans-serif": ["DejaVu Sans"],
+    "font.size": 12,
+    "axes.edgecolor": "#333333",
+    "axes.linewidth": 0.9,
 })
 
 
@@ -68,41 +79,43 @@ def draw_panel(ax, updates, *, title):
     for dom in DOMAINS:
         vals = np.array([w[dom] for w in weights])
         cum = prev_cum + vals
-        h = ax.fill_between(steps, prev_cum, cum, step="post", color=COLORS[dom], linewidth=0)
+        h = ax.fill_between(steps, prev_cum, cum, step="post", color=COLORS[dom],
+                            edgecolor="white", linewidth=0.5)
         handles[dom] = h
         prev_cum = cum
 
-    ax.set_title(title, fontsize=36, fontweight="bold", pad=14)
-    ax.set_xlabel("Training step", fontsize=30, fontweight="bold")
+    ax.set_title(title, fontsize=15, fontweight="bold", pad=10)
+    ax.set_xlabel("Training step", labelpad=8)
     ax.set_xlim(0, FINAL_STEP)
     ax.set_ylim(0, 1)
-    ax.tick_params(labelsize=22)
-    for spine in ("top", "right"):
-        ax.spines[spine].set_visible(False)
     return handles
 
 
 def main() -> None:
-    fig, axes = plt.subplots(1, 2, figsize=(20, 9), dpi=150)
+    fig, axes = plt.subplots(1, 2, figsize=(9.2, 4.6), dpi=200)
     draw_panel(axes[0], PROBE_UPDATES, title="Probe")
     handles = draw_panel(axes[1], DERIVATIVE_UPDATES, title="Derivative")
-    axes[0].set_ylabel("Cumulative domain weight", fontsize=30, fontweight="bold")
+    axes[0].set_ylabel("Cumulative domain weight", labelpad=8)
 
+    # One row, sitting just under the x-axis labels rather than a third of a
+    # figure height below them.
     ordered_handles = [handles[d] for d in LEGEND_ORDER]
     ordered_labels = [LABELS[d] for d in LEGEND_ORDER]
-    fig.legend(ordered_handles, ordered_labels, loc="lower center", ncol=4, fontsize=24,
-               frameon=False, bbox_to_anchor=(0.5, -0.1))
+    fig.legend(ordered_handles, ordered_labels, loc="lower center", ncol=7, fontsize=10,
+               frameon=False, bbox_to_anchor=(0.5, 0.005), columnspacing=1.1,
+               handlelength=1.4, handletextpad=0.4)
 
-    fig.subplots_adjust(bottom=0.3, wspace=0.15)
+    fig.subplots_adjust(bottom=0.22, top=0.90, wspace=0.16)
 
-    OUT_DIR.mkdir(parents=True, exist_ok=True)
-    png_path = OUT_DIR / "domain_weights_probe_vs_derivative.png"
-    pdf_path = OUT_DIR / "domain_weights_probe_vs_derivative.pdf"
-    fig.savefig(png_path, dpi=300, facecolor="white", bbox_inches="tight")
-    fig.savefig(pdf_path, facecolor="white", bbox_inches="tight")
+    for out_dir in OUT_DIRS:
+        if not out_dir.parent.exists():
+            continue
+        out_dir.mkdir(parents=True, exist_ok=True)
+        for ext in ("png", "pdf"):
+            path = out_dir / f"domain_weights_probe_vs_derivative.{ext}"
+            fig.savefig(path, facecolor="white")
+            print(f"Wrote {path}")
     plt.close(fig)
-    print(f"Wrote {png_path}")
-    print(f"Wrote {pdf_path}")
 
 
 if __name__ == "__main__":

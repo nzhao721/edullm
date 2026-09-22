@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Deterministic seven-arm AWS Batch entrypoint for MixLaw 370M.
+"""Deterministic three-arm AWS Batch entrypoint for MixLaw 370M.
 
 The platform supplies the array index, immutable dataset identity, workload
 credentials, and durable S3 prefixes. This entrypoint never resolves ``latest``
@@ -20,12 +20,8 @@ from platform_artifacts import join_s3_prefix, parse_s3_prefix
 
 ARRAY_ARMS: tuple[tuple[int, str], ...] = (
     (0, "olmo-mix-1124"),
-    (7, "mix07"),
-    (18, "mix18"),
     (25, "ML-pilot_caps"),
-    (26, "ML-near-opt-4"),
     (27, "LGB-min1pct"),
-    (28, "LGB-near-opt-8"),
 )
 EXCLUDED_ARMS = frozenset({"mix01"})
 PINNED_DATASET_ID = "pretrain/olmo-127b"

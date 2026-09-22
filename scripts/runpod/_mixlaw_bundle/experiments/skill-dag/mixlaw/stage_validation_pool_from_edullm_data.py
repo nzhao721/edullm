@@ -154,18 +154,13 @@ def select_shards(
     for d in DOMAINS:
         need = int(peak[d])
         shards = list(inventory[d]["shards"])
-        if deterministic_prefix:
-            # Stable per-domain order: a one-arm selection is a prefix of a larger
-            # selection made with the same seed, independent of other domains.
-            shards.sort(
-                key=lambda shard: hashlib.sha256(
-                    f"{seed}\0{d}\0{shard['uri']}".encode("utf-8")
-                ).hexdigest()
-            )
-            order = range(len(shards))
-        else:
-            # Preserve the existing FarmShare shared-pool draw exactly.
-            order = rng.permutation(len(shards))
+        # Preserve the existing FarmShare shared-pool draw exactly in both modes.
+        # The RNG consumes one full permutation per domain, independent of demand,
+        # so a selected-arm draw is a byte-for-byte prefix of the shared pool for
+        # the same seed and inventory. ``deterministic_prefix`` changes only the
+        # temporary shard layout below, preventing same-named domains from
+        # colliding while platform children stage independently.
+        order = rng.permutation(len(shards))
         chosen: list[dict[str, Any]] = []
         got = 0
         for i in order:

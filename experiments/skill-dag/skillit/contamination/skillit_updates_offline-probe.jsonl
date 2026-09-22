@@ -1,6 +1,6 @@
-{"step": 0, "p_after": {"dclm": 0.375, "arxiv": 0.25, "starcoder": 0.141, "pes2o": 0.094, "open-web-math": 0.064, "algebraic-stack": 0.062, "wiki": 0.016}}
-{"step": 500, "p_after": {"dclm": 0.194, "arxiv": 0.131, "starcoder": 0.106, "pes2o": 0.157, "open-web-math": 0.122, "algebraic-stack": 0.124, "wiki": 0.165}}
-{"step": 875, "p_after": {"dclm": 0.19, "arxiv": 0.132, "starcoder": 0.109, "pes2o": 0.156, "open-web-math": 0.124, "algebraic-stack": 0.126, "wiki": 0.163}}
-{"step": 1250, "p_after": {"dclm": 0.188, "arxiv": 0.133, "starcoder": 0.11, "pes2o": 0.156, "open-web-math": 0.125, "algebraic-stack": 0.126, "wiki": 0.163}}
-{"step": 1625, "p_after": {"dclm": 0.187, "arxiv": 0.133, "starcoder": 0.111, "pes2o": 0.156, "open-web-math": 0.125, "algebraic-stack": 0.126, "wiki": 0.162}}
-{"step": 2000, "p_after": {"dclm": 0.186, "arxiv": 0.133, "starcoder": 0.111, "pes2o": 0.155, "open-web-math": 0.126, "algebraic-stack": 0.127, "wiki": 0.162}}
+{"step": 0, "p_after": {"dclm": 0.5528505096102141, "arxiv": 0.21178482308348515, "starcoder": 0.08723935826031831, "pes2o": 0.08163337756774411, "open-web-math": 0.041786239404329344, "algebraic-stack": 0.013571059505826967, "wiki": 0.01113463256808213}}
+{"step": 500, "p_after": {"algebraic-stack": 0.010195690011512803, "arxiv": 0.16781238139729543, "dclm": 0.6459461253946372, "open-web-math": 0.03104617306715885, "pes2o": 0.07727008631788466, "starcoder": 0.05665913498302511, "wiki": 0.011070408828485898}}
+{"step": 875, "p_after": {"algebraic-stack": 0.0075794641199737394, "arxiv": 0.1312047624368636, "dclm": 0.7198701613362318, "open-web-math": 0.022842108444754147, "pes2o": 0.07116631617229063, "starcoder": 0.036709905129594864, "wiki": 0.010627282360291075}}
+{"step": 1250, "p_after": {"algebraic-stack": 0.005548523013975088, "arxiv": 0.10092269002172854, "dclm": 0.7794252168264567, "open-web-math": 0.016554981127748933, "pes2o": 0.06409198604905098, "starcoder": 0.023489361157397377, "wiki": 0.00996724180364266}}
+{"step": 1625, "p_after": {"algebraic-stack": 0.004008018883345155, "arxiv": 0.07654112577077739, "dclm": 0.8268532718926198, "open-web-math": 0.011842439816005683, "pes2o": 0.056702142661858995, "starcoder": 0.014866343692070724, "wiki": 0.009186657283322052}}
+{"step": 2000, "p_after": {"algebraic-stack": 0.0028678558874201884, "arxiv": 0.05748684666307869, "dclm": 0.8640046143237808, "open-web-math": 0.00839236464681183, "pes2o": 0.049564753592122174, "starcoder": 0.009327972256629744, "wiki": 0.008355592630156597}}
