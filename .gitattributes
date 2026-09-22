@@ -1,0 +1,2 @@
+# Force Unix line endings for SLURM scripts (sbatch rejects CRLF).
+*.sh text eol=lf
