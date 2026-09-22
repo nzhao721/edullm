@@ -1,5 +1,7 @@
 # Middle-PPL token arm
 
+> **Launch sections below are historical.** The scripts they name were removed with the superseded in-repo trainer, which produced none of the reported runs. The code and launch path behind the reported numbers are in `../olmo_core_token_selection/` (`farmshare/` and `runpod/`); see `../olmo_core_token_selection/PROVENANCE.md`.
+
 Keep the **middle 60%** of valid tokens per sequence by **frozen RefHQ late-avg**
 token CE (`L_ref` ≈ log-PPL). Drop the easiest and hardest `(1−k)/2` each.
 Per Marion et al. ([2309.04564](https://arxiv.org/pdf/2309.04564)), perplexity

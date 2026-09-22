@@ -12,7 +12,7 @@ if [[ -z "${WANDB_API_KEY:-}" ]]; then
   for candidate in \
     "${KEY_FILE}" \
     "${HOME}/.wandb_api_key" \
-    "/mnt/c/Users/natha/.wandb_api_key" \
+    "${WANDB_KEY_FILE:-$HOME/.wandb_api_key}" \
     "/mnt/c/Users/${USER}/.wandb_api_key"
   do
     [[ -n "${candidate}" && -f "${candidate}" ]] || continue
@@ -24,7 +24,7 @@ fi
 
 if [[ -z "${WANDB_API_KEY:-}" ]]; then
   echo "WANDB_API_KEY not found in env or key file" >&2
-  echo "Create /mnt/c/Users/natha/.wandb_api_key with the key (one line), then retry." >&2
+  echo "Create ${WANDB_KEY_FILE:-$HOME/.wandb_api_key} with the key (one line), then retry." >&2
   exit 2
 fi
 

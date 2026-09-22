@@ -22,5 +22,5 @@ to append additional HF shards, then (if the empirical rate overshoots) trim the
 
 As of 2026-07-29 all seven domains satisfy the 10% gate
 (`plan/availability_after_topup.json`). Active measured totals: starcoder **18.541B**,
-pes2o **26.379B** (see `S3_DATASETS.md`). Excess topup objects may remain on S3 but are
+pes2o **26.379B**. Excess topup objects may remain on S3 but are
 excluded from `plan/tokenized_manifest.json`.

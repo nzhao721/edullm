@@ -209,7 +209,7 @@
       "mmlu_stem": 0.3518796573080156
     }
   },
-  "fit_json": "C:\\alpha_ai\\edullm\\experiments\\skill-dag\\mixlaw\\mixlaw_fit_chinchilla.json",
+  "fit_json": "experiments/skill-dag/mixlaw/mixlaw_fit_chinchilla.json",
   "shape": [
     7,
     6

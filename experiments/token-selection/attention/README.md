@@ -1,5 +1,7 @@
 # Attention top-60% (`attention_topk`)
 
+> **Launch sections below are historical.** The scripts they name were removed with the superseded in-repo trainer, which produced none of the reported runs. The code and launch path behind the reported numbers are in `../olmo_core_token_selection/` (`farmshare/` and `runpod/`); see `../olmo_core_token_selection/PROVENANCE.md`.
+
 Shared package: [`../token_selection/`](../token_selection/).  
 Config: [`configs/run_attention_10b.yaml`](configs/run_attention_10b.yaml).
 

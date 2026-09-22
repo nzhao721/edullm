@@ -30,7 +30,7 @@ PLANNED_AVAILABLE = {
     "wiki": 3_660_000_000,
 }
 
-# Measured dolma2 totals from S3_DATASETS.md / tokenized_manifest.
+# Measured dolma2 totals from the per-corpus README / tokenized_manifest.
 # Overridden at runtime when --tokenized-manifest is provided.
 
 

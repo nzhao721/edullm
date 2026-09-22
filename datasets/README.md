@@ -1,6 +1,6 @@
 # Dataset pipelines
 
-Build scripts for corpora published on S3 (see [`S3_DATASETS.md`](../S3_DATASETS.md); bucket consolidation as of **2026-07-27** in [S3 consolidation](../S3_DATASETS.md#s3-consolidation-2026-07-27)).
+Build scripts for corpora published on S3.
 
 | Directory | S3 bucket / prefix | Description |
 |-----------|-------------------|-------------|
@@ -8,6 +8,7 @@ Build scripts for corpora published on S3 (see [`S3_DATASETS.md`](../S3_DATASETS
 | [`olmohq/`](olmohq/) | `edullm-datasets/olmo100b/olmo-mix-1124-30b/` | ~100B upsampled / rebalanced pool (feeds RegMix) |
 | [`regmix/`](regmix/) | `edullm-datasets/regmix/regmix-10b/` | 10B RegMix-weighted mix from olmohq |
 | [`refhq/`](refhq/) | `edullm-datasets/refhq/refhq-regmix-5p5b-v1/` | 5.5B HQ-filtered reference corpus (HF sources) |
+| [`refhq_new/`](refhq_new/) | `edullm-data pretrain/refhq-instruct` | ~3.9B instruction-sourced reference corpus (token-selection Appendix A Table 6) |
 
 ## Shared dataset utilities (this directory)
 

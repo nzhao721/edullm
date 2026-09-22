@@ -1,5 +1,7 @@
 # RHO-1 (rho_excess) arm
 
+> **Launch sections below are historical.** The scripts they name were removed with the superseded in-repo trainer, which produced none of the reported runs. The code and launch path behind the reported numbers are in `../olmo_core_token_selection/` (`farmshare/` and `runpod/`); see `../olmo_core_token_selection/PROVENANCE.md`.
+
 Top-60% token selection by RHO-1 excess loss `L_curr − L_ref` on RegMix 10B.
 
 | Knob | Value |

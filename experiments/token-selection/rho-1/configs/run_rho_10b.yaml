@@ -76,6 +76,10 @@ olmo_core:
   # Repinned 2026-09-12: the previous pin 99e0009ed67679c90da970ec5ba439c9459e3757 does NOT contain
   # .edullm/token_selection_370m/selection.py, so no selection arm could have
   # run at that revision.
+  # NOTE: this pin is stale and did NOT produce the reported runs. See
+#       ../../olmo_core_token_selection/PROVENANCE.md, which shows from three
+#       code diffs that 98ea67c9 cannot have produced four of the seven arms.
+#       The reported runs are pinned to edu-llm/OLMo-core@53daffdf.
   revision: 98ea67c948fd93ccbfd2633e1ae818c3ae1d2ad7
 
 train:

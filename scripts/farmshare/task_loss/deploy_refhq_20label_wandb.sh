@@ -46,13 +46,13 @@ bash "${FS_SCRIPTS}/push_wandb_session_to_farmshare.sh" "${RUN_DIR}"
 # Optional HF token for OLMES dataset / tokenizer downloads.
 if [[ -f "${FS_SCRIPTS}/push_hf_session_to_farmshare.sh" ]]; then
   bash "${FS_SCRIPTS}/push_hf_session_to_farmshare.sh" "${RUN_DIR}" || true
-elif [[ -n "${HF_TOKEN:-}${HUGGING_FACE_HUB_TOKEN:-}" || -f "${HOME}/.hf_token" || -f "/mnt/c/Users/natha/.hf_token" ]]; then
+elif [[ -n "${HF_TOKEN:-}${HUGGING_FACE_HUB_TOKEN:-}" || -f "${HOME}/.hf_token" || -f "${HF_TOKEN_FILE:-$HOME/.hf_token}" ]]; then
   # Minimal HF session push without a dedicated helper.
   KEY=""
   if [[ -n "${HF_TOKEN:-}" ]]; then KEY="${HF_TOKEN}"
   elif [[ -n "${HUGGING_FACE_HUB_TOKEN:-}" ]]; then KEY="${HUGGING_FACE_HUB_TOKEN}"
   elif [[ -f "${HOME}/.hf_token" ]]; then KEY="$(tr -d ' \t\r\n' < "${HOME}/.hf_token")"
-  elif [[ -f "/mnt/c/Users/natha/.hf_token" ]]; then KEY="$(tr -d ' \t\r\n' < /mnt/c/Users/natha/.hf_token)"
+  elif [[ -f "${HF_TOKEN_FILE:-$HOME/.hf_token}" ]]; then KEY="$(tr -d ' \t\r\n' < ${HF_TOKEN_FILE:-$HOME/.hf_token})"
   fi
   if [[ -n "${KEY}" ]]; then
     TMP="$(mktemp)"

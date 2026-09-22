@@ -122,7 +122,7 @@ collided with W&B's monotonic-step rule and dropped it from the logged history.
 
 ---
 
-See each arm’s `README.md` for launch commands. Do not submit AWS workloads unless explicitly authorized.
+Each arm’s `README.md` describes its method and hyperparameters. Its *launch* sections are historical: the scripts they name were removed with the superseded trainer (see above). The launch path that produced the reported runs is `olmo_core_token_selection/farmshare/` and `olmo_core_token_selection/runpod/`. Do not submit AWS workloads unless explicitly authorized.
 
 ---
 

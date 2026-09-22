@@ -19,3 +19,25 @@ probes \(\approx 1.22\times10^{18}\).
 **Seed noise floor.** Two Olmo-mix-1124 runs differing only in dataloader seed
 land 0.0044 bpb apart (\(p = 0.34\)); treat differences below ~0.004 bpb as
 indistinguishable.
+
+## Bootstrap convention (and how it differs from the token-selection paper)
+
+Both papers report 95% intervals from an alpha-free residual bootstrap on the
+fit window, but the two are **not** computed identically. The difference is
+worth knowing before comparing their seed-noise floors (0.0044 bpb here,
+0.0082 bpb there).
+
+| | this paper (`fit_and_bootstrap_370m.py`) | token selection (`fit_and_plot.py`) |
+|---|---|---|
+| alpha grid | `linspace(0.05, 3.0, 400)` | `linspace(0.05, 6.0, 1192)` |
+| draws | 200,000 | 10,000 |
+| small-sample residual rescaling | **not applied** | `sqrt(n/(n-p))`, `p=3` |
+
+The rescaling corrects for OLS residuals being shrunk relative to the true
+errors; without it, intervals are roughly 15% narrower. The intervals behind
+Tables II and III are therefore narrower than the token-selection convention
+would produce, not wider.
+
+`skill_dag_370m_bootstrap_results.json` does not record the per-arm fitted
+`alpha`, so unlike the token-selection artifact it cannot be inspected for
+boundary-pinning at the 3.0 grid edge.

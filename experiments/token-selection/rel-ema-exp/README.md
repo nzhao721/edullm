@@ -1,5 +1,7 @@
 # REL no-init exponential-α (`rel-ema-exp`)
 
+> **Launch sections below are historical.** The scripts they name were removed with the superseded in-repo trainer, which produced none of the reported runs. The code and launch path behind the reported numbers are in `../olmo_core_token_selection/` (`farmshare/` and `runpod/`); see `../olmo_core_token_selection/PROVENANCE.md`.
+
 Online token selection: keep top **60%** by `REL = L_curr − L_hist`.
 
 **Polarity corrected 2026-09-05.** This arm was originally documented and run with

@@ -27,7 +27,7 @@ KNOWN_DOMAINS = (
     "wiki",
 )
 
-# Measured content tokens (S3_DATASETS.md / manifests).
+# Measured content tokens (the per-corpus README / manifests).
 REGMIX_TOKENS = 10_000_058_051
 
 

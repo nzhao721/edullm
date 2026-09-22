@@ -417,7 +417,7 @@ shared generator.
 | **LightGBM** | **1.6080** | 1.6077 | [1.6049, 1.6106] | $p < 10^{-4}$ |
 | Olmo-mix-1124 seed 12536 | 1.6313 | 1.6370 | [1.6261, 1.6357] | — |
 | Olmo-mix-1124 seed 12345 | 1.6269 | 1.6285 | [1.6195, 1.6343] | — |
-| Olmo-mix-1124 average (control) | 1.6291 | 1.6328 | [1.6246, 1.6335] | — |
+| Olmo-mix-1124 average (control) | 1.6291 | 1.6327 | [1.6246, 1.6335] | — |
 | Data Mixing Laws paper | 1.6515 | 1.6518 | [1.6473, 1.6556] | worse, $p < 10^{-4}$ |
 
 Lower is better. Both fitted mixtures beat the Olmo-mix-1124 control. The Data Mixing

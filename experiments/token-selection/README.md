@@ -2,7 +2,7 @@
 
 **Question.** Under a matched one-epoch Mixing Laws Dataset budget, can selecting a subset of tokens per sequence beat full-token CE on macro task-loss?
 
-**Answer.** No. Every selection arm finished **worse** than the full-CE baseline. Excess-loss ρ-1 was the least harmful: it does beat a random-60% keep-rate control (−0.0075 bpb, two-sided bootstrap **p = 0.029**, measured against a two-seed fit of that control), but it still loses to full CE by 0.0106 bpb. Middle-perplexity and relative-EMA selection collapsed performance.
+**Answer.** No. Every selection arm finished **worse** than the full-CE baseline. Excess-loss ρ-1 was the least harmful: it does beat a random-60% keep-rate control (−0.0075 bpb, two-sided bootstrap **p = 0.048**, measured against a two-seed fit of that control), but it still loses to full CE by 0.0106 bpb. Middle-perplexity and relative-EMA selection collapsed performance.
 
 ---
 
@@ -143,7 +143,12 @@ procedure. It is the matched protocol used for every number in this file.
    `alpha` sits on a boundary** (largest: REL-EMA at 3.502; smallest: BLADE at 0.794),
    so the exponent is data-determined rather than clipped.
 4. **Bootstrap.** 10,000 i.i.d. residual bootstrap draws: residuals from the point fit
-   are resampled with replacement and added back to the fitted curve.
+   are rescaled by `sqrt(n/(n-p))` with `p=3` (1.173 at `n=11`, 1.076 at `n=22`),
+   then resampled with replacement and added back to the fitted curve. OLS residuals
+   are shrunk relative to the true errors by that factor on average, so resampling
+   them raw understates the spread. Without the rescaling every interval here would
+   be ~15% narrower and the rho-1-vs-random p-value would read 0.029 rather than
+   0.048.
 5. **alpha re-estimated on every draw.** Each bootstrap replicate re-runs the full
    `alpha` grid search rather than holding `alpha` at its point estimate. This was
    chosen deliberately **because it yields the wider intervals** -- it propagates
@@ -185,15 +190,15 @@ Matched-protocol Table 1. Lower is better.
 
 | Arm                     | Fitted final | Observed | 95% CI           |
 | ----------------------- | ------------ | -------- | ---------------- |
-| Control (full-CE)       | **1.6718**   | 1.6751   | [1.6653, 1.6787] |
-| rho-1                   | 1.6824       | 1.6843   | [1.6771, 1.6857] |
-| Random control seed 42  | 1.6857       | 1.6870   | [1.6775, 1.6920] |
-| Random control seed 69  | 1.6939       | 1.6951   | [1.6865, 1.6993] |
-| **Random control (two-run fit)** | **1.6900** | 1.6911 | **[1.6841, 1.6947]** |
-| Attention top-k         | 1.6991       | 1.7005   | [1.6935, 1.7037] |
-| BLADE                   | 1.7090       | 1.7115   | [1.7028, 1.7182] |
-| Middle-PPL              | 1.9047       | 1.9001   | [1.9007, 1.9093] |
-| REL-EMA (exponential)   | 1.9199       | 1.9207   | [1.9180, 1.9217] |
+| Control (full-CE)       | **1.6718**   | 1.6751   | [1.6642, 1.6798] |
+| rho-1                   | 1.6824       | 1.6843   | [1.6762, 1.6863] |
+| Random control seed 42  | 1.6857       | 1.6870   | [1.6761, 1.6930] |
+| Random control seed 69  | 1.6939       | 1.6951   | [1.6852, 1.7002] |
+| **Random control (two-run fit)** | **1.6900** | 1.6911 | **[1.6837, 1.6950]** |
+| Attention top-k         | 1.6991       | 1.7005   | [1.6925, 1.7045] |
+| BLADE                   | 1.7090       | 1.7115   | [1.7020, 1.7197] |
+| Middle-PPL              | 1.9047       | 1.9001   | [1.9000, 1.9101] |
+| REL-EMA (exponential)   | 1.9199       | 1.9207   | [1.9176, 1.9220] |
 
 Only **rho-1** overlaps the control's interval. The overlapping pairs at 95% are
 control↔rho-1, rho-1↔random control, random control↔Attention, and Attention↔BLADE.
@@ -216,15 +221,15 @@ Against the two-run random control:
 | Arm | Delta | 95% CI | One-sided p |
 | --- | --- | --- | --- |
 | Control (full-CE) | -0.0181 | [-0.0264, -0.0092] | 0.0000 |
-| **rho-1** | **-0.0075** | **[-0.0146, -0.0008]** | **0.0146** |
+| **rho-1** | **-0.0075** | **[-0.0155, -0.0001]** | **0.024** |
 | Attention top-k | +0.0091 | [+0.0017, +0.0164] | 0.0074 |
 | BLADE | +0.0190 | [+0.0109, +0.0296] | 0.0000 |
 | Middle-PPL | +0.2148 | [+0.2085, +0.2222] | 0.0000 |
 | REL-EMA | +0.2300 | [+0.2248, +0.2359] | 0.0000 |
 
-**rho-1 does beat random token masking** (two-sided p = 0.029) once the random control is
+**rho-1 does beat random token masking** (two-sided p = 0.048) once the random control is
 fitted across both of its seeds — under the single seed-42 control the same test returned
--0.0033, p = 0.363, i.e. no difference. That reversal is itself a caution: the comparison
+-0.0032, p = 0.434, i.e. no difference. That reversal is itself a caution: the comparison
 is sensitive to which random-control run you pick, which is why the two-run fit is the
 reported baseline. rho-1 still loses to full CE by 0.0106 bpb.
 
@@ -302,7 +307,7 @@ forward+backward, on top of the 2360 training steps. At 2.6298e9 FLOPs/token tha
    outlier.
 3. **rho-1 beats random masking, but only just, and only against the two-run control.**
    The two-run random control lands at 1.6900 and rho-1 at 1.6824, a -0.0075 bpb edge
-   (two-sided **p = 0.029**). Against the seed-42 run alone the same test gave -0.0033,
+   (two-sided **p = 0.048**). Against the seed-42 run alone the same test gave -0.0033,
    **p = 0.363** -- no difference. The conclusion flips with the choice of control run,
    which is why the two-run fit is the reported baseline and why this edge should be
    read as suggestive rather than settled. Every *other* selection arm (Attention,
@@ -321,7 +326,7 @@ forward+backward, on top of the 2360 training steps. At 2.6298e9 FLOPs/token tha
 
 ## Conclusions
 
-Under the P1 Mixing Laws Dataset × 370M one-epoch contract, **token selection is a negative result**: every tested scorer underperforms full CE. The best scorer (ρ-1) does edge past a random-60% keep-rate control (delta -0.0075, 95% CI [-0.0146, -0.0008], **two-sided p = 0.029**), so the scoring rule is not worthless -- but it still loses to full CE by 0.0106 bpb, so selection does not pay for itself here. Prefer mixture optimization (MixLaw) or, secondarily, difficulty curricula over token masking for this setup.
+Under the P1 Mixing Laws Dataset × 370M one-epoch contract, **token selection is a negative result**: every tested scorer underperforms full CE. The best scorer (ρ-1) does edge past a random-60% keep-rate control (delta -0.0075, 95% CI [-0.0155, -0.0001], **two-sided p = 0.048**), so the scoring rule is not worthless -- but it still loses to full CE by 0.0106 bpb, so selection does not pay for itself here. Prefer mixture optimization (MixLaw) or, secondarily, difficulty curricula over token masking for this setup.
 
 Two caveats a reader should carry out of this page. First, only the random control has a
 seed replicate; the other six arms are single runs whose intervals contain **no

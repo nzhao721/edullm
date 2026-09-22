@@ -234,7 +234,7 @@ the control.
 
 | Arm | Fitted final | Observed | 95% CI | vs Olmo control |
 |-----|-------------:|---------:|--------|-----------------|
-| Olmo-mix-1124 average (control) | 1.6291 | 1.6328 | [1.6246, 1.6335] | — |
+| Olmo-mix-1124 average (control) | 1.6291 | 1.6327 | [1.6246, 1.6335] | — |
 | LightGBM static (start mixture) | **1.6080** | 1.6077 | [1.6049, 1.6106] | \(p < 10^{-4}\) |
 | Offline probe | 1.6112 | 1.6124 | [1.6078, 1.6141] | \(p < 10^{-4}\) |
 | Online derivative | 1.6166 | 1.6216 | [1.6114, 1.6235] | \(p = 0.004\) |
