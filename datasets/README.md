@@ -17,8 +17,9 @@ Scripts used by more than one corpus pipeline live here (not under `olmo/`, `reg
 | File | Purpose |
 |------|---------|
 | `olmo_shard_utils.py` | OLMo-mix shard I/O, domain token totals, doc materialization |
-| `download_s3_shard.py` / `.sbatch` | Slurm array worker to fetch one manifest-indexed shard |
 | `trim_olmo_overshoot.py` | Trim one overshot OLMo domain to a token budget |
 | `trim_and_tokenize_regmix.py` | Trim one domain and emit dolma2 uint32 `.npy` memmaps |
 
-FarmShare **platform** utilities (AWS session minting, bootstrap) remain in [`scripts/farmshare/`](../scripts/farmshare/).
+The AWS-credential helpers these pipelines sourced (`scripts/farmshare/bootstrap.sh`,
+`prepare_aws_session*.sh`, `write_aws_session_env.py`) and the pure S3 transfer workers
+have been removed; the scripts that call them are kept as a record of how each corpus was built.

@@ -19,7 +19,9 @@ All of it is copied unchanged from the top level of this same repo, under
 | `refhq/` | `datasets/refhq/` | `refhq/refhq-regmix-5p5b-v1` — the paper's 5.5B-token HQ reference corpus (DCLM, StarCoder, peS2o, arXiv, OpenWebMath, Algebraic Stack, Wikipedia) |
 | `refhq_new/` | `datasets/refhq_new/` | `pretrain/refhq-instruct` — the paper's ~3.9B-token Instruct reference corpus (Tulu-v2, OpenHermes-2.5, Tulu-3, Hermes-3, SmolTalk, Dolci) |
 | top-level `*.py`/`*.sbatch` here | `datasets/*.py`/`*.sbatch` | Shared utilities the four pipelines above import or invoke |
-| `farmshare/` | `scripts/farmshare/` | The four AWS-session-minting scripts (`bootstrap.sh`, `prepare_aws_session.sh`, `prepare_aws_session_light.sh`, `write_aws_session_env.py`) each pipeline's FarmShare deployment scripts stage onto the run directory before launching. Vendored here, and every `scripts/farmshare/` reference in this directory rewritten to `datasets/farmshare/`, so this whole tree is self-contained: nothing here points outside `experiments/token-selection/`. |
+
+The four AWS-session-minting scripts once vendored under `farmshare/` have been removed;
+the deployment scripts here still `source` them from `datasets/farmshare/`.
 
 `olmo/` and `olmohq/` are here because `regmix/` depends on them: the 10B
 training corpus is a domain-weighted subsample of the `olmohq` pool, which is

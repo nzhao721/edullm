@@ -206,9 +206,9 @@ export TRAIN_GPUS=8 TRAIN_CPUS=64 TRAIN_MEM=384G TRAIN_TIME=72:00:00
 export STAGE_CPUS=8 STAGE_MEM=32G STAGE_TIME=06:00:00
 ```
 
-The session-push helpers those scripts call are
-`scripts/farmshare/push_aws_session_to_farmshare.sh` and
-`scripts/farmshare/push_wandb_session_to_farmshare.sh` in this repository.
+The W&B session-push helper those scripts call is
+`scripts/farmshare/push_wandb_session_to_farmshare.sh` in this repository; the
+AWS-credential helper they also called has been removed.
 
 ## Evaluation and uncertainty
 

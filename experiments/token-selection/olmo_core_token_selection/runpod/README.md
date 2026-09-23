@@ -22,15 +22,9 @@ Set `OLMO_CORE_COMMIT_SHA` first to require an exact commit.
 
 ## Stage one arm
 
-Mint a temporary `sbsandbox` session on the engineer laptop, copy it over SSH,
-and immediately delete the laptop copy:
-
-```powershell
-& C:\alpha_ai\edullm\scripts\farmshare\mint_aws_session_local.ps1 `
-  -Profile sbsandbox -OutputPath $env:TEMP\aws-session-runpod.env
-scp -P <ssh-port> $env:TEMP\aws-session-runpod.env root@<pod-host>:/workspace/aws-session.env
-Remove-Item -Force $env:TEMP\aws-session-runpod.env
-```
+The reported runs minted a temporary `sbsandbox` session on the engineer laptop
+(with the since-removed `scripts/farmshare/mint_aws_session_local.ps1`), copied it to
+`/workspace/aws-session.env` over SSH, and deleted the laptop copy immediately.
 
 Attention example:
 
