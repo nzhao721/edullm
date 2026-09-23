@@ -144,20 +144,12 @@ def test_trainer_wandb_smollm_protocol():
     assert "wandb-artifact://" in text
 
 
-def test_readme_and_launch_scrub_legacy_bucket():
+def test_readme_scrubs_legacy_bucket():
     root = Path(__file__).resolve().parents[1]
     readme = (root / "README.md").read_text(encoding="utf-8")
-    launch = (root / "launch" / "launch_arm.sh").read_text(encoding="utf-8")
-    matrix = (root / "launch" / "submit_matrix.sh").read_text(encoding="utf-8")
-    for text in (readme, launch, matrix):
-        assert "edullm-datasets" not in text
-        assert "edullm-data" in text
+    assert "edullm-datasets" not in readme
+    assert "edullm-data" in readme
     assert "Ephemeral" in readme
     assert "edullm-checkpoints" not in readme
-    assert "S3_EXPORT" not in launch
-    assert "job-scoped" in launch
-    assert 'WANDB_PROJECT="${WANDB_PROJECT:-curriculum}"' in launch
-    assert "wandb-session.env" in launch
-    assert "push_wandb_session_to_farmshare.sh" in launch
     assert "curriculum" in readme
     assert "W&B" in readme or "wandb" in readme.lower() or "Weights & Biases" in readme

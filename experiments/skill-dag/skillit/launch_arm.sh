@@ -140,7 +140,7 @@ esac
 
 if [[ -z "${REPO_ROOT}" || ! -d "${REPO_ROOT}/experiments/curriculum" ]]; then
   echo "[launch_arm] error: cannot resolve EDULLM_ROOT/REPO_ROOT with experiments/curriculum" >&2
-  echo "  set EDULLM_ROOT to the edullm checkout (submit_skillit_370m.sh sets this)." >&2
+  echo "  set EDULLM_ROOT to the edullm checkout." >&2
   exit 2
 fi
 if [[ ! -f "${REPO_ROOT}/experiments/curriculum/train_curriculum_regmix_370m.py" ]]; then

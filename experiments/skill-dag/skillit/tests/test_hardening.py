@@ -14,7 +14,6 @@ _SKILLIT = Path(__file__).resolve().parents[1]
 _PREPARE = _SKILLIT / "prepare_skillit_370m_data.py"
 _TRAINER = _SKILLIT / "train_skillit_370m.py"
 _LAUNCHER = _SKILLIT / "launch_arm.sh"
-_SUBMITTER = _SKILLIT / "submit_skillit_370m.sh"
 _PROBE_LAUNCHER = _SKILLIT / "launch_probe.sh"
 _PROBE_SUBMITTER = _SKILLIT / "submit_skillit_probes.sh"
 _WANDB = _SKILLIT / "wandb_logging.py"
@@ -132,7 +131,7 @@ def test_trainer_uses_shared_strict_all_rank_eval_and_fails_closed() -> None:
 
 
 def test_launchers_never_write_artifacts_to_s3() -> None:
-    for path in (_LAUNCHER, _SUBMITTER, _PROBE_LAUNCHER, _PROBE_SUBMITTER):
+    for path in (_LAUNCHER, _PROBE_LAUNCHER, _PROBE_SUBMITTER):
         text = path.read_text(encoding="utf-8")
         assert "aws s3 sync" not in text
         assert "RESULTS_S3" not in text
