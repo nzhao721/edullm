@@ -1,10 +1,30 @@
-torch>=2.1.0
-transformers>=4.38.0
-datasets>=2.18.0
-accelerate>=0.27.0
-numpy>=1.24.0
+# Python dependencies for this repository, grouped by what they are needed for.
+
+# Analysis, figures and tests: enough to regenerate the reported tables and
+# figures from the committed curve files and to run the test suite.
+numpy>=1.26
+scipy>=1.11
+matplotlib>=3.8
+lightgbm>=4.0
+pytest>=8.0
+
+# Training and evaluation. Each experiment's README names the OLMo-core
+# revision its runs used; install that fork revision rather than the PyPI
+# release when reproducing a run. flash-attn and liger-kernel are optional
+# fused kernels, imported only when present.
+torch>=2.8
+ai2-olmo-core>=2.4.0
+ai2-olmo @ git+https://github.com/allenai/OLMo.git@090253dac6688f2532509daa7aa2eb5fae50e956
+transformers>=4.57
+wandb>=0.28
+omegaconf>=2.3
 pyyaml>=6.0
-tqdm>=4.66.0
-tokenizers>=0.15.0
-huggingface_hub>=0.21.0
-boto3>=1.34.0
+
+# Corpus construction, data staging and the contamination scan (datasets/ and
+# the *_from_edullm_data staging scripts). These read and write private S3
+# buckets and need credentials for them.
+edullm-data @ git+https://github.com/edu-llm/edullm-data.git@f0254ddb7aba589aa27e5a84ebaa95cb152edcfa
+datasets>=2.18
+huggingface_hub>=0.21
+zstandard>=0.22
+boto3>=1.34
