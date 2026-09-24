@@ -326,7 +326,7 @@ forward+backward, on top of the 2360 training steps. At 2.6298e9 FLOPs/token tha
 
 ## Conclusions
 
-Under the P1 Mixing Laws Dataset × 370M one-epoch contract, **token selection is a negative result**: every tested scorer underperforms full CE. The best scorer (ρ-1) does edge past a random-60% keep-rate control (delta -0.0075, 95% CI [-0.0155, -0.0001], **two-sided p = 0.048**), so the scoring rule is not worthless -- but it still loses to full CE by 0.0106 bpb, so selection does not pay for itself here. Prefer mixture optimization (MixLaw) or, secondarily, difficulty curricula over token masking for this setup.
+Under the P1 Mixing Laws Dataset × 370M one-epoch contract, **token selection is a negative result**: every tested scorer underperforms full CE. The best scorer (ρ-1) does edge past a random-60% keep-rate control (delta -0.0075, 95% CI [-0.0155, -0.0001], **two-sided p = 0.048**), so the scoring rule is not worthless -- but it still loses to full CE by 0.0106 bpb, so selection does not pay for itself here. Prefer mixture optimization (MixLaw) over token masking for this setup.
 
 Two caveats a reader should carry out of this page. First, only the random control has a
 seed replicate; the other six arms are single runs whose intervals contain **no
