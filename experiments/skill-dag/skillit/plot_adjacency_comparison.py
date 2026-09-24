@@ -113,8 +113,8 @@ def main() -> None:
     draw_panel(axes[0], A_probe, title=r"Probe adjacency $A_{ij}$")
     im = draw_panel(axes[1], A_deriv, title=r"Derivative adjacency $A_{ij}$")
 
-    fig.subplots_adjust(left=0.12, right=0.90, top=0.82, bottom=0.15, wspace=0.55)
-    cax = fig.add_axes((0.92, 0.15, 0.02, 0.67))
+    fig.subplots_adjust(left=0.12, right=0.87, top=0.82, bottom=0.15, wspace=0.45)
+    cax = fig.add_axes((0.89, 0.15, 0.02, 0.67))
     cbar = fig.colorbar(im, cax=cax)
     cbar.set_label(
         "larger = domain helps that skill more\n(0 = no benefit under that construction)",
