@@ -643,7 +643,7 @@ def figure2(results: dict[str, dict], fig_dir: Path) -> None:
 
 def _save(fig, fig_dir: Path, stem: str) -> None:
     fig_dir.mkdir(parents=True, exist_ok=True)
-    for ext in ("png", "pdf"):
+    for ext in ("png",):
         path = fig_dir / f"{stem}.{ext}"
         fig.savefig(path, facecolor="white", bbox_inches="tight")
         print(f"  wrote {path}")
