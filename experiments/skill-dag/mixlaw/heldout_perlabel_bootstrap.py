@@ -24,7 +24,7 @@ LABELS = [
     "socialiqa_val_rc_5shot_bpb", "winogrande_val_rc_5shot_bpb",
 ]
 SHORT = {l: l.replace("_rc_5shot_bpb", "") for l in LABELS}
-ARMS = ["olmo_6198", "olmo_12345", "mixlaw", "lightgbm"]
+ARMS = ["olmo_12536", "olmo_12345", "mixlaw", "lightgbm"]
 EXCLUDE = {2375}
 FINAL, NB = 2384, 200_000
 
@@ -47,8 +47,8 @@ for label in LABELS:
         st, v = series(arm, label)
         f, dist = fit_and_bootstrap(st, v, final_step=FINAL, n_boot=NB, seed=stream)
         finals[arm], fitted[arm] = dist, f
-    finals["control"] = 0.5 * (finals["olmo_6198"] + finals["olmo_12345"])
-    fitted["control"] = 0.5 * (fitted["olmo_6198"] + fitted["olmo_12345"])
+    finals["control"] = 0.5 * (finals["olmo_12536"] + finals["olmo_12345"])
+    fitted["control"] = 0.5 * (fitted["olmo_12536"] + fitted["olmo_12345"])
 
     cells = []
     for arm in ("mixlaw", "lightgbm"):

@@ -25,7 +25,7 @@ from fit_and_bootstrap_370m import ci, diff_p, fit_and_bootstrap, fmt_p  # noqa:
 curves = json.loads((MIXLAW / "heldout_label_curves.json").read_text(encoding="utf-8"))
 
 # same order as skill_dag_370m_wandb_curves.json's runs, so streams line up
-ORDER = ["olmo_6198", "olmo_12345", "dml_paper", "mixlaw", "lightgbm", "probe", "derivative"]
+ORDER = ["olmo_12536", "olmo_12345", "dml_paper", "mixlaw", "lightgbm", "probe", "derivative"]
 EXCLUDE = {2375}          # the paper excludes the off-cadence eval
 FINAL_STEP = 2384
 N_BOOT = 200_000
@@ -52,9 +52,9 @@ for field, pretty, n_lab in (("targeted", "12 targeted labels", 12),
                                     n_boot=N_BOOT, seed=stream)
         fitted[arm], finals[arm], obs[arm] = f, dist, float(v[-1])
 
-    finals["control"] = 0.5 * (finals["olmo_6198"] + finals["olmo_12345"])
-    fitted["control"] = 0.5 * (fitted["olmo_6198"] + fitted["olmo_12345"])
-    obs["control"] = 0.5 * (obs["olmo_6198"] + obs["olmo_12345"])
+    finals["control"] = 0.5 * (finals["olmo_12536"] + finals["olmo_12345"])
+    fitted["control"] = 0.5 * (fitted["olmo_12536"] + fitted["olmo_12345"])
+    obs["control"] = 0.5 * (obs["olmo_12536"] + obs["olmo_12345"])
 
     print(f"{'arm':12s} {'fitted':>8s} {'observed':>9s}   95% CI")
     for arm in ORDER + ["control"]:
