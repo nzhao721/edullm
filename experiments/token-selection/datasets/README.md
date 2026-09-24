@@ -50,7 +50,7 @@ tagger/mixer configs).
   the finished corpus. Excluded: `build_regmix_label_manifest.py`,
   `capture_regmix_parent_layout.py`, `build_regmix_lm_chunks.py`,
   `build_regmix_lm_retry_indices.py`, everything under
-  `*_regmix_doc_lm*`/`*_regmix_labels*`/`*_regmix_doc_subsets*`, the
+  `*_regmix_doc_lm*`/`*_regmix_labels*`, the
   `publish_regmix_curriculum_edullm_data.py` curriculum-index publisher, and
   every FarmShare `check_*`/`compare_*`/`diagnose_*`/`status_*` operational
   script for that job graph.
@@ -63,9 +63,6 @@ tagger/mixer configs).
 - **Smoke tests and local dry-runs**: `smoke_code_copyright_strip.py`
   (`refhq/`), `smoke_refhq_new_local.py` (`refhq_new/`). Useful for
   developing the filters; produced no reported artifact.
-- **Retry scaffolding**: `retry_tokenize_missing.py`/`.sbatch` (`olmo/`).
-  Recovers missed shards in a failed run; not part of the pipeline that
-  succeeded.
 - **`regmix/finalize_regmix_upload.py`.** An alternate uploader that
   provisions a raw S3 bucket and copies shards directly, bypassing the
   `edullm_data.publish()` call. The regmix `README.md`'s documented chain

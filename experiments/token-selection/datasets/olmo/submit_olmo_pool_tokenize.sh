@@ -25,7 +25,7 @@ for f in download_s3_shard.py download_s3_shard.sbatch; do
 done
 for f in build_pool_tokenize_map.py \
   tokenize_olmo_shard.py tokenize_olmo_shard.sbatch finalize_pool_tokenized_upload.py \
-  finalize_pool_tokenized_upload.sbatch retry_tokenize_missing.py retry_tokenize_missing.sbatch; do
+  finalize_pool_tokenized_upload.sbatch; do
   cp -a "${OLMO_ROOT}/${f}" "${RUN_DIR}/scripts/"
 done
 for f in prepare_aws_session_light.sh write_aws_session_env.py; do
@@ -159,15 +159,8 @@ TOK_JOB=$(sbatch --parsable --exclude=wheat-01 \
   "${RUN_DIR}/scripts/tokenize_olmo_shard.sbatch")
 echo "tokenize_job=${TOK_JOB}"
 
-RETRY_JOB=$(sbatch --parsable --exclude=wheat-01 \
-  --dependency=afterany:${TOK_JOB} \
-  --chdir="${RUN_DIR}" \
-  --export=ALL,${SBATCH_EXPORT_COMMON} \
-  "${RUN_DIR}/scripts/retry_tokenize_missing.sbatch")
-echo "retry_job=${RETRY_JOB}"
-
 UP_JOB=$(sbatch --parsable --exclude=wheat-01 \
-  --dependency=afterok:${RETRY_JOB} \
+  --dependency=afterok:${TOK_JOB} \
   --chdir="${RUN_DIR}" \
   --export=ALL,${SBATCH_EXPORT_COMMON} \
   "${RUN_DIR}/scripts/finalize_pool_tokenized_upload.sbatch")
