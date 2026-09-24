@@ -275,6 +275,22 @@ def main() -> int:
         help="run dir with trim/<source>/*-trimmed.json.gz (default: parent of tokenized-root)",
     )
     parser.add_argument("--skip-text-stage", action="store_true")
+    parser.add_argument(
+        "--skip-text-sources",
+        default="",
+        help="Comma-separated sources with already-staged text companions",
+    )
+    parser.add_argument(
+        "--parallel-text-sources",
+        default="dclm",
+        help="Comma-separated sources to stage from pre-split chunks in parallel",
+    )
+    parser.add_argument(
+        "--text-workers",
+        type=int,
+        default=32,
+        help="Worker count for parallel text staging",
+    )
     parser.add_argument("--skip-stage", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--force", action="store_true")
@@ -311,11 +327,24 @@ def main() -> int:
 
     text_run_dir = args.text_run_dir or args.tokenized_root.parent
     if not args.skip_text_stage:
+        skip_sources = {
+            source.strip()
+            for source in args.skip_text_sources.split(",")
+            if source.strip()
+        }
+        parallel_sources = {
+            source.strip()
+            for source in args.parallel_text_sources.split(",")
+            if source.strip()
+        }
         stage_text_companion(
             sources=sorted(manifest["domains"]),
             run_dir=text_run_dir,
             out_root=args.stage_dir,
             shard_bytes=args.shard_bytes,
+            parallel_sources=parallel_sources,
+            text_workers=args.text_workers,
+            skip_sources=skip_sources,
         )
 
     if args.dry_run:

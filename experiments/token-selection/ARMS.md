@@ -61,7 +61,7 @@ scores against.
   | **total** | **10,004,807,041** |
 
 - **Online selection warmup:** `t0_steps=0` / `t0_frac=0` for all online scorers. BLADE keeps its separate 500-step proxy warmup.
-- **Task loss:** full 20-label OLMo-ladder `task_loss_bpb` (RC 5-shot) via `task_loss_hook` / `TaskLossEvalCallback` on each permanent save. Evaluator: `scripts/farmshare/task_loss/eval_task_loss_olmo_core.py`.
+- **Task loss:** full 20-label OLMo-ladder `task_loss_bpb` (RC 5-shot) via `task_loss_hook` / `TaskLossEvalCallback` on each permanent save. Evaluator: the vendored `olmo_core_token_selection/eval_task_loss_olmo_core.py` (see `olmo_core_token_selection/PROVENANCE.md`).
   The **20 labels are (task, split) pairs over 10 OLMES benchmarks**, not 20 distinct benchmarks:
   ARC-Challenge, ARC-Easy, BoolQ, CSQA, HellaSwag, MMLU, OpenBookQA, PIQA, SocialIQA, WinoGrande.
   Two consequences worth stating explicitly when reading the macro number:

@@ -13,6 +13,8 @@ from __future__ import annotations
 import gzip
 import hashlib
 import json
+import os
+from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 from typing import Any
 
@@ -105,7 +107,7 @@ class JsonlShardWriter:
         if self.current_fh is not None:
             self.current_fh.close()
         self.current_path = self.out_dir / f"train-{self.shard_idx:05d}.jsonl.gz"
-        self.current_fh = gzip.open(self.current_path, "wb")
+        self.current_fh = gzip.open(self.current_path, "wb", compresslevel=1)
         self.current_size = 0
         self.written.append(self.current_path)
         self.shard_idx += 1
@@ -125,12 +127,38 @@ class JsonlShardWriter:
         return self.written
 
 
+def resolve_dclm_chunk_paths(run_dir: Path) -> list[Path]:
+    """Return pre-split DCLM chunk paths when available."""
+    chunks_dir = run_dir / "trim" / "dclm" / "label_chunks"
+    if not chunks_dir.is_dir():
+        return []
+    paths = sorted(chunks_dir.glob("dclm-label-*.json.gz"))
+    if not paths:
+        return []
+    return paths
+
+
+def merge_part_shards(part_dirs: list[Path], out_dir: Path) -> int:
+    """Rename per-part shards into one contiguous ``train-*.jsonl.gz`` sequence."""
+    out_dir.mkdir(parents=True, exist_ok=True)
+    for stale in out_dir.glob("train-*.jsonl.gz"):
+        stale.unlink()
+    shard_idx = 0
+    for part_dir in part_dirs:
+        for shard in sorted(part_dir.glob("train-*.jsonl.gz")):
+            dest = out_dir / f"train-{shard_idx:05d}.jsonl.gz"
+            shard.replace(dest)
+            shard_idx += 1
+    return shard_idx
+
+
 def stage_source_text(
     *,
     source: str,
     text_paths: list[Path],
     out_dir: Path,
     shard_bytes: int = MAX_TEXT_SHARD_BYTES,
+    seq_offsets: list[int] | None = None,
 ) -> dict[str, int]:
     """Write every selected source document once without re-tokenizing it."""
     print(f"staging text/{source}: {len(text_paths)} input path(s)", flush=True)
@@ -140,13 +168,18 @@ def stage_source_text(
     writer = JsonlShardWriter(out_dir, shard_bytes=shard_bytes)
     docs = 0
     skipped = 0
-    for path in text_paths:
+    offsets = seq_offsets or [0] * len(text_paths)
+    if len(offsets) != len(text_paths):
+        raise ValueError(f"{source}: seq_offsets length mismatch")
+    for path, seq_offset in zip(text_paths, offsets):
+        seq = int(seq_offset)
         for obj in iter_docs(path):
-            record = normalize_record(obj, source=source, seq=docs)
+            record = normalize_record(obj, source=source, seq=seq)
             if record is None:
                 skipped += 1
                 continue
             writer.write_record(record)
+            seq += 1
             docs += 1
     train_shards = writer.close()
     if not docs:
@@ -165,6 +198,89 @@ def stage_source_text(
     return stats
 
 
+def _stage_source_part(
+    *,
+    source: str,
+    text_path: Path,
+    out_dir: Path,
+    shard_bytes: int,
+    seq_offset: int,
+) -> dict[str, int]:
+    return stage_source_text(
+        source=source,
+        text_paths=[text_path],
+        out_dir=out_dir,
+        shard_bytes=shard_bytes,
+        seq_offsets=[seq_offset],
+    )
+
+
+def stage_source_text_parallel(
+    *,
+    source: str,
+    text_paths: list[Path],
+    out_dir: Path,
+    shard_bytes: int = MAX_TEXT_SHARD_BYTES,
+    workers: int = 32,
+    seq_offsets: list[int] | None = None,
+) -> dict[str, int]:
+    """Stage one source from multiple input shards in parallel, then merge."""
+    if len(text_paths) < 2:
+        return stage_source_text(
+            source=source,
+            text_paths=text_paths,
+            out_dir=out_dir,
+            shard_bytes=shard_bytes,
+            seq_offsets=seq_offsets,
+        )
+    workers = max(1, min(int(workers), len(text_paths)))
+    offsets = seq_offsets or [0] * len(text_paths)
+    if len(offsets) != len(text_paths):
+        raise ValueError(f"{source}: seq_offsets length mismatch")
+    parts_root = out_dir.parent / f".{source}-text-parts"
+    if parts_root.exists():
+        import shutil
+
+        shutil.rmtree(parts_root)
+    parts_root.mkdir(parents=True, exist_ok=True)
+    print(
+        f"staging text/{source}: {len(text_paths)} chunk(s) with {workers} workers",
+        flush=True,
+    )
+    totals = {"train_docs": 0, "train_shards": 0, "skipped_whitespace": 0}
+    part_dirs: list[Path] = []
+    with ProcessPoolExecutor(max_workers=workers) as pool:
+        futures = []
+        for index, (path, seq_offset) in enumerate(zip(text_paths, offsets)):
+            part_dir = parts_root / f"part-{index:05d}"
+            part_dirs.append(part_dir)
+            futures.append(
+                pool.submit(
+                    _stage_source_part,
+                    source=source,
+                    text_path=path,
+                    out_dir=part_dir,
+                    shard_bytes=shard_bytes,
+                    seq_offset=int(seq_offset),
+                )
+            )
+        for future in futures:
+            stats = future.result()
+            totals["train_docs"] += int(stats["train_docs"])
+            totals["train_shards"] += int(stats["train_shards"])
+            totals["skipped_whitespace"] += int(stats.get("skipped_whitespace", 0))
+    totals["train_shards"] = merge_part_shards(part_dirs, out_dir)
+    import shutil
+
+    shutil.rmtree(parts_root)
+    print(
+        f"staged text/{source}: docs={totals['train_docs']:,} "
+        f"shards={totals['train_shards']}",
+        flush=True,
+    )
+    return totals
+
+
 def stage_text_companion(
     *,
     sources: list[str],
@@ -172,19 +288,83 @@ def stage_text_companion(
     out_root: Path,
     shard_bytes: int = MAX_TEXT_SHARD_BYTES,
     text_paths_by_source: dict[str, list[Path]] | None = None,
+    parallel_sources: set[str] | None = None,
+    text_workers: int = 32,
+    skip_sources: set[str] | None = None,
 ) -> dict[str, dict[str, int]]:
     """Populate ``out_root/text/<source>/`` for every mix source."""
     text_root = out_root / "text"
     text_root.mkdir(parents=True, exist_ok=True)
+    ordered_sources = sorted(sources)
+    skip = skip_sources or set()
+    parallel = parallel_sources or set()
+    paths_by_source: dict[str, list[Path]] = {}
+    offsets_by_source: dict[str, list[int]] = {}
+    for source in ordered_sources:
+        if source in (text_paths_by_source or {}):
+            paths_by_source[source] = list(text_paths_by_source[source])
+        elif source == "dclm":
+            chunk_paths = resolve_dclm_chunk_paths(run_dir)
+            if chunk_paths:
+                paths_by_source[source] = chunk_paths
+                manifest = run_dir / "labels" / "dclm_chunk_manifest.jsonl"
+                if manifest.is_file():
+                    rows = [
+                        json.loads(line)
+                        for line in manifest.read_text(encoding="utf-8").splitlines()
+                        if line.strip()
+                    ]
+                    offsets_by_source[source] = [
+                        int(row.get("line_offset", 0)) for row in rows
+                    ]
+            else:
+                paths_by_source[source] = resolve_text_paths(
+                    source=source, run_dir=run_dir
+                )
+        else:
+            paths_by_source[source] = resolve_text_paths(
+                source=source, run_dir=run_dir
+            )
+
+    pending = [source for source in ordered_sources if source not in skip]
+    parallel_pending = [s for s in pending if s in parallel and len(paths_by_source[s]) > 1]
+    serial_pending = [s for s in pending if s not in parallel_pending]
     stats: dict[str, dict[str, int]] = {}
-    for source in sorted(sources):
-        paths = (text_paths_by_source or {}).get(source) or resolve_text_paths(
-            source=source, run_dir=run_dir
-        )
-        stats[source] = stage_source_text(
+
+    # Parallel multi-chunk sources (e.g. DCLM) run in this process so their
+    # own ProcessPoolExecutors are not nested inside another pool.
+    for source in parallel_pending:
+        stats[source] = stage_source_text_parallel(
             source=source,
-            text_paths=paths,
+            text_paths=paths_by_source[source],
             out_dir=text_root / source,
             shard_bytes=shard_bytes,
+            workers=text_workers,
+            seq_offsets=offsets_by_source.get(source),
         )
+
+    max_workers = min(len(serial_pending), max(1, os.cpu_count() or 1)) or 1
+    if serial_pending:
+        with ProcessPoolExecutor(max_workers=max_workers) as pool:
+            futures: dict[str, Any] = {
+                source: pool.submit(
+                    stage_source_text,
+                    source=source,
+                    text_paths=paths_by_source[source],
+                    out_dir=text_root / source,
+                    shard_bytes=shard_bytes,
+                    seq_offsets=offsets_by_source.get(source),
+                )
+                for source in serial_pending
+            }
+            for source in serial_pending:
+                stats[source] = futures[source].result()
+    for source in sorted(skip):
+        out_dir = text_root / source
+        shard_count = len(list(out_dir.glob("train-*.jsonl.gz")))
+        if shard_count == 0:
+            raise FileNotFoundError(
+                f"skip_sources requested {source!r} but no staged text shards exist"
+            )
+        print(f"skipped text/{source}: reusing {shard_count} shard(s)", flush=True)
     return stats

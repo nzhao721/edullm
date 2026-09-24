@@ -191,24 +191,23 @@ for how this drives each arm's contaminated exposure.
 
 ## Training-code provenance
 
-The 370M runs were launched from a dedicated OLMo-core worktree, not from this
-repository; this repository holds the recipe, the launch wrappers and the
-analysis. The branch for Skill-It was **`OLMo-core-skillit-370m`**, whose FarmShare adapters live
-under its own `.edullm/farmshare/` (submitted with
-`ARM_INDEX=0 bash .edullm/farmshare/submit_from_laptop.sh`). Those submit
-scripts mint AWS credentials on the operator's machine, sync branch code to
-scratch, stage sealed `edullm-data` inputs via Slurm, delete the credentials,
-then launch 8-GPU training with PyTorch SDPA (FlashAttention is not used on
-FarmShare). Queue sizing is overridable before submit:
+Where each Skill-It 370M run ran, as recorded in its W&B run metadata
+(`eduLLM/skillit`):
 
-```bash
-export TRAIN_GPUS=8 TRAIN_CPUS=64 TRAIN_MEM=384G TRAIN_TIME=72:00:00
-export STAGE_CPUS=8 STAGE_MEM=32G STAGE_TIME=06:00:00
-```
+| Arm | W&B run | Platform |
+|-----|---------|----------|
+| Offline probe | `87ad0201c4b5781a3df50d7bb394776c` | FarmShare, 4×L40S |
+| Online derivative | `c0844ce36f24d6773c7f45cb31d810f4` | FarmShare, 4×L40S |
 
-The W&B session-push helper those scripts call is
-`scripts/farmshare/push_wandb_session_to_farmshare.sh` in this repository; the
-AWS-credential helper they also called has been removed.
+Both ran `.edullm/runpod/entrypoint.py` from a copy of OLMo-core's Skill-It
+`.edullm/` code synced to FarmShare scratch. Those files live on OLMo-core's
+Skill-It branches (`edullm/skillit-370m`, `reconnect/skillit-370m`), but the
+versions that ran were uncommitted: the two run copies are identical to each
+other, and their `train_skillit_370m.py`, `skillit_entrypoint.py` and
+`skillit_controller.py` match no commit on any OLMo-core branch and no file in
+this repository. The controls they are compared against are the
+MixLaw runs; see
+[`../mixlaw/README.md`](../mixlaw/README.md#training-code-provenance).
 
 ## Evaluation and uncertainty
 

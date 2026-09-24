@@ -52,24 +52,23 @@ Exact domain weights for these four arms are in Validated mixture weights below.
 
 ## Training-code provenance
 
-The 370M runs were launched from a dedicated OLMo-core worktree, not from this
-repository; this repository holds the recipe, the launch wrappers and the
-analysis. The branch for MixLaw was **`OLMo-core`**, whose FarmShare adapters live
-under its own `.edullm/farmshare/` (submitted with
-`ARM_INDEX=0 bash .edullm/farmshare/submit_from_laptop.sh`). Those submit
-scripts mint AWS credentials on the operator's machine, sync branch code to
-scratch, stage sealed `edullm-data` inputs via Slurm, delete the credentials,
-then launch 8-GPU training with PyTorch SDPA (FlashAttention is not used on
-FarmShare). Queue sizing is overridable before submit:
+Where each reported 370M run ran, as recorded in its W&B run metadata
+(`eduLLM/mixlaw-1`):
 
-```bash
-export TRAIN_GPUS=8 TRAIN_CPUS=64 TRAIN_MEM=384G TRAIN_TIME=72:00:00
-export STAGE_CPUS=8 STAGE_MEM=32G STAGE_TIME=06:00:00
-```
+| Arm | W&B run | Platform | Code |
+|-----|---------|----------|------|
+| OLMo Mix 1124 (seed 12536) | `f8adf30b7d9d5754221bf27cd86aed2f` | RunPod, 8×A100-80GB | OLMo-core branch `edullm/mixlaw-validation-370m` at `1aec878` |
+| Data Mixing Laws paper | `1e9df6cccc294c6d0f1bce328497f6a6` | RunPod, 8×A100-80GB | same branch, at `1aec878` |
+| LightGBM | `78a3a85b7a5304a426f71629de27b198` | RunPod, 8×A100-80GB | same branch, at `1aec878` |
+| MixLaw | `83772a7c8c5da65a988ea26f8665673e` | RunPod, 8×A100-80GB | same branch; W&B records `855af63`, and the RunPod adapter it ran was committed in the next commit, `1aec878` |
+| OLMo Mix 1124 (seed 12345) | `fz8z82lh` | FarmShare, 4×L40S | this directory's [`train_mixlaw_validation_370m.py`](train_mixlaw_validation_370m.py) |
 
-The W&B session-push helper those scripts call is
-`scripts/farmshare/push_wandb_session_to_farmshare.sh` in this repository; the
-AWS-credential helper they also called has been removed.
+The four RunPod arms ran OLMo-core's `.edullm/runpod/entrypoint.py`, which
+calls `.edullm/mixlaw_entrypoint.py` on that branch; they did not use the
+trainer in this directory. The `eduLLM/skillit` W&B project holds copies of two
+of them for comparison against the Skill-It arms: `ugzjxsda` is a clone of the
+Data Mixing Laws paper run, and `2m00hdwr` replays the LightGBM run's eval
+metrics.
 
 ## Proxy pilot (DataDecide-60M)
 
