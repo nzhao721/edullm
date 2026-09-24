@@ -44,15 +44,15 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Prefer an explicit checkout (FarmShare ephemeral RUN_DIR copies launch into scratch).
-if [[ -n "${EDULLM_ROOT:-}" && -d "${EDULLM_ROOT}/experiments/curriculum" ]]; then
+if [[ -n "${EDULLM_ROOT:-}" && -d "${EDULLM_ROOT}/experiments/skill-dag" ]]; then
   REPO_ROOT="$(cd "${EDULLM_ROOT}" && pwd)"
-elif [[ -d "${SCRIPT_DIR}/../../../experiments/curriculum" ]]; then
+elif [[ -d "${SCRIPT_DIR}/../../../experiments/skill-dag" ]]; then
   REPO_ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
 else
   echo "[launch_validation_370m] error: set EDULLM_ROOT to the edullm checkout" >&2
   exit 2
 fi
-export PYTHONPATH="${SCRIPT_DIR}${PYTHONPATH:+:${PYTHONPATH}}:${REPO_ROOT}/experiments/token-selection:${REPO_ROOT}/experiments/curriculum"
+export PYTHONPATH="${SCRIPT_DIR}${PYTHONPATH:+:${PYTHONPATH}}:${REPO_ROOT}/experiments/token-selection"
 
 : "${MIX_NAME:?Set MIX_NAME to a validation_mixtures_10b.json run_name}"
 : "${MIX_WEIGHTS_JSON:?Set MIX_WEIGHTS_JSON to the arm mix_weights.json}"

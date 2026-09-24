@@ -43,9 +43,9 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Prefer an explicit checkout (FarmShare ephemeral RUN_DIR copies launch into scratch).
-if [[ -n "${EDULLM_ROOT:-}" && -d "${EDULLM_ROOT}/experiments/curriculum" ]]; then
+if [[ -n "${EDULLM_ROOT:-}" && -d "${EDULLM_ROOT}/experiments/skill-dag" ]]; then
   REPO_ROOT="$(cd "${EDULLM_ROOT}" && pwd)"
-elif [[ -d "${SCRIPT_DIR}/../../../experiments/curriculum" ]]; then
+elif [[ -d "${SCRIPT_DIR}/../../../experiments/skill-dag" ]]; then
   REPO_ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
 else
   REPO_ROOT=""
@@ -54,13 +54,13 @@ MIXLAW_ROOT="${MIXLAW_ROOT:-${REPO_ROOT:+${REPO_ROOT}/experiments/skill-dag/mixl
 if [[ -z "${MIXLAW_ROOT}" || ! -d "${MIXLAW_ROOT}" ]]; then
   MIXLAW_ROOT="$(cd "${SCRIPT_DIR}/../mixlaw" 2>/dev/null && pwd || true)"
 fi
-# curriculum (train_curriculum_regmix_370m) + token-selection + mixlaw domain_stream
+# token-selection + mixlaw (domain_stream, olmo_370m_core)
 export PYTHONPATH="${SCRIPT_DIR}${PYTHONPATH:+:${PYTHONPATH}}"
 if [[ -n "${MIXLAW_ROOT}" && -d "${MIXLAW_ROOT}" ]]; then
   export PYTHONPATH="${MIXLAW_ROOT}:${PYTHONPATH}"
 fi
 if [[ -n "${REPO_ROOT}" ]]; then
-  export PYTHONPATH="${REPO_ROOT}/experiments/curriculum:${REPO_ROOT}/experiments/token-selection:${PYTHONPATH}"
+  export PYTHONPATH="${REPO_ROOT}/experiments/token-selection:${PYTHONPATH}"
 fi
 
 TRAIN_SCRIPT="${TRAIN_SCRIPT:-${SCRIPT_DIR}/train_skillit_370m.py}"
@@ -138,13 +138,13 @@ case "${RESUME_MODE}" in
     ;;
 esac
 
-if [[ -z "${REPO_ROOT}" || ! -d "${REPO_ROOT}/experiments/curriculum" ]]; then
-  echo "[launch_arm] error: cannot resolve EDULLM_ROOT/REPO_ROOT with experiments/curriculum" >&2
+if [[ -z "${REPO_ROOT}" || ! -d "${REPO_ROOT}/experiments/skill-dag" ]]; then
+  echo "[launch_arm] error: cannot resolve EDULLM_ROOT/REPO_ROOT with experiments/skill-dag" >&2
   echo "  set EDULLM_ROOT to the edullm checkout." >&2
   exit 2
 fi
-if [[ ! -f "${REPO_ROOT}/experiments/curriculum/train_curriculum_regmix_370m.py" ]]; then
-  echo "[launch_arm] error: missing ${REPO_ROOT}/experiments/curriculum/train_curriculum_regmix_370m.py" >&2
+if [[ ! -f "${REPO_ROOT}/experiments/skill-dag/mixlaw/olmo_370m_core.py" ]]; then
+  echo "[launch_arm] error: missing ${REPO_ROOT}/experiments/skill-dag/mixlaw/olmo_370m_core.py" >&2
   exit 2
 fi
 

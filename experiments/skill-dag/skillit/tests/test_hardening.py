@@ -107,11 +107,11 @@ def test_trainer_has_explicit_resume_and_bootstrap_only_s3_read() -> None:
     text = _TRAINER.read_text(encoding="utf-8")
     assert "choose exactly one resume mode" in text
     assert "find_latest_checkpoint" not in text
-    assert "curr.stage_load_path(" in text
+    assert "core.stage_load_path(" in text
     assert 'f"{expected_root}/progress/"' in text
     assert "required post-update step" in text
     assert "_validate_checkpoint_source(" in text
-    assert "curr.export_curriculum_artifacts(" not in text
+    assert "export_curriculum_artifacts(" not in text
     assert "export_curriculum_checkpoint(" not in text
     assert "--s3-export" not in text
     assert "runtime_scratch" in text

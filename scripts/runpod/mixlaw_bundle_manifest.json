@@ -1,13 +1,12 @@
 {
   "schema_version": 1,
   "files": [
-    "experiments/curriculum/curriculum_pacing.py",
-    "experiments/curriculum/train_curriculum_regmix_370m.py",
     "experiments/skill-dag/mixlaw/domain_stream.py",
     "experiments/skill-dag/mixlaw/launch_validation_370m.sh",
     "experiments/skill-dag/mixlaw/mixlaw_common.py",
     "experiments/skill-dag/mixlaw/mixlaw_runtime.py",
     "experiments/skill-dag/mixlaw/mixlaw_wandb.py",
+    "experiments/skill-dag/mixlaw/olmo_370m_core.py",
     "experiments/skill-dag/mixlaw/preflight_validation_370m.py",
     "experiments/skill-dag/mixlaw/prepare_validation_370m_data.py",
     "experiments/skill-dag/mixlaw/stage_validation_pool_from_edullm_data.py",

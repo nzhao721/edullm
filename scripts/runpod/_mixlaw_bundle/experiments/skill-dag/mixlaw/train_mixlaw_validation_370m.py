@@ -41,13 +41,12 @@ from pathlib import Path
 from typing import Any, Dict, Optional, Set
 
 _MIXLAW = Path(__file__).resolve().parent
-_CUR_ROOT = _MIXLAW.parent.parent / "curriculum"
 _TS_ROOT = _MIXLAW.parent.parent / "token-selection"
-for _p in (_MIXLAW, _CUR_ROOT, _TS_ROOT):
+for _p in (_MIXLAW, _TS_ROOT):
     if str(_p) not in sys.path:
         sys.path.insert(0, str(_p))
 
-# Curriculum hard-disables W&B at import; snapshot/restore the W&B session env.
+# Snapshot/restore the W&B session env around the trainer-core import.
 from mixlaw_wandb import (  # noqa: E402
     add_wandb_args,
     finish_wandb,
@@ -78,7 +77,7 @@ from token_selection.olmo_ext.checkpoint_ladder import (
 from token_selection.olmo_ext.task_loss_hook import resolve_eval_script
 from token_selection.olmo_ext.wandb_logging import task_loss_payload_complete
 
-import train_curriculum_regmix_370m as curr  # noqa: E402
+import olmo_370m_core as core  # noqa: E402
 
 restore_wandb_env(_WANDB_ENV_SNAPSHOT)
 
@@ -98,11 +97,11 @@ from stage_validation_pool_from_edullm_data import (  # noqa: E402
 
 log = logging.getLogger("train_mixlaw_validation_370m")
 
-SEQ_LEN = curr.SEQ_LEN
-GLOBAL_BATCH_TOKENS = curr.GLOBAL_BATCH_TOKENS
-MICROBATCH_TOKENS = curr.MICROBATCH_TOKENS
-PEAK_LR = curr.PEAK_LR
-DEFAULT_SEED = curr.DEFAULT_SEED
+SEQ_LEN = core.SEQ_LEN
+GLOBAL_BATCH_TOKENS = core.GLOBAL_BATCH_TOKENS
+MICROBATCH_TOKENS = core.MICROBATCH_TOKENS
+PEAK_LR = core.PEAK_LR
+DEFAULT_SEED = core.DEFAULT_SEED
 DEFAULT_LENGTH_TOKENS = MIXLAW_DEFAULT_LENGTH_TOKENS
 CONFIG_NAME = "OLMo-2-370M-mixlaw-validation"
 DEFAULT_RECIPE = _MIXLAW / "validation_mixtures_10b.json"
@@ -119,7 +118,7 @@ def save_checkpoint(
 
     W&B upload and the local durable marker are committed after this returns.
     """
-    train_module_sd = curr.gather_train_module_state_dict(train_module)
+    train_module_sd = core.gather_train_module_state_dict(train_module)
     ok = True
     err = "MixLaw local checkpoint save failed"
     if get_rank() == 0:
@@ -158,7 +157,7 @@ def save_checkpoint(
             ok = False
             err = f"MixLaw local checkpoint save failed: {exc}"
             log.error("%s", err)
-    curr._abort_all_ranks(err, ok=ok)
+    core._abort_all_ranks(err, ok=ok)
 
 
 def _broadcast_export_status(
@@ -422,7 +421,7 @@ def _pause_eval_reload(
     # olmo-core caches a process-global DeviceMesh; build_train_module would
     # raise "world mesh already exists" without clearing it after the first build.
     _reset_olmo_world_mesh()
-    train_module = curr.build_train_module(
+    train_module = core.build_train_module(
         lr=lr,
         lr_warmup_steps=int(lr_warmup_steps),
         alpha_f=float(lr_alpha_f),
@@ -430,7 +429,7 @@ def _pause_eval_reload(
         rank_microbatch_tokens=int(rank_micro_tokens),
     )
     train_module._attach_trainer(books)  # type: ignore[arg-type]
-    loaded = curr.load_checkpoint(ckpt_dir, train_module)
+    loaded = core.load_checkpoint(ckpt_dir, train_module)
     books.global_step = int(loaded)
     books.global_train_tokens_seen = int(loaded) * int(tokens_per_step)
     if is_distributed():
@@ -475,7 +474,7 @@ def _maybe_pause_eval_reload(
 
 
 @dataclass
-class _MixlawBooks(curr._Bookkeeping):
+class _MixlawBooks(core._Bookkeeping):
     """Capture CE loss from TrainModule for W&B / jsonl (curriculum stub is a no-op)."""
 
     last_ce_loss: Optional[float] = field(default=None, repr=False)
@@ -808,8 +807,8 @@ def _run(args: argparse.Namespace) -> None:
             else "local_scratch+wandb"
         ),
         "train_stack": "TransformerTrainModule HSDP bf16 SkipStepAdamW compile",
-        "tokenizer": curr.TOKENIZER_ID,
-        "vocab_size": curr.EMBEDDING_SIZE,
+        "tokenizer": core.TOKENIZER_ID,
+        "vocab_size": core.EMBEDDING_SIZE,
         "length_tokens": int(args.length_tokens),
         "global_batch_tokens": GLOBAL_BATCH_TOKENS,
         "sequence_length": SEQ_LEN,
@@ -889,7 +888,7 @@ def _run(args: argparse.Namespace) -> None:
                 tokens_per_step=tokens_per_step,
             )
 
-    train_module = curr.build_train_module(
+    train_module = core.build_train_module(
         lr=lr,
         lr_warmup_steps=int(args.lr_warmup_steps),
         alpha_f=float(args.lr_alpha_f),
@@ -917,12 +916,12 @@ def _run(args: argparse.Namespace) -> None:
                 f"--load-path {load_dir} has no state.pt; platform S3 restore is "
                 "not supported, so restore the checkpoint to local scratch first"
             )
-        start_step = curr.load_checkpoint(load_dir, train_module)
+        start_step = core.load_checkpoint(load_dir, train_module)
     elif args.fresh:
         if rank == 0:
             log.info("--fresh: starting from scratch (ephemeral runtime)")
     else:
-        leftover = curr.find_latest_checkpoint(save_folder)
+        leftover = core.find_latest_checkpoint(save_folder)
         if leftover is not None:
             raise SystemExit(
                 f"found local checkpoint {leftover} under job-scoped --save-folder; "

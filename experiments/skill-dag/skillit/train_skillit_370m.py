@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""Skill-It dual-arm OLMo2-370M trainer (10B tokens, curriculum contract).
+"""Skill-It dual-arm OLMo2-370M trainer (10B tokens).
 
-Fork of ``experiments/curriculum/train_curriculum_regmix_370m.py`` with:
+Model, checkpoint and bookkeeping code comes from ``../mixlaw/olmo_370m_core.py``;
+on top of it this trainer adds:
 
   * ``DomainMixtureStream`` over a working pool staged from published
     ``s3://edullm-data/`` (``edullm_data.read.dataset_paths`` / ``resolve_latest``)
@@ -47,13 +48,12 @@ _SKILLIT = Path(__file__).resolve().parent
 # skillit/ → skill-dag/ → experiments/  (same layout as mixlaw/train_mixlaw_validation_370m.py)
 _EXPERIMENTS = _SKILLIT.parent.parent
 _MIXLAW = _SKILLIT.parent / "mixlaw"
-_CUR_ROOT = _EXPERIMENTS / "curriculum"
 _TS_ROOT = _EXPERIMENTS / "token-selection"
 # Prefer mixlaw for shared DomainMixtureStream; FarmShare staging copies
 # mixlaw/domain_stream.py into RUN_DIR alongside this script. When the trainer
 # itself is copied to an ephemeral RUN_DIR, __file__-relative roots miss the
-# repo — launch/submit must put curriculum + token-selection on PYTHONPATH.
-for _p in (_MIXLAW, _SKILLIT, _CUR_ROOT, _TS_ROOT):
+# repo — launch/submit must put mixlaw + token-selection on PYTHONPATH.
+for _p in (_MIXLAW, _SKILLIT, _TS_ROOT):
     if _p.is_dir() and str(_p) not in sys.path:
         sys.path.insert(0, str(_p))
 
@@ -71,7 +71,7 @@ from token_selection.olmo_ext.checkpoint_ladder import (
 )
 from token_selection.olmo_ext.task_loss_hook import resolve_eval_script
 
-import train_curriculum_regmix_370m as curr  # noqa: E402
+import olmo_370m_core as core  # noqa: E402
 from domain_stream import DomainMixtureStream  # noqa: E402  # mixlaw (or staged copy)
 from mixlaw_common import CURVE_FAMILIES, CURVE_TASK_LOSS_LABELS, DOMAINS, task_family  # noqa: E402
 from prepare_skillit_370m_data import (  # noqa: E402
@@ -103,12 +103,12 @@ from wandb_logging import (  # noqa: E402
 
 log = logging.getLogger("train_skillit_370m")
 
-SEQ_LEN = curr.SEQ_LEN
-GLOBAL_BATCH_TOKENS = curr.GLOBAL_BATCH_TOKENS
-MICROBATCH_TOKENS = curr.MICROBATCH_TOKENS
-PEAK_LR = curr.PEAK_LR
-DEFAULT_SEED = curr.DEFAULT_SEED
-DEFAULT_LENGTH_TOKENS = curr.DEFAULT_LENGTH_TOKENS
+SEQ_LEN = core.SEQ_LEN
+GLOBAL_BATCH_TOKENS = core.GLOBAL_BATCH_TOKENS
+MICROBATCH_TOKENS = core.MICROBATCH_TOKENS
+PEAK_LR = core.PEAK_LR
+DEFAULT_SEED = core.DEFAULT_SEED
+DEFAULT_LENGTH_TOKENS = core.DEFAULT_LENGTH_TOKENS
 CONFIG_NAME = "OLMo-2-370M-skillit"
 LEGACY_RESUME_S3_ROOT = "s3://edullm-checkpoints/skillit"
 
@@ -446,7 +446,7 @@ def _stage_resume_path(
         try:
             # This is a read-only bootstrap at run start; SkillIt never writes
             # checkpoints or progress back to S3.
-            dest = curr.stage_load_path(
+            dest = core.stage_load_path(
                 raw,
                 save_folder=save_folder,
                 s3_export=True,
@@ -464,7 +464,7 @@ def _stage_resume_path(
         except Exception as exc:  # noqa: BLE001
             ok = False
             error = f"failed to stage SkillIt resume artifacts from {raw}: {exc}"
-    curr._abort_all_ranks(error or "SkillIt S3 resume staging failed", ok=ok)
+    core._abort_all_ranks(error or "SkillIt S3 resume staging failed", ok=ok)
     if is_distributed():
         dist.barrier()
     if not (dest / "state.pt").is_file():
@@ -549,7 +549,7 @@ def _pause_eval_reload(
 
     def reload_train_state() -> Any:
         _reset_olmo_world_mesh()
-        module = curr.build_train_module(
+        module = core.build_train_module(
             lr=lr,
             lr_warmup_steps=int(args.lr_warmup_steps),
             alpha_f=float(args.lr_alpha_f),
@@ -557,7 +557,7 @@ def _pause_eval_reload(
             rank_microbatch_tokens=rank_micro_tokens,
         )
         module._attach_trainer(books)  # type: ignore[arg-type]
-        loaded = curr.load_checkpoint(ckpt_dir, module)
+        loaded = core.load_checkpoint(ckpt_dir, module)
         books.global_step = int(loaded)
         books.global_train_tokens_seen = int(loaded) * int(tokens_per_step)
         return module
@@ -599,7 +599,7 @@ def _wandb_upload_or_abort(
                 error = f"{what} failed: {exc}"
             else:
                 log.warning("%s failed in local-only smoke mode: %s", what, exc)
-    curr._abort_all_ranks(error or f"{what} failed", ok=ok)
+    core._abort_all_ranks(error or f"{what} failed", ok=ok)
 
 
 def main() -> None:
@@ -714,8 +714,8 @@ def _run(args: argparse.Namespace) -> None:
         "artifact_storage": "runtime_scratch",
         "allow_local_only": bool(args.allow_local_only),
         "train_stack": "TransformerTrainModule HSDP bf16 SkipStepAdamW compile",
-        "tokenizer": curr.TOKENIZER_ID,
-        "vocab_size": curr.EMBEDDING_SIZE,
+        "tokenizer": core.TOKENIZER_ID,
+        "vocab_size": core.EMBEDDING_SIZE,
         "length_tokens": int(args.length_tokens),
         "global_batch_tokens": GLOBAL_BATCH_TOKENS,
         "sequence_length": SEQ_LEN,
@@ -815,19 +815,19 @@ def _run(args: argparse.Namespace) -> None:
             else:
                 log.warning("W&B initialization failed in local-only smoke mode: %s", exc)
             wb_run = None
-    curr._abort_all_ranks(
+    core._abort_all_ranks(
         wandb_init_error or "production W&B initialization failed",
         ok=wandb_init_ok,
     )
 
-    train_module = curr.build_train_module(
+    train_module = core.build_train_module(
         lr=lr,
         lr_warmup_steps=int(args.lr_warmup_steps),
         alpha_f=float(args.lr_alpha_f),
         compile_model=bool(args.compile),
         rank_microbatch_tokens=rank_micro_tokens,
     )
-    books = curr._Bookkeeping(
+    books = core._Bookkeeping(
         global_step=0,
         max_steps=total_steps,
         global_batch_size=GLOBAL_BATCH_TOKENS,
@@ -850,7 +850,7 @@ def _run(args: argparse.Namespace) -> None:
             arm_id=args.arm_id,
             a_mode=args.a_mode,
         )
-        start_step = curr.load_checkpoint(load_dir, train_module)
+        start_step = core.load_checkpoint(load_dir, train_module)
 
     # Restore domain weights after the last Skill-It update at or before start_step.
     if start_step > 0:
@@ -912,7 +912,7 @@ def _run(args: argparse.Namespace) -> None:
                     baseline_error = f"step-0 W&B Skill-It artifact upload failed: {exc}"
                 else:
                     log.warning("step-0 artifact upload failed in local-only mode: %s", exc)
-        curr._abort_all_ranks(
+        core._abort_all_ranks(
             baseline_error or "step-0 W&B Skill-It artifact upload failed",
             ok=baseline_ok,
         )
@@ -929,7 +929,7 @@ def _run(args: argparse.Namespace) -> None:
         if is_distributed():
             dist.barrier()
         ckpt0 = save_folder / "step0"
-        curr.save_checkpoint(ckpt0, 0, train_module, args, meta)
+        core.save_checkpoint(ckpt0, 0, train_module, args, meta)
         if bool(args.task_loss_on_save):
             del train_module
             train_module, payload0 = _pause_eval_reload(
@@ -1043,7 +1043,7 @@ def _run(args: argparse.Namespace) -> None:
             if is_distributed():
                 dist.barrier()
             ckpt_dir = save_folder / f"step{global_step}"
-            curr.save_checkpoint(ckpt_dir, global_step, train_module, args, meta)
+            core.save_checkpoint(ckpt_dir, global_step, train_module, args, meta)
             need_sync = global_step in update_set
             eval_payload: Optional[Mapping[str, Any]] = None
             if bool(args.task_loss_on_save):
@@ -1087,7 +1087,7 @@ def _run(args: argparse.Namespace) -> None:
             if need_sync:
                 # Prefer crash over continuing with stale RegMix domain weights.
                 if is_distributed():
-                    curr._abort_all_ranks(
+                    core._abort_all_ranks(
                         update_err or "Skill-It update failed",
                         ok=update_ok,
                     )
@@ -1171,7 +1171,7 @@ def _run(args: argparse.Namespace) -> None:
             final_ok = False
             final_err = f"final W&B artifact upload / teardown failed: {exc}"
             log.error("%s", final_err)
-    curr._abort_all_ranks(final_err, ok=final_ok)
+    core._abort_all_ranks(final_err, ok=final_ok)
 
 
 def _restore_weights_from_jsonl(
