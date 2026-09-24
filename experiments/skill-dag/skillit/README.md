@@ -199,14 +199,15 @@ Where each Skill-It 370M run ran, as recorded in its W&B run metadata
 | Offline probe | `87ad0201c4b5781a3df50d7bb394776c` | FarmShare, 4×L40S |
 | Online derivative | `c0844ce36f24d6773c7f45cb31d810f4` | FarmShare, 4×L40S |
 
-Both ran `.edullm/runpod/entrypoint.py` from a copy of OLMo-core's Skill-It
-`.edullm/` code synced to FarmShare scratch. Those files live on OLMo-core's
-Skill-It branches (`edullm/skillit-370m`, `reconnect/skillit-370m`), but the
-versions that ran were uncommitted: the two run copies are identical to each
-other, and their `train_skillit_370m.py`, `skillit_entrypoint.py` and
-`skillit_controller.py` match no commit on any OLMo-core branch and no file in
-this repository. The controls they are compared against are the
-MixLaw runs; see
+Both ran `.edullm/runpod/entrypoint.py` from an uncommitted copy of OLMo-core's
+Skill-It `.edullm/` code on FarmShare scratch, launched with
+`train_no_aws.sbatch`. That code is vendored in
+[`olmo_core_skillit/`](olmo_core_skillit/); its
+[`PROVENANCE.md`](olmo_core_skillit/PROVENANCE.md) records where it came from,
+how it differs from the nearest upstream commit (`f2ded0b6` on
+`edullm/skillit-370m`), and what was left out. The `train_skillit_370m.py` in
+this directory is a separate trainer; the reported runs did not use it. The
+controls they are compared against are the MixLaw runs; see
 [`../mixlaw/README.md`](../mixlaw/README.md#training-code-provenance).
 
 ## Evaluation and uncertainty

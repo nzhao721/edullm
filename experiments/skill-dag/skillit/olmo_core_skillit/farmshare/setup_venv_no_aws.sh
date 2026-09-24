@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+# Create or refresh the per-run venv on FarmShare scratch, no AWS/S3 packages.
+# Skill-It's local-manifest resolver (.edullm/runpod/entrypoint.py resolve_local_datasets)
+# never imports edullm_data/boto3 -- those are only pulled in lazily by the
+# AWS-staging path this handoff does not use.
+set -Eeuo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck disable=SC1091
+source "${SCRIPT_DIR}/config.env"
+# shellcheck disable=SC1091
+source "${SCRIPT_DIR}/common.sh"
+
+VENV="${VENV:-${RUN_DIR}/venv}"
+PYTHON="${PYTHON:-python3}"
+
+if [[ -x "${VENV}/bin/python" ]]; then
+  if "${VENV}/bin/python" -c "import torch, olmo_core; assert torch.__version__.startswith('2.9')" 2>/dev/null; then
+    echo "venv ready: ${VENV}"
+    exit 0
+  fi
+fi
+
+"${PYTHON}" -m venv "${VENV}"
+# shellcheck disable=SC1091
+source "${VENV}/bin/activate"
+pip install -q -U pip wheel
+pip uninstall -q -y torch torchvision torchaudio 2>/dev/null || true
+pip install -q --no-cache-dir \
+  --index-url https://download.pytorch.org/whl/cu124 \
+  --extra-index-url https://pypi.org/simple \
+  "torch==2.9.0" "torchvision==0.24.0" "torchaudio==2.9.0"
+pip install -q --no-cache-dir -e "${REPO_DIR}[wandb]"
+if [[ -n "${EVAL_REQUIREMENTS:-}" && -f "${REPO_DIR}/.edullm/${EVAL_REQUIREMENTS}" ]]; then
+  pip install -q --no-cache-dir -r "${REPO_DIR}/.edullm/${EVAL_REQUIREMENTS}"
+fi
+
+PYTHONPATH="${REPO_DIR}/src:${REPO_DIR}/.edullm" "${VENV}/bin/python" - <<'PY'
+import olmo_core
+import torch
+
+print("farmshare venv ok (no-aws)", torch.__version__, olmo_core.__file__)
+PY
