@@ -42,16 +42,14 @@ tagger/mixer configs).
 
 ## What is deliberately excluded
 
-- **Curriculum/labeling infrastructure under `regmix/`.** The source
-  directory's `regmix/` holds a second job graph — difficulty labels
-  (compression ratio, Flesch, MTLD, LM learnability) and a curriculum
-  training index — for a different paper (the curriculum-difficulty
-  project). None of it touches `pretrain/regmix-10b` itself; it only reads
+- **Labeling infrastructure under `regmix/`.** The source directory's
+  `regmix/` holds a second job graph — difficulty labels (compression
+  ratio, Flesch, MTLD, LM learnability) — for a different paper (the
+  curriculum-difficulty project). None of it touches `pretrain/regmix-10b` itself; it only reads
   the finished corpus. Excluded: `build_regmix_label_manifest.py`,
-  `capture_regmix_parent_layout.py`, `build_regmix_lm_chunks.py`,
+  `build_regmix_lm_chunks.py`,
   `build_regmix_lm_retry_indices.py`, everything under
-  `*_regmix_doc_lm*`/`*_regmix_labels*`, the
-  `publish_regmix_curriculum_edullm_data.py` curriculum-index publisher, and
+  `*_regmix_doc_lm*`/`*_regmix_labels*`, and
   every FarmShare `check_*`/`compare_*`/`diagnose_*`/`status_*` operational
   script for that job graph.
 - **The same shape under `olmo/`.** `build_label_manifest.py`,
