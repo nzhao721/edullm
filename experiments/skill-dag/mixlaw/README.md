@@ -335,13 +335,13 @@ weakly identified. Treat the specific LightGBM weight vector accordingly.
 
 | Metric | Mixing law | LightGBM |
 |--------|-----------:|---------:|
-| Macro min | 1.8526 | 1.8408 |
-| Macro p50 | 1.9131 | 1.9297 |
-| Macro p95 | 2.0166 | 2.0022 |
-| Macro p99 | 2.0602 | 2.0217 |
-| Macro max | 2.1395 | 2.0339 |
-| Macro mean ± std | 1.9231 ± 0.0467 | 1.9393 ± 0.0441 |
-| % inside pilot macro range | 2.3% | 0.0% |
+| Macro min | 1.7838 | 1.8408 |
+| Macro p50 | 1.8895 | 1.9297 |
+| Macro p95 | 1.9973 | 2.0022 |
+| Macro p99 | 2.0460 | 2.0217 |
+| Macro max | 2.1064 | 2.0339 |
+| Macro mean ± std | 1.8968 ± 0.0542 | 1.9393 ± 0.0441 |
+| % inside pilot macro range | 1.1% | 0.0% |
 | Mixtures with macro > 3 bpb | 0 | 0 |
 | Mixtures with macro > 5 bpb | 0 | 0 |
 
