@@ -150,16 +150,7 @@ def checkpoint_uri_from_durable_metadata(
     if not isinstance(uri, str) or not uri.strip():
         raise MixLawContractError(f"missing checkpoint_uri in {path}")
     step_name = f"step{step}"
-    if uri.startswith("s3://"):
-        expected_prefix = (
-            f"s3://edullm-checkpoints/mixlaw/370m-validation/{mix_name}/checkpoints/"
-        )
-        if not uri.startswith(expected_prefix) or uri.rstrip("/").split("/")[-1] != step_name:
-            raise MixLawContractError(
-                f"durable metadata checkpoint does not match mix={mix_name!r} "
-                f"step={step}: {uri}"
-            )
-    elif Path(uri).name != step_name:
+    if Path(uri).name != step_name:
         raise MixLawContractError(
             f"durable metadata checkpoint does not match step={step}: {uri}"
         )

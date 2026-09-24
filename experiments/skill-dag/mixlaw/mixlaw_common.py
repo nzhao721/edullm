@@ -110,11 +110,6 @@ EDULLM_DATA_DATASET_ID = "pretrain/olmo-127b"
 EDULLM_DATA_SOURCE_LABEL = "source"
 POOL_PROVENANCE_NAME = "edullm_data_source.json"
 
-# Durable artifacts for the 24×60M pilot (scratch is ephemeral).
-CHECKPOINT_BUCKET = "edullm-checkpoints"
-MIXLAW_60M_S3_ROOT = "mixlaw/60m-pilot"
-DEFAULT_RESULTS_S3 = f"s3://{CHECKPOINT_BUCKET}/{MIXLAW_60M_S3_ROOT}"
-
 # Legacy raw-shard inventory URI for pre-edullm-data helpers only
 # (``select_and_fetch_shards.py``). DataDecide-60M must not read this.
 OLMOHQ_S3 = "s3://edullm-datasets/olmo100b/olmo-mix-1124-30b"

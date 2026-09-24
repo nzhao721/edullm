@@ -21,13 +21,10 @@ if [[ ! -d "${BASE_RUN}/data/data/dclm" ]]; then
 fi
 
 DATASETS_SHARED="${EDULLM_ROOT}/datasets"
-FARMSHARE="${EDULLM_ROOT}/scripts/farmshare"
 for f in olmo_shard_utils.py download_s3_shard.py trim_olmo_overshoot.py trim_and_tokenize_regmix.py; do
   cp -a "${DATASETS_SHARED}/${f}" "${RUN_DIR}/scripts/"
 done
 cp -a "${DATASETS_SHARED}/download_s3_shard.sbatch" "${RUN_DIR}/scripts/"
-cp -a "${FARMSHARE}/prepare_aws_session.sh" "${RUN_DIR}/scripts/" 2>/dev/null || true
-cp -a "${FARMSHARE}/write_aws_session_env.py" "${RUN_DIR}/scripts/" 2>/dev/null || true
 
 python3 -m venv "${RUN_DIR}/venv"
 # shellcheck disable=SC1091
@@ -109,7 +106,7 @@ FINAL_JOB=$(sbatch --parsable --exclude=wheat-01 \
   --time=12:00:00 \
   ${FINAL_DEP:+--dependency="${FINAL_DEP}"} \
   --chdir="${RUN_DIR}" \
-  --wrap "set -Eeuo pipefail; source ${RUN_DIR}/env.sh; source ${VENV}/bin/activate; export EDULLM_ROOT=${EDULLM_ROOT}; export RUN_DIR=${RUN_DIR}; source ${EDULLM_ROOT}/scripts/farmshare/prepare_aws_session.sh; python ${RUN_DIR}/scripts/finalize_olmo_upsample_upload.py --run-dir ${RUN_DIR} --bucket ${BUCKET} --prefix ${PREFIX}")
+  --wrap "set -Eeuo pipefail; source ${RUN_DIR}/env.sh; source ${VENV}/bin/activate; export EDULLM_ROOT=${EDULLM_ROOT}; export RUN_DIR=${RUN_DIR}; python ${RUN_DIR}/scripts/finalize_olmo_upsample_upload.py --run-dir ${RUN_DIR} --bucket ${BUCKET} --prefix ${PREFIX}")
 echo "finalize_upload_job_id=${FINAL_JOB}"
 
 echo "RUN_DIR=${RUN_DIR}" | tee "${RUN_DIR}/RUN_DIR.txt"

@@ -23,7 +23,6 @@ cd "${RUN_DIR}"
 OLMOHQ="${EDULLM_ROOT}/datasets/olmohq"
 OLMO="${EDULLM_ROOT}/datasets/olmo"
 DATASETS="${EDULLM_ROOT}/datasets"
-FARMSHARE="${EDULLM_ROOT}/datasets/farmshare"
 
 cp -a "${OLMOHQ}/plan_olmohq_topup.py" "${RUN_DIR}/scripts/"
 cp -a "${OLMOHQ}/finalize_olmohq_topup_upload.py" "${RUN_DIR}/scripts/"
@@ -31,8 +30,6 @@ cp -a "${DATASETS}/olmo_shard_utils.py" "${RUN_DIR}/scripts/"
 cp -a "${OLMO}/download_olmo_shard.py" "${RUN_DIR}/scripts/"
 cp -a "${OLMO}/tokenize_olmo_shard.py" "${RUN_DIR}/scripts/"
 cp -a "${OLMO}/build_pool_tokenize_map.py" "${RUN_DIR}/scripts/"
-cp -a "${FARMSHARE}/prepare_aws_session_light.sh" "${RUN_DIR}/scripts/"
-cp -a "${FARMSHARE}/write_aws_session_env.py" "${RUN_DIR}/scripts/"
 sed -i 's/\r$//' "${RUN_DIR}/scripts/"*.{sh,sbatch,py} 2>/dev/null || true
 
 if [[ -f "${BASE_RUN}/.hf_token" ]]; then
@@ -48,10 +45,6 @@ pip install -U pip wheel
 pip install "huggingface_hub[hf_transfer]" hf_transfer boto3 tqdm transformers "numpy<2.1" zstandard sentencepiece protobuf
 
 export EDULLM_ROOT RUN_DIR
-# shellcheck disable=SC1091
-source "${RUN_DIR}/scripts/prepare_aws_session_light.sh"
-# shellcheck disable=SC1090
-source "${AWS_SESSION_ENV}"
 
 aws s3 cp "s3://${BUCKET}/${OLMOHQ_PREFIX}/plan/tokenized_manifest.json" "${RUN_DIR}/plan/tokenized_manifest.json"
 aws s3 cp "s3://${BUCKET}/${OLMOHQ_PREFIX}/plan/manifest.jsonl" "${RUN_DIR}/plan/manifest.jsonl"
@@ -81,7 +74,6 @@ cat > "${RUN_DIR}/env.sh" <<EOF
 RUN_DIR=${RUN_DIR}
 VENV=${RUN_DIR}/venv
 EDULLM_ROOT=${EDULLM_ROOT}
-AWS_SESSION_ENV=${AWS_SESSION_ENV}
 BUCKET=${BUCKET}
 OLMOHQ_PREFIX=${OLMOHQ_PREFIX}
 N=${N}
@@ -192,7 +184,7 @@ TOK_JOB=$(sbatch --parsable --exclude=wheat-01 \
 echo "tokenize_job_id=${TOK_JOB}"
 echo "${TOK_JOB}" > "${RUN_DIR}/tokenize_job_id.txt"
 
-# --- finalize append upload (login-minted aws-session.env only; never remint on compute) ---
+# --- finalize append upload ---
 UP_JOB=$(sbatch --parsable --exclude=wheat-01 \
   --partition=normal --cpus-per-task=8 --mem=32G --time=12:00:00 \
   --dependency="afterok:${TOK_JOB}" \
@@ -200,7 +192,7 @@ UP_JOB=$(sbatch --parsable --exclude=wheat-01 \
   --chdir="${RUN_DIR}" \
   --output="${RUN_DIR}/logs/upload-%j.out" \
   --error="${RUN_DIR}/logs/upload-%j.err" \
-  --wrap="bash -lc 'set -Eeuo pipefail; unset PREFIX || true; ${_AWS_PATH}; source ${RUN_DIR}/env.sh; source \${AWS_SESSION_ENV}; source ${RUN_DIR}/venv/bin/activate; python ${RUN_DIR}/scripts/finalize_olmohq_topup_upload.py --run-dir ${RUN_DIR} --bucket ${BUCKET} --prefix \${OLMOHQ_PREFIX}'")
+  --wrap="bash -lc 'set -Eeuo pipefail; unset PREFIX || true; ${_AWS_PATH}; source ${RUN_DIR}/env.sh; source ${RUN_DIR}/venv/bin/activate; python ${RUN_DIR}/scripts/finalize_olmohq_topup_upload.py --run-dir ${RUN_DIR} --bucket ${BUCKET} --prefix \${OLMOHQ_PREFIX}'")
 echo "upload_job_id=${UP_JOB}"
 echo "${UP_JOB}" > "${RUN_DIR}/upload_job_id.txt"
 

@@ -28,7 +28,6 @@ VENV="\${VENV:-\${RUN_DIR}/venv}"
 PLAN="\${PLAN:-\${RUN_DIR}/manifests/plan.json}"
 SCRATCH_ROOT="\${SCRATCH_ROOT:-\${RUN_DIR}}"
 STAGE_DIR="\${STAGE_DIR:-\${RUN_DIR}/publish-stage}"
-AWS_SESSION_ENV="\${AWS_SESSION_ENV:-\${RUN_DIR}/aws-session.env}"
 REFHQ_NEW_SCRIPTS="\${RUN_DIR}/datasets/refhq_new/scripts"
 test -d "\${STAGE_DIR}/tokens"
 if [[ ! -d "\${STAGE_DIR}/text" && ! -d "\${STAGE_DIR}/vendor" ]]; then
@@ -38,7 +37,7 @@ fi
 
 PUB_JOB=\$(sbatch --parsable --exclude=wheat-01 \
   --chdir="\${RUN_DIR}" \
-  --export=ALL,RUN_DIR="\${RUN_DIR}",VENV="\${VENV}",PLAN="\${PLAN}",SCRATCH_ROOT="\${SCRATCH_ROOT}",REFHQ_NEW_SCRIPTS="\${REFHQ_NEW_SCRIPTS}",STAGE_DIR="\${STAGE_DIR}",AWS_SESSION_ENV="\${AWS_SESSION_ENV}",DATASET_ID=pretrain/refhq-instruct \
+  --export=ALL,RUN_DIR="\${RUN_DIR}",VENV="\${VENV}",PLAN="\${PLAN}",SCRATCH_ROOT="\${SCRATCH_ROOT}",REFHQ_NEW_SCRIPTS="\${REFHQ_NEW_SCRIPTS}",STAGE_DIR="\${STAGE_DIR}",DATASET_ID=pretrain/refhq-instruct \
   "\${REFHQ_NEW_SCRIPTS}/publish_refhq_new.sbatch")
 echo "resubmitted_publish_job=\${PUB_JOB} dataset_id=pretrain/refhq-instruct"
 squeue -u nzhao2 | head -10

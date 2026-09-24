@@ -19,7 +19,6 @@ cd "${RUN_DIR}"
 
 OLMO_ROOT="${EDULLM_ROOT}/datasets/olmo"
 DATASETS_SHARED="${EDULLM_ROOT}/datasets"
-FARMSHARE="${EDULLM_ROOT}/scripts/farmshare"
 for f in download_s3_shard.py download_s3_shard.sbatch; do
   cp -a "${DATASETS_SHARED}/${f}" "${RUN_DIR}/scripts/"
 done
@@ -27,9 +26,6 @@ for f in build_pool_tokenize_map.py \
   tokenize_olmo_shard.py tokenize_olmo_shard.sbatch finalize_pool_tokenized_upload.py \
   finalize_pool_tokenized_upload.sbatch; do
   cp -a "${OLMO_ROOT}/${f}" "${RUN_DIR}/scripts/"
-done
-for f in prepare_aws_session_light.sh write_aws_session_env.py; do
-  cp -a "${FARMSHARE}/${f}" "${RUN_DIR}/scripts/"
 done
 sed -i 's/\r$//' "${RUN_DIR}/scripts/"*.{sh,sbatch,py} 2>/dev/null || true
 
@@ -48,22 +44,6 @@ pip install boto3 tqdm transformers "numpy<2.1" zstandard sentencepiece protobuf
 
 export EDULLM_ROOT RUN_DIR
 export PATH="${HOME}/.local/bin:${HOME}/tools/aws/bin:${PATH}"
-if [[ -n "${AWS_SESSION_ENV:-}" && -f "${AWS_SESSION_ENV}" ]]; then
-  # shellcheck disable=SC1090
-  source "${AWS_SESSION_ENV}"
-  aws sts get-caller-identity --output text >/dev/null
-  cp -a "${AWS_SESSION_ENV}" "${RUN_DIR}/aws-session.env"
-  AWS_SESSION_ENV="${RUN_DIR}/aws-session.env"
-  echo "aws_session_ready preset=${AWS_SESSION_ENV}"
-else
-  # shellcheck disable=SC1091
-  source "${RUN_DIR}/scripts/prepare_aws_session_light.sh"
-  # shellcheck disable=SC1090
-  source "${AWS_SESSION_ENV}"
-  cp -a "${AWS_SESSION_ENV}" "${RUN_DIR}/aws-session.env"
-  AWS_SESSION_ENV="${RUN_DIR}/aws-session.env"
-fi
-
 MANIFEST="${RUN_DIR}/plan/manifest.jsonl"
 SUMMARY="${RUN_DIR}/plan/summary.json"
 aws s3 cp "s3://${SRC_BUCKET}/${SRC_PREFIX}/plan/manifest.jsonl" "${MANIFEST}"
@@ -107,11 +87,10 @@ SUMMARY=${SUMMARY}
 LOCAL_ROOT=${RUN_DIR}/data
 SRC_BUCKET=${SRC_BUCKET}
 SRC_PREFIX=${SRC_PREFIX}
-AWS_SESSION_ENV=${AWS_SESSION_ENV}
 HF_TOKEN_FILE=${HF_TOKEN_FILE}
 EOF
 
-SBATCH_EXPORT_COMMON="RUN_DIR=${RUN_DIR},VENV=${RUN_DIR}/venv,MANIFEST=${MANIFEST},SRC_BUCKET=${SRC_BUCKET},SRC_PREFIX=${SRC_PREFIX},AWS_SESSION_ENV=${AWS_SESSION_ENV},HF_TOKEN_FILE=${HF_TOKEN_FILE}"
+SBATCH_EXPORT_COMMON="RUN_DIR=${RUN_DIR},VENV=${RUN_DIR}/venv,MANIFEST=${MANIFEST},SRC_BUCKET=${SRC_BUCKET},SRC_PREFIX=${SRC_PREFIX},HF_TOKEN_FILE=${HF_TOKEN_FILE}"
 
 DL_JOB=""
 if [[ "${SKIP_DOWNLOAD}" == "1" ]]; then

@@ -18,15 +18,8 @@ import mixlaw_wandb as mix_wandb  # noqa: E402
 from token_selection.olmo_ext.wandb_logging import TASK_LOSS_RAW_LABELS  # noqa: E402
 
 
-def _durable_metadata(path: Path, step: int = 125, *, local: bool = True) -> Path:
-    uri = (
-        f"/scratch/mixlaw/save/checkpoints/step{step}"
-        if local
-        else (
-            "s3://edullm-checkpoints/mixlaw/370m-validation/"
-            f"mix01/checkpoints/step{step}"
-        )
-    )
+def _durable_metadata(path: Path, step: int = 125) -> Path:
+    uri = f"/scratch/mixlaw/save/checkpoints/step{step}"
     path.write_text(
         json.dumps(
             {
@@ -68,10 +61,10 @@ def test_recovery_modes_are_explicit(tmp_path: Path) -> None:
 @pytest.mark.parametrize(
     ("mode", "extra"),
     [
-        ("fresh", ["--load-path", "s3://bucket/step1"]),
+        ("fresh", ["--load-path", "/scratch/step1"]),
         ("resume", ["--fresh"]),
         ("fail", ["--fresh"]),
-        ("fail", ["--load-path=s3://bucket/step1"]),
+        ("fail", ["--load-path=/scratch/step1"]),
     ],
 )
 def test_recovery_rejects_conflicting_intent(mode: str, extra: list[str]) -> None:

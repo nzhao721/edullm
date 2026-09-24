@@ -26,7 +26,7 @@ that run.
 | Artifact durability | Runtime scratch + W&B |
 
 **Ephemeral scratch:** set `RUN_DIR` empty; stage edullm-data each job; durable
-export via the shared spine. `--resume` fetches from S3 when local is empty.
+export via the shared spine.
 
 Only the EMA seed mode and α schedule
 should differ. Shared package: [`../token_selection/`](../token_selection/).
@@ -97,7 +97,6 @@ torchrun --standalone --nproc_per_node="$NPROC" \
   --launch
 ```
 
-Do **not** submit AWS training from this arm unless explicitly authorized.
 With `launch_train.sh`, task-loss JSON lands under
 `$RUN_DIR/task_loss_results/rel-ema-exp/step{N}_task_loss.json`.
 Direct YAML launches use `task_loss_results/rel-ema-exp/` under

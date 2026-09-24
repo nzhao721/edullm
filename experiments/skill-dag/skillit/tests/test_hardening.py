@@ -103,12 +103,12 @@ def test_pool_provenance_rejects_wrong_or_conflicting_identity(tmp_path: Path) -
         prepare.load_pool_source(tmp_path)
 
 
-def test_trainer_has_explicit_resume_and_bootstrap_only_s3_read() -> None:
+def test_trainer_has_explicit_local_resume() -> None:
     text = _TRAINER.read_text(encoding="utf-8")
     assert "choose exactly one resume mode" in text
     assert "find_latest_checkpoint" not in text
-    assert "core.stage_load_path(" in text
-    assert 'f"{expected_root}/progress/"' in text
+    assert "sync_from_s3" not in text
+    assert "edullm-checkpoints" not in text
     assert "required post-update step" in text
     assert "_validate_checkpoint_source(" in text
     assert "export_curriculum_artifacts(" not in text

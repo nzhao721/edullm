@@ -29,47 +29,29 @@ source "${VENV}/bin/activate" 2>/dev/null || true
 export RUN_DIR VENV PLAN DOMAIN_LIST HQ_SCRIPTS
 dolma_hq_export_pythonpath "${RUN_DIR}"
 
-AWS_OK=0
-if # shellcheck disable=SC1091
-  source "${RUN_DIR}/datasets/farmshare/prepare_aws_session_light.sh" && # shellcheck disable=SC1090
-  source "${AWS_SESSION_ENV}"; then
-  AWS_OK=1
-  echo "aws_session_ready login_node=${AWS_SESSION_ENV}"
-else
-  echo "WARN: login-node AWS mint failed; will submit tokenize now and skip upload until creds work" >&2
-fi
-
 read -r -a DOMAINS <<< "${DOMAIN_LIST}"
 N=${#DOMAINS[@]}
 
-UPLOAD_JOB=""
-if [[ "${AWS_OK}" -eq 1 ]]; then
-  UPLOAD_JOB=$(sbatch --parsable --exclude=wheat-01 \
-    --chdir="${RUN_DIR}" \
-    --export=ALL,RUN_DIR="${RUN_DIR}",VENV="${VENV}",PLAN="${PLAN}",AWS_SESSION_ENV="${AWS_SESSION_ENV}",HQ_SCRIPTS="${HQ_SCRIPTS}" \
-    "${HQ_SCRIPTS}/finalize_hq_reference_upload.sbatch")
-  echo "text_upload_job=${UPLOAD_JOB}"
-  TOK_DEP="afterok:${UPLOAD_JOB}"
-else
-  TOK_DEP=""
-fi
+UPLOAD_JOB=$(sbatch --parsable --exclude=wheat-01 \
+  --chdir="${RUN_DIR}" \
+  --export=ALL,RUN_DIR="${RUN_DIR}",VENV="${VENV}",PLAN="${PLAN}",HQ_SCRIPTS="${HQ_SCRIPTS}" \
+  "${HQ_SCRIPTS}/finalize_hq_reference_upload.sbatch")
+echo "text_upload_job=${UPLOAD_JOB}"
 
 TOK_JOB=$(sbatch --parsable --exclude=wheat-01 \
-  ${TOK_DEP:+--dependency=${TOK_DEP}} \
+  --dependency=afterok:${UPLOAD_JOB} \
   --array=0-$((N - 1)) \
   --chdir="${RUN_DIR}" \
   --export=ALL,RUN_DIR="${RUN_DIR}",VENV="${VENV}",PLAN="${PLAN}",DOMAIN_LIST="${DOMAIN_LIST}",HQ_SCRIPTS="${HQ_SCRIPTS}" \
   "${HQ_SCRIPTS}/tokenize_hq_reference_domain.sbatch")
 echo "tokenize_job=${TOK_JOB}"
 
-if [[ "${AWS_OK}" -eq 1 ]]; then
-  TOK_UP_JOB=$(sbatch --parsable --exclude=wheat-01 \
-    --dependency=afterok:${TOK_JOB} \
-    --chdir="${RUN_DIR}" \
-    --export=ALL,RUN_DIR="${RUN_DIR}",VENV="${VENV}",PLAN="${PLAN}",AWS_SESSION_ENV="${AWS_SESSION_ENV}",HQ_SCRIPTS="${HQ_SCRIPTS}" \
-    "${HQ_SCRIPTS}/finalize_refhq_tokenized_upload.sbatch")
-  echo "tokenized_upload_job=${TOK_UP_JOB}"
-fi
+TOK_UP_JOB=$(sbatch --parsable --exclude=wheat-01 \
+  --dependency=afterok:${TOK_JOB} \
+  --chdir="${RUN_DIR}" \
+  --export=ALL,RUN_DIR="${RUN_DIR}",VENV="${VENV}",PLAN="${PLAN}",HQ_SCRIPTS="${HQ_SCRIPTS}" \
+  "${HQ_SCRIPTS}/finalize_refhq_tokenized_upload.sbatch")
+echo "tokenized_upload_job=${TOK_UP_JOB}"
 
 S3_BUCKET=$(python3 -c "import json; print(json.load(open('${PLAN}'))['s3_bucket'])")
 S3_PREFIX=$(python3 -c "import json; print(json.load(open('${PLAN}'))['s3_prefix'])")

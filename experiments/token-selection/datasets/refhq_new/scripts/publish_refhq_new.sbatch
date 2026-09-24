@@ -18,21 +18,8 @@ VENV="${VENV:-${RUN_DIR}/venv}"
 # shellcheck disable=SC1091
 source "${VENV}/bin/activate"
 
-if [[ -n "${AWS_SESSION_ENV:-}" && -f "${AWS_SESSION_ENV}" ]]; then
-  # shellcheck disable=SC1090
-  source "${AWS_SESSION_ENV}"
-elif [[ -f "${RUN_DIR}/aws-session.env" ]]; then
-  # shellcheck disable=SC1091
-  source "${RUN_DIR}/aws-session.env"
-  export AWS_SESSION_ENV="${RUN_DIR}/aws-session.env"
-else
-  echo "ERROR: AWS_SESSION_ENV missing; push via datasets/farmshare/push_aws_session_to_farmshare.sh ${RUN_DIR}" >&2
-  exit 1
-fi
-
 export PATH="${PATH}:${HOME}/.local/bin:${HOME}/tools/aws/bin"
 export AWS_DEFAULT_REGION="${AWS_DEFAULT_REGION:-us-east-1}"
-unset AWS_PROFILE || true
 
 : "${REFHQ_NEW_SCRIPTS:=${RUN_DIR}/datasets/refhq_new/scripts}"
 SCRATCH_ROOT="${SCRATCH_ROOT:-${RUN_DIR}}"
@@ -44,21 +31,10 @@ TEXT_RUN_DIR="${TEXT_RUN_DIR:-${SCRATCH_ROOT}}"
 source "${REFHQ_NEW_SCRIPTS}/lib.sh"
 refhq_new_export_pythonpath "${RUN_DIR}"
 
-# Always newest edullm-data: prefer landing _dist wheel, else git@main (never pin old tags).
-WHEEL_URI="${WHEEL_URI:-}"
-NEWEST="$(aws s3 ls s3://edullm-landing/_dist/ 2>/dev/null | awk '/edullm_data-.*\.whl$/ {print $NF}' | sort -V | tail -1 || true)"
-if [[ -n "${NEWEST}" ]]; then
-  WHEEL_URI="s3://edullm-landing/_dist/${NEWEST}"
-fi
+# Always newest edullm-data from git@main (never pin old tags).
 pip install -q -U pip wheel boto3
-if [[ -n "${WHEEL_URI}" ]]; then
-  WHEEL_BASENAME="$(basename "${WHEEL_URI}")"
-  aws s3 cp "${WHEEL_URI}" "${RUN_DIR}/${WHEEL_BASENAME}"
-  pip install -q --force-reinstall "${RUN_DIR}/${WHEEL_BASENAME}"
-else
-  pip install -q --force-reinstall \
-    "edullm-data @ git+https://github.com/edu-llm/edullm-data@main"
-fi
+pip install -q --force-reinstall \
+  "edullm-data @ git+https://github.com/edu-llm/edullm-data@main"
 python -c 'import edullm_data; print("edullm_data", getattr(edullm_data,"__version__","?"), edullm_data.__file__)'
 
 PUB_ARGS=(

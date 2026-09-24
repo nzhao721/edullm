@@ -22,7 +22,6 @@ cd "${RUN_DIR}"
 # Sync pipeline scripts into the isolated run dir.
 REGMIX_ROOT="${EDULLM_ROOT}/datasets/regmix"
 DATASETS_SHARED="${EDULLM_ROOT}/datasets"
-FARMSHARE="${EDULLM_ROOT}/scripts/farmshare"
 cp -a "${REGMIX_ROOT}/plan_regmix_mix.py" "${RUN_DIR}/scripts/"
 cp -a "${REGMIX_ROOT}/finalize_regmix_upload.py" "${RUN_DIR}/scripts/"
 cp -a "${REGMIX_ROOT}/trim_regmix_domain.sbatch" "${RUN_DIR}/scripts/"
@@ -40,13 +39,7 @@ source "${RUN_DIR}/venv/bin/activate"
 pip install -U pip wheel
 pip install boto3 tqdm transformers zstandard
 
-# Mint AWS session env for compute nodes (broker profile on login node).
-# Use the light helper — full prepare_aws_session.sh requires Dolma/HF bootstrap.
 export EDULLM_ROOT RUN_DIR
-# shellcheck disable=SC1091
-source "${EDULLM_ROOT}/scripts/farmshare/prepare_aws_session_light.sh"
-# shellcheck disable=SC1090
-source "${AWS_SESSION_ENV}"
 
 # Optional: pull pool summary from S3 for accurate tokens/byte rates.
 POOL_SUMMARY="${RUN_DIR}/plan/pool_summary.json"
@@ -77,7 +70,6 @@ DST_PREFIX=${DST_PREFIX}
 DOMAIN_LIST="${DOMAIN_LIST}"
 LOCAL_MIRROR=${LOCAL_MIRROR}
 EDULLM_ROOT=${EDULLM_ROOT}
-AWS_SESSION_ENV=${AWS_SESSION_ENV}
 N=${N}
 EOF
 
@@ -90,7 +82,7 @@ cat "${SUMMARY}"
 DL_JOB=$(sbatch --parsable --exclude=wheat-01 \
   --array=0-$((N - 1))%${DL_CONCURRENCY} \
   --chdir="${RUN_DIR}" \
-  --export=ALL,RUN_DIR,VENV,MANIFEST,LOCAL_ROOT,SRC_BUCKET,LOCAL_MIRROR,AWS_SESSION_ENV \
+  --export=ALL,RUN_DIR,VENV,MANIFEST,LOCAL_ROOT,SRC_BUCKET,LOCAL_MIRROR \
   "${RUN_DIR}/scripts/download_s3_shard.sbatch")
 echo "download_job_id=${DL_JOB}"
 echo "${DL_JOB}" > "${RUN_DIR}/download_job_id.txt"
@@ -106,7 +98,6 @@ echo "trim_job_id=${TRIM_JOB}"
 echo "${TRIM_JOB}" > "${RUN_DIR}/trim_job_id.txt"
 
 # Provision destination bucket + upload after all trims succeed.
-# Refresh AWS session just before upload via wrap that re-sources prepare_aws_session.
 FINAL_JOB=$(sbatch --parsable --exclude=wheat-01 \
   --partition=normal \
   --cpus-per-task=8 \
@@ -117,7 +108,7 @@ FINAL_JOB=$(sbatch --parsable --exclude=wheat-01 \
   --chdir="${RUN_DIR}" \
   --output="${RUN_DIR}/logs/upload-%j.out" \
   --error="${RUN_DIR}/logs/upload-%j.err" \
-  --wrap="set -Eeuo pipefail; source ${RUN_DIR}/env.sh; export EDULLM_ROOT RUN_DIR; source ${EDULLM_ROOT}/scripts/farmshare/prepare_aws_session_light.sh; source ${AWS_SESSION_ENV}; source ${VENV}/bin/activate; python ${RUN_DIR}/scripts/finalize_regmix_upload.py --run-dir ${RUN_DIR} --dst-bucket ${DST_BUCKET} --dst-prefix ${DST_PREFIX}")
+  --wrap="set -Eeuo pipefail; source ${RUN_DIR}/env.sh; export EDULLM_ROOT RUN_DIR; source ${VENV}/bin/activate; python ${RUN_DIR}/scripts/finalize_regmix_upload.py --run-dir ${RUN_DIR} --dst-bucket ${DST_BUCKET} --dst-prefix ${DST_PREFIX}")
 echo "upload_job_id=${FINAL_JOB}"
 echo "${FINAL_JOB}" > "${RUN_DIR}/upload_job_id.txt"
 

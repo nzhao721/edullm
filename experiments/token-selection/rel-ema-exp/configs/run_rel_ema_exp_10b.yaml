@@ -47,7 +47,6 @@ data:
 s3:
   # Train inputs resolve via data.dataset_id → s3://edullm-data/ (not this field).
   dataset_bucket: edullm-data
-  profile: sbsandbox
 
 model:
   name: OLMo-2-370M-scratch

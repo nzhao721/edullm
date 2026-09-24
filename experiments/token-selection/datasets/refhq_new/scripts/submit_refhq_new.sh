@@ -7,7 +7,7 @@
 #        → tokenize[0..N-1 from tokenize_tasks.txt] → finalize → publish
 #
 # Sibling contracts (datasets/refhq_new/scripts/):
-#   Env: RUN_DIR VENV PLAN SOURCE_LIST REFHQ_NEW_SCRIPTS (+ AWS_SESSION_ENV late)
+#   Env: RUN_DIR VENV PLAN SOURCE_LIST REFHQ_NEW_SCRIPTS
 #   Download/normalize/english: Slurm array 0-5 over SOURCE_LIST (no % throttle)
 #   Holdout: holdout_docs.sbatch refreshes manifests/tokenize_tasks.txt
 #   Tokenize: array over tokenize_tasks.txt lines "source domain split"
@@ -20,9 +20,6 @@
 #     holdout/<source>/<domain>/{train,val}/documents-*.jsonl.gz
 #   Publish layout (no token carve; doc holdout already done):
 #     tokens/<source>/<domain>/{train,val}-NNNNN.u32le.bin
-#
-# AWS: mint on laptop, push session — never sb-aws-creds login on FarmShare:
-#   datasets/farmshare/push_aws_session_to_farmshare.sh "${RUN_DIR}"
 set -Eeuo pipefail
 
 SUNET="${SUNET:-nzhao2}"
@@ -121,15 +118,7 @@ source "${RUN_DIR}/env.sh"
 VENV="${RUN_DIR}/venv"
 refhq_new_export_pythonpath "${RUN_DIR}"
 
-AWS_SESSION_ENV="${AWS_SESSION_ENV:-${RUN_DIR}/aws-session.env}"
-if [[ ! -f "${AWS_SESSION_ENV}" ]]; then
-  echo "WARN: ${AWS_SESSION_ENV} missing." >&2
-  echo "  From the engineer laptop (not FarmShare):" >&2
-  echo "  datasets/farmshare/push_aws_session_to_farmshare.sh ${RUN_DIR}" >&2
-  echo "  finalize/publish need the session; push before those jobs start." >&2
-fi
-
-COMMON_EXPORT="ALL,RUN_DIR=${RUN_DIR},VENV=${VENV},PLAN=${PLAN},SOURCE_LIST=${SOURCE_LIST},SCRATCH_ROOT=${SCRATCH_ROOT},REFHQ_NEW_SCRIPTS=${REFHQ_NEW_SCRIPTS},STAGE_DIR=${STAGE_DIR},S3_BUCKET=${S3_BUCKET},S3_PREFIX=${S3_PREFIX},SEED=${SEED},TOKENIZE_TASKS=${TOKENIZE_TASKS},ENGLISH_TASKS=${ENGLISH_TASKS},AWS_SESSION_ENV=${AWS_SESSION_ENV}"
+COMMON_EXPORT="ALL,RUN_DIR=${RUN_DIR},VENV=${VENV},PLAN=${PLAN},SOURCE_LIST=${SOURCE_LIST},SCRATCH_ROOT=${SCRATCH_ROOT},REFHQ_NEW_SCRIPTS=${REFHQ_NEW_SCRIPTS},STAGE_DIR=${STAGE_DIR},S3_BUCKET=${S3_BUCKET},S3_PREFIX=${S3_PREFIX},SEED=${SEED},TOKENIZE_TASKS=${TOKENIZE_TASKS},ENGLISH_TASKS=${ENGLISH_TASKS}"
 
 require_sbatch() {
   local path="$1"
@@ -186,7 +175,7 @@ if [[ "${N_ENG}" -lt 1 ]]; then
 fi
 echo "english_tasks=${N_ENG} file=${ENGLISH_TASKS}"
 
-COMMON_EXPORT="ALL,RUN_DIR=${RUN_DIR},VENV=${VENV},PLAN=${PLAN},SOURCE_LIST=${SOURCE_LIST},SCRATCH_ROOT=${SCRATCH_ROOT},REFHQ_NEW_SCRIPTS=${REFHQ_NEW_SCRIPTS},STAGE_DIR=${STAGE_DIR},S3_BUCKET=${S3_BUCKET},S3_PREFIX=${S3_PREFIX},SEED=${SEED},TOKENIZE_TASKS=${TOKENIZE_TASKS},ENGLISH_TASKS=${ENGLISH_TASKS},AWS_SESSION_ENV=${AWS_SESSION_ENV:-${RUN_DIR}/aws-session.env}"
+COMMON_EXPORT="ALL,RUN_DIR=${RUN_DIR},VENV=${VENV},PLAN=${PLAN},SOURCE_LIST=${SOURCE_LIST},SCRATCH_ROOT=${SCRATCH_ROOT},REFHQ_NEW_SCRIPTS=${REFHQ_NEW_SCRIPTS},STAGE_DIR=${STAGE_DIR},S3_BUCKET=${S3_BUCKET},S3_PREFIX=${S3_PREFIX},SEED=${SEED},TOKENIZE_TASKS=${TOKENIZE_TASKS},ENGLISH_TASKS=${ENGLISH_TASKS}"
 
 ENG_JOB=$(sbatch --parsable --exclude=wheat-01 \
   --array=0-$((N_ENG - 1)) \
@@ -240,7 +229,7 @@ if [[ "${N_TASKS}" -lt 1 ]]; then
 fi
 echo "tokenize_tasks=${N_TASKS} file=${TASKS}"
 
-COMMON_EXPORT="ALL,RUN_DIR=${RUN_DIR},VENV=${VENV},PLAN=${PLAN},SOURCE_LIST=${SOURCE_LIST},SCRATCH_ROOT=${SCRATCH_ROOT},REFHQ_NEW_SCRIPTS=${REFHQ_NEW_SCRIPTS},STAGE_DIR=${STAGE_DIR},S3_BUCKET=${S3_BUCKET},S3_PREFIX=${S3_PREFIX},SEED=${SEED},TOKENIZE_TASKS=${TASKS},AWS_SESSION_ENV=${AWS_SESSION_ENV:-${RUN_DIR}/aws-session.env}"
+COMMON_EXPORT="ALL,RUN_DIR=${RUN_DIR},VENV=${VENV},PLAN=${PLAN},SOURCE_LIST=${SOURCE_LIST},SCRATCH_ROOT=${SCRATCH_ROOT},REFHQ_NEW_SCRIPTS=${REFHQ_NEW_SCRIPTS},STAGE_DIR=${STAGE_DIR},S3_BUCKET=${S3_BUCKET},S3_PREFIX=${S3_PREFIX},SEED=${SEED},TOKENIZE_TASKS=${TASKS}"
 
 TOK_JOB=$(sbatch --parsable --exclude=wheat-01 \
   --array=0-$((N_TASKS - 1)) \
@@ -292,4 +281,3 @@ echo "submitted refhq-new under ${SCRATCH_ROOT}"
 echo "s3://${S3_BUCKET}/${S3_PREFIX}/"
 echo "dataset_id=pretrain/refhq-instruct tokenizer=tokenizer/dolma2-bpe"
 echo "chain download=${DL_JOB} normalize=${NORM_JOB} post_normalize=${POSTNORM_JOB}"
-echo "AWS: datasets/farmshare/push_aws_session_to_farmshare.sh ${RUN_DIR}"

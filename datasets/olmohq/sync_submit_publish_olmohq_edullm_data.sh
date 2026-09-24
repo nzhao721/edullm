@@ -11,18 +11,13 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 OLMOHQ_LOCAL="${REPO_ROOT}/datasets/olmohq"
 
 ssh -S "${SOCK}" -o BatchMode=yes "${HOST}" \
-  "mkdir -p ${STAGING}/datasets/olmohq ${STAGING}/scripts/farmshare"
+  "mkdir -p ${STAGING}/datasets/olmohq"
 
 rsync -avz -e "ssh -S ${SOCK} -o BatchMode=yes" \
   "${OLMOHQ_LOCAL}/publish_olmohq_edullm_data.py" \
   "${OLMOHQ_LOCAL}/publish_olmohq_edullm_data.sbatch" \
   "${OLMOHQ_LOCAL}/submit_publish_olmohq_edullm_data.sh" \
   "${HOST}:${STAGING}/datasets/olmohq/"
-
-rsync -avz -e "ssh -S ${SOCK} -o BatchMode=yes" \
-  "${REPO_ROOT}/scripts/farmshare/prepare_aws_session_light.sh" \
-  "${REPO_ROOT}/scripts/farmshare/write_aws_session_env.py" \
-  "${HOST}:${STAGING}/scripts/farmshare/"
 
 ssh -S "${SOCK}" -o BatchMode=yes "${HOST}" bash -s <<REMOTE
 set -Eeuo pipefail

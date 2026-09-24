@@ -11,7 +11,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import shlex
 import shutil
 import sys
 import time
@@ -31,8 +30,6 @@ VAL_FRACTION = 0.0015
 DEFAULT_BUCKET = "edullm-datasets"
 DEFAULT_PREFIX = "olmo100b/olmo-mix-1124-30b"
 DEFAULT_MANIFEST_KEY = f"{DEFAULT_PREFIX}/plan/tokenized_manifest.json"
-# Reload AWS_SESSION_ENV this often so a login-node refresher can rotate STS keys.
-SESSION_RELOAD_SECONDS = 5 * 60
 
 
 def _align_shard_bytes(n: int) -> int:
@@ -254,186 +251,12 @@ def resolve_local_shard(tokenized_root: Path, rel: str) -> Path:
     raise FileNotFoundError(path)
 
 
-def _apply_session_env_file(path: Path) -> bool:
-    """Load export KEY=VAL lines from a FarmShare aws-session.env into os.environ."""
-    if not path.is_file():
-        return False
-    loaded = 0
-    for raw in path.read_text(encoding="utf-8").splitlines():
-        line = raw.strip()
-        if not line or line.startswith("#"):
-            continue
-        if line.startswith("unset "):
-            for name in line.split()[1:]:
-                os.environ.pop(name, None)
-            continue
-        if not line.startswith("export "):
-            continue
-        assign = line[len("export ") :]
-        if "=" not in assign:
-            continue
-        key, val = assign.split("=", 1)
-        os.environ[key] = shlex.split(val)[0] if val else ""
-        loaded += 1
-    return loaded > 0
+def _s3_client():
+    """boto3 S3 client from the standard AWS credential chain."""
+    import boto3
 
-
-class RefreshingS3:
-    """boto3 S3 client that reloads AWS_SESSION_ENV periodically (login-node refresher)."""
-
-    def __init__(self, session_env: Path | None = None) -> None:
-        import boto3
-
-        self._boto3 = boto3
-        self.session_env = session_env or Path(os.environ.get("AWS_SESSION_ENV") or "")
-        self._client = None
-        self._loaded_at = 0.0
-        self._mtime = 0.0
-        self._fingerprint = ""
-        self.refresh(force=True)
-
-    def refresh(self, *, force: bool = False) -> None:
-        now = time.time()
-        mtime = 0.0
-        if self.session_env and self.session_env.is_file():
-            mtime = self.session_env.stat().st_mtime
-        stale = (now - self._loaded_at) >= SESSION_RELOAD_SECONDS
-        changed = mtime > self._mtime
-        if not force and self._client is not None and not stale and not changed:
-            return
-        if self.session_env and self.session_env.is_file():
-            _apply_session_env_file(self.session_env)
-            print(f"reloaded AWS session from {self.session_env}", flush=True)
-        key = os.environ.get("AWS_ACCESS_KEY_ID") or ""
-        secret = os.environ.get("AWS_SECRET_ACCESS_KEY") or ""
-        token = os.environ.get("AWS_SESSION_TOKEN") or ""
-        region = os.environ.get("AWS_DEFAULT_REGION") or os.environ.get("AWS_REGION") or "us-east-1"
-        if not (key and secret and token):
-            raise RuntimeError("AWS session env missing access key / secret / token")
-        fingerprint = f"{key[-4:]}:{token[-8:]}:{mtime}"
-        self._client = self._boto3.client(
-            "s3",
-            aws_access_key_id=key,
-            aws_secret_access_key=secret,
-            aws_session_token=token,
-            region_name=region,
-        )
-        if fingerprint != self._fingerprint:
-            print(f"S3 client credentials rotated (...{key[-4:]})", flush=True)
-            self._fingerprint = fingerprint
-        self._loaded_at = now
-        self._mtime = mtime
-
-    @property
-    def client(self):
-        self.refresh()
-        return self._client
-
-
-class RefreshingBoto3S3:
-    """edullm_data S3 protocol wrapper that rotates STS from AWS_SESSION_ENV.
-
-    publish() uploads local stage → landing then streams hashes from S3; for ~255G that
-    outlasts a 1h broker token unless the client is rebuilt from the laptop-pushed env.
-    """
-
-    def __init__(
-        self,
-        session_env: Path | None = None,
-        *,
-        region: str = "us-east-1",
-        reload_seconds: float = SESSION_RELOAD_SECONDS,
-    ) -> None:
-        import threading
-
-        import boto3
-        from edullm_data.s3 import Boto3S3
-
-        self._boto3 = boto3
-        self._Boto3S3 = Boto3S3
-        self.session_env = session_env or Path(os.environ.get("AWS_SESSION_ENV") or "")
-        self.region = region
-        self.reload_seconds = reload_seconds
-        self._lock = threading.Lock()
-        self._inner: Boto3S3 | None = None
-        self._loaded_at = 0.0
-        self._mtime = 0.0
-        self._fingerprint = ""
-        self._rebuild(force=True)
-
-    def _rebuild(self, *, force: bool = False) -> None:
-        now = time.time()
-        mtime = 0.0
-        if self.session_env and self.session_env.is_file():
-            mtime = self.session_env.stat().st_mtime
-        stale = (now - self._loaded_at) >= self.reload_seconds
-        changed = mtime > self._mtime
-        if not force and self._inner is not None and not stale and not changed:
-            return
-        if self.session_env and self.session_env.is_file():
-            _apply_session_env_file(self.session_env)
-        key = os.environ.get("AWS_ACCESS_KEY_ID") or ""
-        secret = os.environ.get("AWS_SECRET_ACCESS_KEY") or ""
-        token = os.environ.get("AWS_SESSION_TOKEN") or ""
-        if not (key and secret and token):
-            raise RuntimeError("AWS session env missing access key / secret / token")
-        fingerprint = f"{key[-4:]}:{token[-8:]}:{mtime}"
-        client = self._boto3.client(
-            "s3",
-            aws_access_key_id=key,
-            aws_secret_access_key=secret,
-            aws_session_token=token,
-            region_name=self.region,
-        )
-        self._inner = self._Boto3S3(client)
-        if fingerprint != self._fingerprint:
-            print(f"publish S3 credentials rotated (...{key[-4:]})", flush=True)
-            self._fingerprint = fingerprint
-        self._loaded_at = now
-        self._mtime = mtime
-
-    def _call(self, method: str, *args, **kwargs):
-        with self._lock:
-            self._rebuild()
-            fn = getattr(self._inner, method)
-        try:
-            return fn(*args, **kwargs)
-        except Exception as exc:  # noqa: BLE001
-            msg = str(exc)
-            if "ExpiredToken" not in msg and "InvalidToken" not in msg and "expired" not in msg.lower():
-                raise
-            with self._lock:
-                self._rebuild(force=True)
-                fn = getattr(self._inner, method)
-            print(f"publish S3 retry after credential refresh ({method})", flush=True)
-            return fn(*args, **kwargs)
-
-    def get(self, bucket: str, key: str) -> bytes:
-        return self._call("get", bucket, key)
-
-    def get_range(self, bucket: str, key: str, start: int, length: int) -> bytes:
-        return self._call("get_range", bucket, key, start, length)
-
-    def head(self, bucket: str, key: str) -> dict:
-        return self._call("head", bucket, key)
-
-    def list(self, bucket: str, prefix: str) -> list:
-        return self._call("list", bucket, prefix)
-
-    def hash_object(self, bucket: str, key: str) -> tuple[str, int]:
-        return self._call("hash_object", bucket, key)
-
-    def put(self, bucket: str, key: str, body: bytes, *, content_type: str | None = None) -> None:
-        return self._call("put", bucket, key, body, content_type=content_type)
-
-    def put_file(self, bucket: str, key: str, local_path: str) -> None:
-        return self._call("put_file", bucket, key, local_path)
-
-    def copy(self, src_bucket: str, src_key: str, dst_bucket: str, dst_key: str) -> None:
-        return self._call("copy", src_bucket, src_key, dst_bucket, dst_key)
-
-    def delete(self, bucket: str, key: str) -> None:
-        return self._call("delete", bucket, key)
+    region = os.environ.get("AWS_DEFAULT_REGION") or os.environ.get("AWS_REGION") or "us-east-1"
+    return boto3.client("s3", region_name=region)
 
 
 def _open_shard_stream(
@@ -442,7 +265,7 @@ def _open_shard_stream(
     tokenized_root: Path | None,
     s3_bucket: str | None,
     s3_tokenized_prefix: str | None,
-    s3: RefreshingS3 | None,
+    s3,
 ):
     """Open a local file or an S3 StreamingBody for one input .npy shard."""
     if tokenized_root is not None:
@@ -453,23 +276,14 @@ def _open_shard_stream(
     last_exc: Exception | None = None
     for attempt in range(1, 6):
         try:
-            s3.refresh(force=(attempt > 1))
             # Prefer GET only — avoids some HeadObject 400s with stale/odd signing.
-            obj = s3.client.get_object(Bucket=s3_bucket, Key=key)
+            obj = s3.get_object(Bucket=s3_bucket, Key=key)
             size = int(obj["ContentLength"])
             return obj["Body"], size, f"s3://{s3_bucket}/{key}"
-        except Exception as exc:  # noqa: BLE001 — retry after credential refresh
+        except Exception as exc:  # noqa: BLE001 — retry
             last_exc = exc
             print(f"S3 open failed attempt {attempt}/5 for {key}: {exc}", flush=True)
             time.sleep(min(30, 3 * attempt))
-            # Wait for login-node refresher to rewrite aws-session.env
-            if s3.session_env:
-                deadline = time.time() + 90
-                base_mtime = s3.session_env.stat().st_mtime if s3.session_env.is_file() else 0
-                while time.time() < deadline:
-                    if s3.session_env.is_file() and s3.session_env.stat().st_mtime > base_mtime:
-                        break
-                    time.sleep(5)
     assert last_exc is not None
     raise last_exc
 
@@ -483,7 +297,7 @@ def stream_source_to_shards(
     tokenized_root: Path | None = None,
     s3_bucket: str | None = None,
     s3_tokenized_prefix: str | None = None,
-    s3: RefreshingS3 | None = None,
+    s3=None,
 ) -> list[Path]:
     progress_path = out_dir / "_ingest_progress.json"
     completed: set[str] = set()
@@ -636,7 +450,7 @@ def stage_publish_layout(
 
     s3 = None
     if tokenized_root is None:
-        s3 = RefreshingS3()
+        s3 = _s3_client()
 
     staged: dict[str, list[str]] = {}
     for source in sorted(manifest["domains"]):
@@ -825,12 +639,6 @@ def main() -> int:
         print(f"dry-run: staged under {args.stage_dir}", flush=True)
         return 0
 
-    # Reload laptop-pushed aws-session.env before landing upload (staging may have
-    # finished under an older STS window; hash/upload can outlast remaining TTL).
-    session_env = Path(os.environ.get("AWS_SESSION_ENV", "") or "")
-    if session_env.is_file() and _apply_session_env_file(session_env):
-        print(f"reloaded AWS session before publish from {session_env}", flush=True)
-
     ensure_edullm_data()
     from edullm_data.contracts import validate_dataset_id
     from edullm_data.publish import publish
@@ -871,8 +679,9 @@ def main() -> int:
             row["uri"] = tok_uri
 
     created_at = datetime.now(timezone.utc).isoformat()
-    # Rotate STS from laptop-pushed aws-session.env across multi-hour upload+hash.
-    s3 = RefreshingBoto3S3(session_env if session_env.is_file() else None)
+    from edullm_data.s3 import Boto3S3
+
+    s3 = Boto3S3.default()
     from edullm_text_companion import PUBLISH_PROFILE, TEXT_GROUP_META
 
     plan = publish(

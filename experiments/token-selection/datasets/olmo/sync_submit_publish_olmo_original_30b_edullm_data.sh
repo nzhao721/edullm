@@ -9,7 +9,7 @@ STAGING="${STAGING:-/scratch/users/${SUNET}/agent-runs/edullm-farmshare-staging}
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
 ssh -S "${SOCK}" -o BatchMode=yes "${HOST}" \
-  "mkdir -p ${STAGING}/datasets/olmo ${STAGING}/datasets/olmohq ${STAGING}/datasets/farmshare"
+  "mkdir -p ${STAGING}/datasets/olmo ${STAGING}/datasets/olmohq"
 
 # Shared publisher (updated) + 30b wrappers.
 rsync -avz -e "ssh -S ${SOCK} -o BatchMode=yes" \
@@ -20,11 +20,6 @@ rsync -avz -e "ssh -S ${SOCK} -o BatchMode=yes" \
   "${REPO_ROOT}/datasets/olmo/publish_olmo_original_30b_edullm_data.sbatch" \
   "${REPO_ROOT}/datasets/olmo/submit_publish_olmo_original_30b_edullm_data.sh" \
   "${HOST}:${STAGING}/datasets/olmo/"
-
-rsync -avz -e "ssh -S ${SOCK} -o BatchMode=yes" \
-  "${REPO_ROOT}/datasets/farmshare/prepare_aws_session_light.sh" \
-  "${REPO_ROOT}/datasets/farmshare/write_aws_session_env.py" \
-  "${HOST}:${STAGING}/datasets/farmshare/"
 
 ssh -S "${SOCK}" -o BatchMode=yes "${HOST}" bash -s <<REMOTE
 set -Eeuo pipefail

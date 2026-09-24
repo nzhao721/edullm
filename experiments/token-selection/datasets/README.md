@@ -20,8 +20,8 @@ All of it is copied unchanged from the top level of this same repo, under
 | `refhq_new/` | `datasets/refhq_new/` | `pretrain/refhq-instruct` — the paper's ~3.9B-token Instruct reference corpus (Tulu-v2, OpenHermes-2.5, Tulu-3, Hermes-3, SmolTalk, Dolci) |
 | top-level `*.py`/`*.sbatch` here | `datasets/*.py`/`*.sbatch` | Shared utilities the four pipelines above import or invoke |
 
-The four AWS-session-minting scripts once vendored under `farmshare/` have been removed;
-the deployment scripts here still `source` them from `datasets/farmshare/`.
+The four AWS-session-minting scripts once vendored under `farmshare/` have been removed,
+along with the calls to them; S3 reads and writes use the standard AWS credential chain.
 
 `olmo/` and `olmohq/` are here because `regmix/` depends on them: the 10B
 training corpus is a domain-weighted subsample of the `olmohq` pool, which is

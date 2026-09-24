@@ -33,19 +33,13 @@ fi
 dolma_hq_sync_to_run "${STAGING_ROOT}" "${RUN_DIR}"
 dolma_hq_export_pythonpath "${RUN_DIR}"
 mkdir -p "${RUN_DIR}/scripts"
-cp -a "${STAGING_ROOT}/scripts/farmshare/write_aws_session_env.py" "${RUN_DIR}/scripts/"
 
 export EDULLM_ROOT="${RUN_DIR}"
 export RUN_DIR REFHQ_ROOT STAGE_DIR HQ_SCRIPTS
-# shellcheck disable=SC1091
-source "${RUN_DIR}/scripts/farmshare/prepare_aws_session_light.sh" || {
-  echo "ERROR: could not mint AWS session for edullm-landing writes" >&2
-  exit 1
-}
 
 JOB=$(sbatch --parsable --exclude=wheat-01 \
   --chdir="${RUN_DIR}" \
-  --export=ALL,RUN_DIR="${RUN_DIR}",REFHQ_ROOT="${REFHQ_ROOT}",STAGE_DIR="${STAGE_DIR}",EDULLM_ROOT="${EDULLM_ROOT}",HQ_SCRIPTS="${HQ_SCRIPTS}",AWS_SESSION_ENV="${AWS_SESSION_ENV}",REUSE_RUN="${REUSE_RUN:-}" \
+  --export=ALL,RUN_DIR="${RUN_DIR}",REFHQ_ROOT="${REFHQ_ROOT}",STAGE_DIR="${STAGE_DIR}",EDULLM_ROOT="${EDULLM_ROOT}",HQ_SCRIPTS="${HQ_SCRIPTS}",REUSE_RUN="${REUSE_RUN:-}" \
   "${HQ_SCRIPTS}/publish_refhq_edullm_data.sbatch")
 echo "publish_job=${JOB}"
 echo "run_dir=${RUN_DIR}"

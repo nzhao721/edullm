@@ -20,6 +20,7 @@ Scripts used by more than one corpus pipeline live here (not under `olmo/`, `reg
 | `trim_olmo_overshoot.py` | Trim one overshot OLMo domain to a token budget |
 | `trim_and_tokenize_regmix.py` | Trim one domain and emit dolma2 uint32 `.npy` memmaps |
 
-The AWS-credential helpers these pipelines sourced (`scripts/farmshare/bootstrap.sh`,
-`prepare_aws_session*.sh`, `write_aws_session_env.py`) and the pure S3 transfer workers
-have been removed; the scripts that call them are kept as a record of how each corpus was built.
+The AWS-credential helpers these pipelines once sourced and the pure S3 transfer workers
+have been removed, along with the calls to the credential helpers. The scripts are kept as a
+record of how each corpus was built; their S3 reads and writes now use the standard AWS
+credential chain.

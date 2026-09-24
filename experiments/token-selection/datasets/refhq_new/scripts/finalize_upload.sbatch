@@ -22,26 +22,8 @@ source "${RUN_DIR}/env.sh" 2>/dev/null || true
 : "${REFHQ_NEW_SCRIPTS:=${RUN_DIR}/datasets/refhq_new/scripts}"
 STAGE_DIR="${STAGE_DIR:-${RUN_DIR}/publish-stage}"
 
-if [[ -n "${AWS_SESSION_ENV:-}" && -f "${AWS_SESSION_ENV}" ]]; then
-  # shellcheck disable=SC1090
-  source "${AWS_SESSION_ENV}"
-else
-  # Prefer laptop-pushed session; prepare_aws_session_light is a fallback only.
-  if [[ -f "${RUN_DIR}/aws-session.env" ]]; then
-    # shellcheck disable=SC1091
-    source "${RUN_DIR}/aws-session.env"
-    export AWS_SESSION_ENV="${RUN_DIR}/aws-session.env"
-  else
-    # shellcheck disable=SC1091
-    source "${RUN_DIR}/datasets/farmshare/prepare_aws_session_light.sh"
-    # shellcheck disable=SC1090
-    source "${AWS_SESSION_ENV}"
-  fi
-fi
-
 export PATH="${PATH}:${HOME}/.local/bin:${HOME}/tools/aws/bin"
 export AWS_DEFAULT_REGION="${AWS_DEFAULT_REGION:-us-east-1}"
-unset AWS_PROFILE || true
 
 # shellcheck disable=SC1091
 source "${REFHQ_NEW_SCRIPTS}/lib.sh"

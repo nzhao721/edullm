@@ -23,8 +23,7 @@ project ``mixlaw`` when ``--wandb-mode online|offline`` and ``WANDB_API_KEY``
 are set (FarmShare: source ``wandb-session.env``). Online W&B is the off-scratch
 durability layer alongside local scratch checkpoints.
 
-Resume via explicit ``--load-path`` (local dir or ``s3://…/stepN`` which is
-pulled into the job save folder). Leftover local checkpoints without
+Resume via an explicit local ``--load-path``. Leftover local checkpoints without
 ``--load-path`` / ``--fresh`` fail closed.
 """
 from __future__ import annotations
@@ -629,8 +628,7 @@ def parse_args() -> argparse.Namespace:
         "--load-path",
         type=str,
         default=None,
-        help="Checkpoint dir to resume: local path or s3://…/stepN "
-        "(S3 URI is pulled into --save-folder)",
+        help="Local checkpoint dir to resume",
     )
     recovery.add_argument(
         "--fresh",
@@ -926,7 +924,7 @@ def _run(args: argparse.Namespace) -> None:
             raise SystemExit(
                 f"found local checkpoint {leftover} under job-scoped --save-folder; "
                 "ephemeral runs do not auto-resume from scratch leftovers. "
-                "Pass --load-path <dir|s3://…/stepN> or --fresh "
+                "Pass --load-path <dir> or --fresh "
                 "to ignore and start at step 0."
             )
         if rank == 0:

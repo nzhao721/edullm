@@ -5,7 +5,7 @@ set -Eeuo pipefail
 refhq_new_stage_shared_utils() {
   local staging_root="$1"
   local run_dir="$2"
-  mkdir -p "${run_dir}/datasets" "${run_dir}/scripts/farmshare"
+  mkdir -p "${run_dir}/datasets"
   local shared
   for shared in \
     olmo_shard_utils.py \
@@ -14,13 +14,6 @@ refhq_new_stage_shared_utils() {
     download_s3_shard.py; do
     if [[ -f "${staging_root}/datasets/${shared}" ]]; then
       cp -a "${staging_root}/datasets/${shared}" "${run_dir}/datasets/"
-    fi
-  done
-  for infra in \
-    prepare_aws_session_light.sh \
-    write_aws_session_env.py; do
-    if [[ -f "${staging_root}/scripts/farmshare/${infra}" ]]; then
-      cp -a "${staging_root}/scripts/farmshare/${infra}" "${run_dir}/scripts/farmshare/"
     fi
   done
 }

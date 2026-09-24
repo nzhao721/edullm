@@ -21,8 +21,6 @@ set -Eeuo pipefail
 VENV="${VENV:-${RUN_DIR}/venv}"
 # shellcheck disable=SC1091
 source "${VENV}/bin/activate"
-# shellcheck disable=SC1090
-source "${AWS_SESSION_ENV:?}"
 
 export PATH="${PATH}:${HOME}/.local/bin:${HOME}/tools/aws/bin"
 export AWS_DEFAULT_REGION="${AWS_DEFAULT_REGION:-us-east-1}"
@@ -39,7 +37,6 @@ PURPOSE="${PURPOSE:-30B dataset with the same domain weights as olmo-mix-1124}"
 
 mkdir -p "${CACHE_DIR}/plan" "${RUN_DIR}/logs"
 
-echo "[$(date -u +%FT%TZ)] caller=$(aws sts get-caller-identity --query Arn --output text)" >&2
 echo "[$(date -u +%FT%TZ)] fetching tokenized_manifest.json on FarmShare node" >&2
 aws s3 cp "s3://${BUCKET}/${PREFIX}/plan/tokenized_manifest.json" "${MANIFEST_LOCAL}"
 

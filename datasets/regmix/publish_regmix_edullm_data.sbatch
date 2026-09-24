@@ -22,8 +22,6 @@ set -Eeuo pipefail
 VENV="${VENV:-${RUN_DIR}/venv}"
 # shellcheck disable=SC1091
 source "${VENV}/bin/activate"
-# shellcheck disable=SC1090
-source "${AWS_SESSION_ENV:?}"
 
 export PATH="${PATH}:${HOME}/.local/bin:${HOME}/tools/aws/bin"
 export AWS_DEFAULT_REGION="${AWS_DEFAULT_REGION:-us-east-1}"

@@ -10,18 +10,13 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 REGMIX_LOCAL="${REPO_ROOT}/datasets/regmix"
 
 ssh -S "${SOCK}" -o BatchMode=yes "${HOST}" \
-  "mkdir -p ${STAGING}/datasets/regmix ${STAGING}/scripts/farmshare"
+  "mkdir -p ${STAGING}/datasets/regmix"
 
 rsync -avz -e "ssh -S ${SOCK} -o BatchMode=yes" \
   "${REGMIX_LOCAL}/publish_regmix_edullm_data.py" \
   "${REGMIX_LOCAL}/publish_regmix_edullm_data.sbatch" \
   "${REGMIX_LOCAL}/submit_publish_regmix_edullm_data.sh" \
   "${HOST}:${STAGING}/datasets/regmix/"
-
-rsync -avz -e "ssh -S ${SOCK} -o BatchMode=yes" \
-  "${REPO_ROOT}/scripts/farmshare/prepare_aws_session_light.sh" \
-  "${REPO_ROOT}/scripts/farmshare/write_aws_session_env.py" \
-  "${HOST}:${STAGING}/scripts/farmshare/"
 
 ssh -S "${SOCK}" -o BatchMode=yes "${HOST}" bash -s <<REMOTE
 set -Eeuo pipefail

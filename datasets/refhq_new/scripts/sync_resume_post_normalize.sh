@@ -60,7 +60,6 @@ SCRATCH_ROOT="\${SCRATCH_ROOT:-\${RUN_DIR}}"
 TOKENIZE_TASKS="\${TOKENIZE_TASKS:-\${SCRATCH_ROOT}/manifests/tokenize_tasks.txt}"
 ENGLISH_TASKS="\${ENGLISH_TASKS:-\${SCRATCH_ROOT}/manifests/english_tasks.txt}"
 STAGE_DIR="\${STAGE_DIR:-\${RUN_DIR}/publish-stage}"
-AWS_SESSION_ENV="\${AWS_SESSION_ENV:-\${RUN_DIR}/aws-session.env}"
 SOURCE_LIST="\${SOURCE_LIST:-tulu-v2 openhermes-25 tulu-3 hermes-3 smoltalk dolci}"
 SEED="\${SEED:-42}"
 S3_BUCKET="\${S3_BUCKET:-edullm-datasets}"
@@ -72,7 +71,7 @@ POSTNORM_JOB=\$(sbatch --parsable --exclude=wheat-01 \
   --output=logs/refhqn_post_normalize_%j.out \
   --error=logs/refhqn_post_normalize_%j.err \
   --chdir="\${RUN_DIR}" \
-  --export=ALL,RUN_DIR="\${RUN_DIR}",VENV="\${VENV}",PLAN="\${PLAN}",SOURCE_LIST="\${SOURCE_LIST}",SCRATCH_ROOT="\${SCRATCH_ROOT}",REFHQ_NEW_SCRIPTS="\${REFHQ_NEW_SCRIPTS}",STAGE_DIR="\${STAGE_DIR}",S3_BUCKET="\${S3_BUCKET}",S3_PREFIX="\${S3_PREFIX}",SEED="\${SEED}",TOKENIZE_TASKS="\${TOKENIZE_TASKS}",ENGLISH_TASKS="\${ENGLISH_TASKS}",AWS_SESSION_ENV="\${AWS_SESSION_ENV}",SKIP_PUBLISH=0 \
+  --export=ALL,RUN_DIR="\${RUN_DIR}",VENV="\${VENV}",PLAN="\${PLAN}",SOURCE_LIST="\${SOURCE_LIST}",SCRATCH_ROOT="\${SCRATCH_ROOT}",REFHQ_NEW_SCRIPTS="\${REFHQ_NEW_SCRIPTS}",STAGE_DIR="\${STAGE_DIR}",S3_BUCKET="\${S3_BUCKET}",S3_PREFIX="\${S3_PREFIX}",SEED="\${SEED}",TOKENIZE_TASKS="\${TOKENIZE_TASKS}",ENGLISH_TASKS="\${ENGLISH_TASKS}",SKIP_PUBLISH=0 \
   --wrap="bash \${RUN_DIR}/submit_post_normalize.sh")
 echo "resumed_postnorm_job=\${POSTNORM_JOB}"
 sleep 10

@@ -9,7 +9,7 @@ STAGING="${STAGING:-/scratch/users/${SUNET}/agent-runs/edullm-farmshare-staging}
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 HQ_SCRIPTS_LOCAL="${REPO_ROOT}/datasets/refhq/scripts"
 
-ssh -S "${SOCK}" -o BatchMode=yes "${HOST}" "mkdir -p ${STAGING}/datasets/refhq/scripts ${STAGING}/datasets/farmshare"
+ssh -S "${SOCK}" -o BatchMode=yes "${HOST}" "mkdir -p ${STAGING}/datasets/refhq/scripts"
 
 rsync -avz -e "ssh -S ${SOCK} -o BatchMode=yes" \
   "${HQ_SCRIPTS_LOCAL}/publish_refhq_edullm_data.py" \
@@ -18,19 +18,12 @@ rsync -avz -e "ssh -S ${SOCK} -o BatchMode=yes" \
   "${HQ_SCRIPTS_LOCAL}/lib.sh" \
   "${HOST}:${STAGING}/datasets/refhq/scripts/"
 
-rsync -avz -e "ssh -S ${SOCK} -o BatchMode=yes" \
-  "${REPO_ROOT}/datasets/farmshare/prepare_aws_session_light.sh" \
-  "${REPO_ROOT}/datasets/farmshare/write_aws_session_env.py" \
-  "${HOST}:${STAGING}/datasets/farmshare/"
-
 ssh -S "${SOCK}" -o BatchMode=yes "${HOST}" bash -s <<REMOTE
 set -Eeuo pipefail
 STAGING=${STAGING}
 REFHQ_ROOT=/scratch/users/${SUNET}/refhq-regmix-5p5b-v1
 mkdir -p "\${REFHQ_ROOT}/datasets/refhq/scripts"
 cp -a "\${STAGING}/datasets/refhq/scripts/." "\${REFHQ_ROOT}/datasets/refhq/scripts/"
-mkdir -p "\${REFHQ_ROOT}/datasets/farmshare"
-cp -a "\${STAGING}/datasets/farmshare/." "\${REFHQ_ROOT}/datasets/farmshare/"
 sed -i 's/\r\$//' "\${REFHQ_ROOT}/datasets/refhq/scripts/"*.sh "\${REFHQ_ROOT}/datasets/refhq/scripts/"*.py "\${REFHQ_ROOT}/datasets/refhq/scripts/"*.sbatch
 chmod +x "\${REFHQ_ROOT}/datasets/refhq/scripts/"*.sh
 export EDULLM_ROOT="\${STAGING}/edullm"

@@ -15,14 +15,12 @@ Training data is a domain-stratified stream over a **working pool staged from
 published+validated** ``s3://edullm-data/pretrain/olmo-127b`` (``dataset_paths`` /
 ``resolve_latest``). ``--pool-dir`` must carry ``edullm_data_source.json`` from
 ``stage_working_pool_from_edullm_data.py`` — orphan FarmShare/laptop pools and
-legacy ``s3://edullm-datasets/`` are refused. Scratch under ``--save-folder`` is
-ephemeral; durable checkpoints require ``--remote-save-folder`` / ``RESULTS_S3``
-(unless ``--allow-local-only``).
+legacy ``s3://edullm-datasets/`` are refused. Checkpoints are written to
+``--save-folder``.
 
 **W&B.** When ``--wandb-mode online|offline`` and ``WANDB_API_KEY`` are set
 (FarmShare: ``wandb-session.env``), OLMo logs train + in-run task-loss metrics
-to project ``mixlaw`` and uploads checkpoint artifacts. S3 durable sinks stay
-required for ephemeral scratch unless ``--allow-local-only``.
+to project ``mixlaw`` and uploads checkpoint artifacts.
 
 Evaluation is **task loss**, the OLMo-ladder metric: bits-per-byte of the gold
 continuation on the OLMES 5-shot RC suite (Bhagia et al., arXiv:2412.04403).
@@ -84,7 +82,6 @@ from mixlaw_common import (
     CURVE_TASK_LOSS_LABELS,
     D_MODEL,
     DATADECIDE_MODEL_SIZE,
-    DEFAULT_RESULTS_S3,
     DOMAINS,
     EDULLM_DATA_DATASET_ID,
     POOL_PROVENANCE_NAME,
@@ -265,35 +262,11 @@ def resolve_dataset_version(dataset_id: str, pinned: Optional[str], provenance: 
     return ver
 
 
-def resolve_remote_save_folder(args: argparse.Namespace) -> Optional[str]:
-    """Durable checkpoint sink (S3). Scratch under --save-folder is ephemeral."""
-    remote = args.remote_save_folder or os.environ.get("REMOTE_SAVE_FOLDER")
-    if remote:
-        return remote.rstrip("/")
-    results = os.environ.get("RESULTS_S3", "").strip()
-    if results:
-        return f"{results.rstrip('/')}/{args.name}/checkpoints"
-    allow_local = os.environ.get("ALLOW_LOCAL_ONLY", "").strip().lower() in (
-        "1",
-        "true",
-        "yes",
-        "on",
-    )
-    if allow_local or args.allow_local_only:
-        return None
-    raise SystemExit(
-        "durable saves required on ephemeral scratch: pass --remote-save-folder "
-        f"(e.g. {DEFAULT_RESULTS_S3}/<mix>/checkpoints), set RESULTS_S3, "
-        "or explicitly ALLOW_LOCAL_ONLY=1 / --allow-local-only for smoke tests"
-    )
-
-
 def build_config(
     args: argparse.Namespace,
     *,
     provenance: dict,
     dataset_version: str,
-    remote_save_folder: Optional[str],
 ) -> TrainConfig:
     global _LADDER_T_DECAY
 
@@ -380,7 +353,6 @@ def build_config(
         "domain_weights": weights,
         "domains": list(DOMAINS),
         "save_folder": str(args.save_folder),
-        "remote_save_folder": remote_save_folder,
         "ephemeral_scratch": True,
         "flash_attention": os.environ.get("OLMO_FLASH_ATTENTION", "0") == "1",
         "fused_loss": os.environ.get("OLMO_FUSED_LOSS", "0") == "1",
@@ -435,7 +407,6 @@ def build_config(
         global_train_batch_size=GLOBAL_BATCH_SEQS,
         tokenizer=TokenizerConfig(identifier=TOKENIZER_ID),
         save_folder=args.save_folder,
-        remote_save_folder=remote_save_folder,
         save_overwrite=True,
         save_interval_unsharded=args.save_interval or total_steps,
         save_num_unsharded_checkpoints_to_keep=args.keep_checkpoints,
@@ -582,23 +553,9 @@ def main() -> None:
     ap.add_argument(
         "--save-folder",
         required=True,
-        help="Local/scratch checkpoint dir (ephemeral). Durable copy via --remote-save-folder.",
+        help="Local/scratch checkpoint dir.",
     )
     ap.add_argument("--progress-dir", required=True)
-    ap.add_argument(
-        "--remote-save-folder",
-        default=None,
-        help=(
-            "S3 prefix for durable checkpoints (OLMo remote_save_folder). "
-            f"Default: $RESULTS_S3/<name>/checkpoints or {DEFAULT_RESULTS_S3}/<name>/checkpoints "
-            "when RESULTS_S3 is set by the launcher."
-        ),
-    )
-    ap.add_argument(
-        "--allow-local-only",
-        action="store_true",
-        help="Permit training without a durable S3 sink (smoke tests only)",
-    )
     ap.add_argument(
         "--length-tokens",
         type=int,
@@ -669,7 +626,6 @@ def main() -> None:
     pool_dir = Path(args.pool_dir)
     provenance = load_pool_provenance(pool_dir, args.dataset_id)
     dataset_version = resolve_dataset_version(args.dataset_id, args.dataset_version, provenance)
-    remote_save_folder = resolve_remote_save_folder(args)
 
     try:
         mp.set_start_method("spawn", force=True)
@@ -698,7 +654,6 @@ def main() -> None:
         args,
         provenance=provenance,
         dataset_version=dataset_version,
-        remote_save_folder=remote_save_folder,
     )
 
     # Inject the ladder WSD schedule before importing ladder's train.py, which

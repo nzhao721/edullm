@@ -21,8 +21,6 @@ set -Eeuo pipefail
 
 # shellcheck disable=SC1091
 source "${RUN_DIR}/venv/bin/activate"
-# shellcheck disable=SC1090
-source "${AWS_SESSION_ENV:?}"
 
 export PATH="${PATH}:${HOME}/.local/bin:${HOME}/tools/aws/bin"
 export AWS_DEFAULT_REGION="${AWS_DEFAULT_REGION:-us-east-1}"
@@ -37,7 +35,6 @@ EDULLM_DATA_DIR="${EDULLM_DATA_DIR:-${RUN_DIR}/edullm-data}"
 
 mkdir -p "${CACHE_DIR}/plan" "${RUN_DIR}/logs"
 
-echo "[$(date -u +%FT%TZ)] caller=$(aws sts get-caller-identity --query Arn --output text)" >&2
 echo "[$(date -u +%FT%TZ)] fetching active tokenized_manifest.json on FarmShare node" >&2
 aws s3 cp "s3://${BUCKET}/${PREFIX}/plan/tokenized_manifest.json" "${MANIFEST_LOCAL}"
 

@@ -110,7 +110,6 @@ PEAK_LR = core.PEAK_LR
 DEFAULT_SEED = core.DEFAULT_SEED
 DEFAULT_LENGTH_TOKENS = core.DEFAULT_LENGTH_TOKENS
 CONFIG_NAME = "OLMo-2-370M-skillit"
-LEGACY_RESUME_S3_ROOT = "s3://edullm-checkpoints/skillit"
 
 SKILLIT_UPDATE_STEPS: tuple[int, ...] = (500, 875, 1250, 1625, 2000)
 _A_OFFLINE_CANDIDATES = (
@@ -363,7 +362,7 @@ def parse_args() -> argparse.Namespace:
     if args.name is None:
         args.name = args.arm_id
     if bool(args.fresh) == bool(args.load_path):
-        ap.error("choose exactly one resume mode: --fresh or --load-path <local|s3://...>")
+        ap.error("choose exactly one resume mode: --fresh or --load-path <local checkpoint dir>")
     if args.dataset_id != DEFAULT_DATASET_ID or args.dataset_version != DEFAULT_DATASET_VERSION:
         ap.error(
             "SkillIt source is pinned to "
@@ -415,61 +414,12 @@ def _ensure_pool(args: argparse.Namespace) -> dict[str, Any]:
     return source
 
 
-def _stage_resume_path(
-    args: argparse.Namespace,
-    *,
-    save_folder: Path,
-    progress_dir: Path,
-) -> Path:
-    """Stage an explicit local/S3 bootstrap checkpoint at run start."""
-    raw = str(args.load_path).strip()
-    if not raw.startswith("s3://"):
-        path = Path(raw)
-        if not (path / "state.pt").is_file():
-            raise SystemExit(f"--load-path {path} is missing state.pt")
-        return path
-
-    expected_root = f"{LEGACY_RESUME_S3_ROOT}/{args.arm_id}"
-    checkpoint_root = f"{expected_root}/checkpoints/"
-    if not raw.startswith(checkpoint_root):
-        raise SystemExit(
-            f"SkillIt S3 --load-path must be under {checkpoint_root}; got {raw}"
-        )
-    step_name = raw.rstrip("/").rsplit("/", 1)[-1]
-    if not step_name.startswith("step"):
-        raise SystemExit(f"SkillIt S3 --load-path must end in stepN; got {raw}")
-
-    dest = save_folder / step_name
-    ok = True
-    error = ""
-    if get_rank() == 0:
-        try:
-            # This is a read-only bootstrap at run start; SkillIt never writes
-            # checkpoints or progress back to S3.
-            dest = core.stage_load_path(
-                raw,
-                save_folder=save_folder,
-                s3_export=True,
-            )
-            # A checkpoint at an update step is pre-update; restoring the durable
-            # progress history is required to recover the post-update stream weights.
-            from token_selection.olmo_ext.s3_export import sync_from_s3
-
-            sync_from_s3(
-                f"{expected_root}/progress/",
-                progress_dir,
-                enabled=True,
-                raise_on_error=True,
-            )
-        except Exception as exc:  # noqa: BLE001
-            ok = False
-            error = f"failed to stage SkillIt resume artifacts from {raw}: {exc}"
-    core._abort_all_ranks(error or "SkillIt S3 resume staging failed", ok=ok)
-    if is_distributed():
-        dist.barrier()
-    if not (dest / "state.pt").is_file():
-        raise SystemExit(f"staged --load-path {dest} is missing state.pt")
-    return dest
+def _stage_resume_path(args: argparse.Namespace) -> Path:
+    """Resolve the explicit local bootstrap checkpoint at run start."""
+    path = Path(str(args.load_path).strip())
+    if not (path / "state.pt").is_file():
+        raise SystemExit(f"--load-path {path} is missing state.pt")
+    return path
 
 
 def _validate_checkpoint_source(
@@ -840,11 +790,7 @@ def _run(args: argparse.Namespace) -> None:
         if rank == 0:
             log.info("--fresh: starting from scratch; local checkpoints are ignored")
     else:
-        load_dir = _stage_resume_path(
-            args,
-            save_folder=save_folder,
-            progress_dir=progress_dir,
-        )
+        load_dir = _stage_resume_path(args)
         _validate_checkpoint_source(
             load_dir,
             arm_id=args.arm_id,

@@ -14,12 +14,9 @@ set -Eeuo pipefail
 
 : "${RUN_DIR:?}"
 : "${VENV:?}"
-: "${AWS_SESSION_ENV:?}"
 : "${BUCKET:?}"
 : "${S3_PREFIX:?}"
 
-# shellcheck disable=SC1090
-source "${AWS_SESSION_ENV}"
 unset PREFIX
 source "${VENV}/bin/activate"
 export PATH="${HOME}/.local/bin:${HOME}/tools/aws/bin:${PATH}"

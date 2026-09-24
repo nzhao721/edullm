@@ -40,11 +40,6 @@ cp -a "${MIXLAW_ROOT}/mixlaw_common.py" \
   "${MIXLAW_ROOT}/recipe_data.py" \
   "${MIXLAW_ROOT}/stage_working_pool_from_edullm_data.py" \
   "${RUN_DIR}/scripts/"
-if [[ -f "${EDULLM_ROOT}/scripts/farmshare/prepare_aws_session_light.sh" ]]; then
-  cp -a "${EDULLM_ROOT}/scripts/farmshare/prepare_aws_session_light.sh" \
-    "${EDULLM_ROOT}/scripts/farmshare/write_aws_session_env.py" \
-    "${RUN_DIR}/scripts/" 2>/dev/null || true
-fi
 sed -i 's/\r$//' "${RUN_DIR}/scripts/"*.{sh,py} 2>/dev/null || true
 
 if [[ ! -x "${RUN_DIR}/venv/bin/python" ]]; then
@@ -65,13 +60,6 @@ if [[ -z "${POOL_DIR}" ]]; then
   mkdir -p "${POOL_DIR}"
   export EDULLM_ROOT RUN_DIR
   unset PREFIX || true
-  AWS_SESSION_ENV="${AWS_SESSION_ENV:-}"
-  if [[ -f "${RUN_DIR}/scripts/prepare_aws_session_light.sh" ]]; then
-    # shellcheck disable=SC1091
-    source "${RUN_DIR}/scripts/prepare_aws_session_light.sh"
-    # shellcheck disable=SC1090
-    source "${AWS_SESSION_ENV}"
-  fi
   BUDGET_TOKENS="$("${RUN_DIR}/venv/bin/python" -c \
     "import sys; sys.path.insert(0, '${RUN_DIR}/scripts'); from mixlaw_common import token_budget; print(token_budget(${TOKENS_PER_PARAM})[2])")"
   VERSION_ARG=""
@@ -81,7 +69,6 @@ if [[ -z "${POOL_DIR}" ]]; then
   cat > "${RUN_DIR}/env.sh" <<EOF
 RUN_DIR=${RUN_DIR}
 VENV=${RUN_DIR}/venv
-AWS_SESSION_ENV=${AWS_SESSION_ENV:-}
 POOL_DIR=${POOL_DIR}
 RECIPE_WORK=${RUN_DIR}/recipe
 TOKENS_PER_PARAM=${TOKENS_PER_PARAM}
@@ -98,7 +85,7 @@ EOF
     --chdir="${RUN_DIR}" \
     --output="${RUN_DIR}/logs/pool-%j.out" \
     --error="${RUN_DIR}/logs/pool-%j.err" \
-    --wrap="bash -lc 'set -Eeuo pipefail; unset PREFIX || true; export PATH=\"\${HOME}/.local/bin:\${HOME}/tools/aws/bin:\${PATH}\"; source ${RUN_DIR}/env.sh; [[ -n \"\${AWS_SESSION_ENV}\" && -f \${AWS_SESSION_ENV} ]] && source \${AWS_SESSION_ENV}; source \${VENV}/bin/activate; cd ${RUN_DIR}/scripts; python stage_working_pool_from_edullm_data.py --dataset-id ${DATASET_ID} ${VERSION_ARG} --out-dir ${POOL_DIR} --mixtures-json ${RUN_DIR}/scripts/probes.json --budget-tokens ${BUDGET_TOKENS}'")
+    --wrap="bash -lc 'set -Eeuo pipefail; unset PREFIX || true; export PATH=\"\${HOME}/.local/bin:\${PATH}\"; source ${RUN_DIR}/env.sh; source \${VENV}/bin/activate; cd ${RUN_DIR}/scripts; python stage_working_pool_from_edullm_data.py --dataset-id ${DATASET_ID} ${VERSION_ARG} --out-dir ${POOL_DIR} --mixtures-json ${RUN_DIR}/scripts/probes.json --budget-tokens ${BUDGET_TOKENS}'")
   echo "pool_job_id=${POOL_JOB}"
   echo "${POOL_JOB}" > "${RUN_DIR}/pool_job_id.txt"
 else

@@ -77,7 +77,7 @@ torchrun --standalone --nproc_per_node=$NUM_GPUS \
   --launch
 ```
 
-Crash resume of **this** `run_id` only: `RESUME=1 bash rho-1/launch.sh` (fingerprint-gated; fetches from S3 if local empty). Never point at `rho-excess-10b-scratch-v1`.
+Crash resume of **this** `run_id` only: `RESUME=1 bash rho-1/launch.sh` (fingerprint-gated). Never point at `rho-excess-10b-scratch-v1`.
 
 ### FarmShare
 
@@ -87,7 +87,6 @@ export EDULLM_ROOT=/path/to/edullm
 export NUM_GPUS=4                    # or 1; discovered from Slurm if unset
 export RANK_MICROBATCH_SIZE=16384    # tune for GPU memory
 export FROM_SCRATCH=1                # default for the rebuild
-# Push aws-session.env into RUN_DIR for S3 stage/export (FarmShare cannot sb-aws-creds login)
 
 bash "$EDULLM_ROOT/experiments/token-selection/rho-1/farmshare/run_rho_train.sh" prepare
 cd "$RUN_DIR"
@@ -101,7 +100,7 @@ Helpers live under [`farmshare/`](farmshare/).
 
 ## Task-loss eval
 
-On every permanent checkpoint save, `TaskLossEvalCallback` enqueues the full 20-label OLMo-ladder `task_loss_bpb` suite and uploads the step dir to S3. Outputs:
+On every permanent checkpoint save, `TaskLossEvalCallback` enqueues the full 20-label OLMo-ladder `task_loss_bpb` suite. Outputs:
 
 `experiments/token-selection/task_loss_results/rho-1/step{N}_task_loss.json`
 
