@@ -111,7 +111,7 @@ def main() -> None:
         if not out_dir.parent.exists():
             continue
         out_dir.mkdir(parents=True, exist_ok=True)
-        for ext in ("png", "pdf"):
+        for ext in ("png",):
             path = out_dir / f"domain_weights_probe_vs_derivative.{ext}"
             fig.savefig(path, facecolor="white")
             print(f"Wrote {path}")

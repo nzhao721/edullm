@@ -214,7 +214,7 @@ for out_dir in OUT_DIRS:
     if not out_dir.parent.exists():
         continue
     out_dir.mkdir(parents=True, exist_ok=True)
-    for ext in ("png", "pdf"):
+    for ext in ("png",):
         path = out_dir / f"figure_i_static_mixtures.{ext}"
         fig.savefig(path, facecolor="white")
         print(f"Wrote {path}")

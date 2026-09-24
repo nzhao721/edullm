@@ -12,9 +12,8 @@ produces a plausible-looking contamination rate for an item set the endpoint
 does not use.
 
 Measured answer, for the record: WinoGrande's scored continuation is the
-sentence SUFFIX. "sarah was a much better surgeon than maria so maria" ->
-"always got the easier cases". BoolQ's gold really is yes/no, and its stem
-carries the 98-word passage.
+sentence suffix after the blank, not the option word. BoolQ's gold really
+is yes/no, and its stem carries the full passage.
 
 So this reads the strings out of ai2-olmo's own task objects, via the same
 `build_evaluator` path the real evaluator uses. No model weights are needed --
@@ -50,8 +49,7 @@ and cannot be run from a bare checkout of this repo: it needs `torch` and
 same training environment the runs in this experiment used. That dependency is
 real and disclosed, not a hidden path -- reading the eval item text from
 ai2-olmo's own task objects rather than reconstructing it from HuggingFace
-fields is the whole point of this step (see the docstring above and the
-worked WinoGrande/BoolQ examples). Its OUTPUT is committed in this directory
+fields is the whole point of this step (see the docstring above). Its OUTPUT is committed in this directory
 only in HASH-ONLY form: the committed `eval_items.jsonl.gz` keeps every row's
 hashes, word counts and candidate count but drops the `stem` and `gold` text,
 so the benchmark items and their answers are not republished, and the

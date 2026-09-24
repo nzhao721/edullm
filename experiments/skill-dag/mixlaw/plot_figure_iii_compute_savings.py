@@ -179,7 +179,7 @@ for out_dir in OUT_DIRS:
     if not out_dir.parent.exists():
         continue
     out_dir.mkdir(parents=True, exist_ok=True)
-    for ext in ("png", "pdf"):
+    for ext in ("png",):
         path = out_dir / f"figure_iii_compute_savings.{ext}"
         fig.savefig(path)
         print(f"Wrote {path}")

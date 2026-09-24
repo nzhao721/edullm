@@ -127,11 +127,8 @@ def main() -> None:
     for out_dir in out_dirs:
         out_dir.mkdir(parents=True, exist_ok=True)
         png_path = out_dir / "adjacency_comparison.png"
-        pdf_path = out_dir / "adjacency_comparison.pdf"
         fig.savefig(png_path, facecolor="white")
-        fig.savefig(pdf_path, facecolor="white")
         print(f"Wrote {png_path}")
-        print(f"Wrote {pdf_path}")
     plt.close(fig)
     print("\nDerivative A (LightGBM min1pct reference):")
     hdr = " ".join(f"{f[:10]:>10}" for f in FAMILIES)

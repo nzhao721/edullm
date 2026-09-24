@@ -201,9 +201,6 @@ for out_dir in OUT_DIRS:
         continue
     out_dir.mkdir(parents=True, exist_ok=True)
     png_path = out_dir / "figure_ii_dynamic_reweighting.png"
-    pdf_path = out_dir / "figure_ii_dynamic_reweighting.pdf"
     fig.savefig(png_path, facecolor="white")
-    fig.savefig(pdf_path, facecolor="white")
     print(f"Wrote {png_path}")
-    print(f"Wrote {pdf_path}")
 plt.close(fig)
