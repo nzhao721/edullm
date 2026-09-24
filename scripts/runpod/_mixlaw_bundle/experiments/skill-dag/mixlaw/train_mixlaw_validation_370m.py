@@ -47,7 +47,7 @@ for _p in (_MIXLAW, _CUR_ROOT, _TS_ROOT):
     if str(_p) not in sys.path:
         sys.path.insert(0, str(_p))
 
-# Curriculum hard-disables W&B at import; snapshot/restore SmolLM-style session env.
+# Curriculum hard-disables W&B at import; snapshot/restore the W&B session env.
 from mixlaw_wandb import (  # noqa: E402
     add_wandb_args,
     finish_wandb,

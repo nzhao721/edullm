@@ -612,7 +612,7 @@ def main() -> None:
         # Keep 20-label ladder evals under runtime scratch; W&B is the only
         # production artifact sink.
         args.task_loss_results_dir = str(Path(args.progress_dir) / "task_loss_results")
-    # Non-main ranks must not touch W&B (SmolLM-style single-writer).
+    # Non-main ranks must not touch W&B (rank 0 is the single writer).
     if os.environ.get("RANK", os.environ.get("LOCAL_RANK", "0")) not in ("0", ""):
         os.environ["WANDB_MODE"] = "disabled"
     try:

@@ -123,7 +123,7 @@ def test_trainer_s3_is_input_only_and_artifacts_use_wandb():
     assert "Publish token-order/v1 groups under" in text
 
 
-def test_trainer_wandb_smollm_protocol():
+def test_trainer_wandb_protocol():
     """W&B is the sole artifact backend for production curriculum runs."""
     text = _TRAIN.read_text(encoding="utf-8")
     assert 'DEFAULT_WANDB_PROJECT = "curriculum"' in text

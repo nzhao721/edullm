@@ -15,7 +15,7 @@
 # Durable sink (required unless ALLOW_LOCAL_ONLY=1):
 #   RESULTS_S3   default s3://edullm-checkpoints/mixlaw/60m-pilot
 #
-# W&B (optional, SmolLM-style; additive to S3):
+# W&B (optional; additive to S3):
 #   Source ${WORK}/wandb-session.env (or RUN_DIR) with WANDB_API_KEY, or export
 #   WANDB_API_KEY. When present, defaults WANDB_MODE=online and project mixlaw.
 #

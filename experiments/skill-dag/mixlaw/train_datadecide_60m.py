@@ -389,7 +389,7 @@ def build_config(
     progress = Path(args.progress_dir)
     progress.mkdir(parents=True, exist_ok=True)
 
-    # SmolLM-style: one explicit wandb.init in main(); keep TrainConfig.wandb=None
+    # One explicit wandb.init in main(); keep TrainConfig.wandb=None
     # to avoid a second OLMo-managed run.
     if wandb_enabled(args, is_main=True):
         meta["wandb"] = {
@@ -724,7 +724,7 @@ def main() -> None:
     wb_run = None
     if get_global_rank() == 0:
         meta = json.loads((progress_dir / "run_meta.json").read_text(encoding="utf-8"))
-        # Explicit SDK run (SmolLM-style); TrainConfig.wandb stays None to avoid a second init.
+        # Explicit SDK run; TrainConfig.wandb stays None to avoid a second init.
         wb_run = init_wandb(
             args,
             meta,

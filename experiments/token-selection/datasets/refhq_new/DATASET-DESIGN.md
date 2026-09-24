@@ -4,7 +4,7 @@
 
 **family:** `pretrain`  
 **profile:** `pretrain-tokens/v1` + `vendored/v1` raw companion  
-*(Prefer `text-corpus/v1` when Gate A ships it; until then FineWeb-style `vendor/`.)*  
+*(Prefer `text-corpus/v1` when Gate A ships it; until then a `vendor/` raw companion.)*  
 **name:** `refhq-instruct` → `pretrain/refhq-instruct`  
 *(Working-store prefix stays `refhq/refhq-new/`; `refhq-new` is invalid as a
 dataset name because `new` is a forbidden version token in edullm-data §2.)*  

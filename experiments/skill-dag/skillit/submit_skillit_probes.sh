@@ -18,7 +18,7 @@
 #   TRAIN_VENV=/path/to/venv POOL_DIR=$RUN_DIR/pool \
 #     bash experiments/skill-dag/skillit/submit_skillit_probes.sh
 #
-# Optional W&B (SmolLM-style):
+# Optional W&B:
 #   bash scripts/farmshare/push_wandb_session_to_farmshare.sh "$RUN_DIR"
 set -Eeuo pipefail
 

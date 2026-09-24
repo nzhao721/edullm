@@ -11,7 +11,9 @@ param(
 
 $ErrorActionPreference = "Stop"
 $repoRoot = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
-$createPod = Join-Path $PSScriptRoot "smollm2_colmlm\create_idle_pod.js"
+# The node helper this called to create/list/inspect/delete pods has been
+# removed from the repository; this script is kept as the launch record.
+$createPod = Join-Path $PSScriptRoot "create_idle_pod.js"
 $mintScript = Join-Path $repoRoot "scripts\farmshare\mint_aws_session_local.ps1"
 $wandbKeyFile = Join-Path $env:USERPROFILE ".wandb_api_key"
 $sshKey = Join-Path $env:USERPROFILE ".ssh\runpod_ed25519"

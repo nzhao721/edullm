@@ -21,7 +21,7 @@ Every permanent checkpoint upload is awaited before training continues; upload
 failure is **fail-closed** across all ranks. Only explicit local smoke runs may
 use ``--wandb-mode disabled --allow-local-only``.
 
-W&B mirrors the SmolLM2 FarmShare protocol: train loss / LR / throughput at
+W&B logs train loss / LR / throughput at
 ``--log-interval``, task-loss eval metrics + artifacts, checkpoint artifacts,
 and runtime progress/config/metrics snapshots. Local W&B dirs stay under
 job-scoped scratch (``--progress-dir`` sibling ``wandb/``).
@@ -279,7 +279,7 @@ def wandb_log_eval(
         return
     assert wandb is not None
     metrics: Dict[str, float] = {}
-    # SmolLM-shaped payloads (macro_mean + labels) and curriculum payloads (task_loss_bpb).
+    # Evaluator payloads (macro_mean + labels) and curriculum payloads (task_loss_bpb).
     if "macro_mean" in payload:
         metrics["eval/macro_bpb"] = float(payload["macro_mean"])
         labels = payload.get("labels") or {}
@@ -727,7 +727,7 @@ class _Bookkeeping:
     """Minimal Trainer duck-type for TrainModule.optim_step / record_metric.
 
     Captures CE loss from ``record_ce_loss`` so the training loop can log
-    ``train/loss`` to W&B (same spirit as SmolLM2 trainers).
+    ``train/loss`` to W&B.
     """
 
     global_step: int

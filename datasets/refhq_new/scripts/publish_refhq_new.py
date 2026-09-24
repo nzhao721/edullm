@@ -37,7 +37,6 @@ DEFAULT_SHARD_BYTES = 1_073_741_824
 SPLITS = ("train", "val")
 
 # Gate A does not ship text-corpus/v1 yet; publish raw companion as vendored/v1
-# (same workaround as FineWeb combined publish).
 PUBLISH_PROFILE = {"tokens": "pretrain-tokens/v1", "vendor": "vendored/v1"}
 
 

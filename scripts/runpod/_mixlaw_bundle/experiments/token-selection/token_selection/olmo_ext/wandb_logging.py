@@ -1,4 +1,4 @@
-"""SmolLM2-style W&B helpers for token-selection trainers.
+"""W&B helpers for token-selection trainers.
 
 Protocol:
 
@@ -122,7 +122,7 @@ def add_wandb_argparse_options(
     default_project: str = DEFAULT_WANDB_PROJECT,
     default_run_name: Optional[str] = None,
 ) -> None:
-    """Add SmolLM2-parity ``--wandb-*`` flags to a trainer ArgumentParser."""
+    """Add the shared ``--wandb-*`` flags to a trainer ArgumentParser."""
     parser.add_argument(
         "--wandb-project",
         default=os.environ.get("WANDB_PROJECT", default_project),
@@ -176,7 +176,7 @@ def wandb_enabled(
     mode: Optional[str] = None,
     is_main: bool = True,
 ) -> bool:
-    """True when this rank should open/log a W&B run (SmolLM2 gate)."""
+    """True when this rank should open/log a W&B run."""
     if not is_main:
         return False
     resolved = (mode or os.environ.get("WANDB_MODE", DEFAULT_WANDB_MODE)).strip().lower()
@@ -332,7 +332,7 @@ def wandb_log_train(
     selected_frac: Optional[float] = None,
     extra: Optional[Mapping[str, Any]] = None,
 ) -> None:
-    """Log train-loop scalars under ``train/`` (SmolLM2-style namespaces)."""
+    """Log train-loop scalars under ``train/`` namespaces."""
     metrics: dict[str, Any] = {}
     if train_loss is not None:
         metrics["train/loss"] = float(train_loss)

@@ -24,7 +24,7 @@ scratch, laptop-local, or legacy ``s3://edullm-datasets/`` data already present.
 and progress upload to W&B artifacts. Production online checkpoint uploads are
 fail-closed; ``--local-smoke`` permits a non-production run without W&B.
 
-W&B (SmolLM2-style, project ``token-selection``): soft-enabled when
+W&B (project ``token-selection``): soft-enabled when
 ``WANDB_API_KEY`` is set; skipped otherwise. No task-loss evals on this arm.
 Do not confuse with ``olmo3-370m/run-10b-equal``.
 """
@@ -50,7 +50,7 @@ _TS_ROOT = _ARM_DIR.parent
 if str(_TS_ROOT) not in sys.path:
     sys.path.insert(0, str(_TS_ROOT))
 
-# SmolLM2-style W&B: do not hard-disable; soft-skip without API key.
+# W&B: do not hard-disable; soft-skip without API key.
 from token_selection.olmo_ext.wandb_logging import (  # noqa: E402
     add_wandb_argparse_options,
     apply_wandb_env_defaults,

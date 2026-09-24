@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Shared Weights & Biases helpers for mixlaw trainers (SmolLM2 protocol).
+"""Shared Weights & Biases helpers for mixlaw trainers.
 
 Enablement protocol:
   * ``--wandb-mode online|offline|disabled`` (default online when API key present
