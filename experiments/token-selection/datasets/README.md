@@ -50,10 +50,8 @@ tagger/mixer configs).
   everything under `*_regmix_labels*`, and
   every FarmShare `check_*`/`compare_*`/`diagnose_*`/`status_*` operational
   script for that job graph.
-- **The same shape under `olmo/`.** `build_label_manifest.py`,
-  `finalize_olmo_labels.py`, `label_olmo_shard.py`/`.sbatch`,
-  `materialize_curriculum.py`, `submit_olmo_labeling.sh`,
-  `text_difficulty_metrics.py`, `test_text_difficulty_metrics.py`, and
+- **The same shape under `olmo/`.** `finalize_olmo_labels.py`,
+  `label_olmo_shard.py`, `text_difficulty_metrics.py`, `test_text_difficulty_metrics.py`, and
   `estimate_olmo_domain_tokens.py` — curriculum labeling and a one-off token
   estimate, not corpus construction.
 - **Smoke tests and local dry-runs**: `smoke_code_copyright_strip.py`

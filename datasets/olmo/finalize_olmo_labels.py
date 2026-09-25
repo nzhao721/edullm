@@ -56,7 +56,6 @@ SCHEMA = {
     "offline_training": [
         "Sort or filter metrics_index.jsonl.gz by a metric column.",
         "Join selected ids back to docs/*.jsonl.gz via id, or stream docs and keep ids in a set.",
-        "Or use materialize_curriculum.py to emit ordered/filtered text shards.",
     ],
 }
 
