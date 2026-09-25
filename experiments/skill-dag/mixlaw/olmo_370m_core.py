@@ -1,20 +1,17 @@
 #!/usr/bin/env python3
 """Shared OLMo2-370M model, checkpoint and bookkeeping code.
 
-The MixLaw and Skill-It 370M trainers
-(``train_mixlaw_validation_370m.py`` and ``../skillit/train_skillit_370m.py``)
-import their recipe constants, ``build_train_module``, checkpoint
-save/load/gather, resume staging (``stage_load_path``), the ``_Bookkeeping``
+The MixLaw 370M trainer (``train_mixlaw_validation_370m.py``) imports its recipe
+constants, ``build_train_module``, checkpoint load/gather, the ``_Bookkeeping``
 dataclass and the all-rank abort helper from here.
 
-Every definition below is copied unchanged from the trainer both were
-originally built on, ``experiments/curriculum/train_curriculum_regmix_370m.py``,
-which is the path the reported runs imported them from. That file has since
-been removed; only the code these two trainers call was kept.
+Every definition below is copied unchanged from the trainer it was originally
+built on, ``experiments/curriculum/train_curriculum_regmix_370m.py``, which is
+the path the reported seed-12345 control imported them from. That file has
+since been removed; only the code this trainer calls was kept.
 """
 from __future__ import annotations
 
-import argparse
 import importlib.util
 import logging
 import os
@@ -77,19 +74,6 @@ PEAK_LR = 4.0e-4
 DEFAULT_SEED = 42
 
 
-DEFAULT_LENGTH_TOKENS = 10_000_058_051  # → 2384 steps at GBS 4_194_304
-
-
-CONFIG_NAME = "OLMo-2-370M-scratch"
-
-
-# Canonical published corpora (edullm-data). Never use s3://edullm-datasets/.
-DATA_BUCKET = "edullm-data"
-
-
-LEGACY_DATA_BUCKET = "edullm-datasets"
-
-
 def _broadcast_rank0_success(ok: bool) -> bool:
     """Rank 0 supplies ``ok``; all ranks return the broadcast value."""
     if not is_distributed():
@@ -104,54 +88,6 @@ def _abort_all_ranks(message: str, *, ok: bool) -> None:
     """If rank-0 reports failure, every rank raises SystemExit after broadcast."""
     if not _broadcast_rank0_success(ok):
         raise SystemExit(message)
-
-
-def stage_load_path(
-    load_path: str,
-    *,
-    save_folder: Path,
-    wandb_run: object | None,
-) -> Path:
-    """Resolve a local or W&B checkpoint bootstrap into job scratch."""
-    _refuse_legacy_uri(load_path)
-    if load_path.startswith("s3://"):
-        raise SystemExit(
-            "S3 checkpoint resume is prohibited: S3 is input-data/bootstrap staging "
-            "only and must not store run checkpoints; use a local path or "
-            "wandb-artifact://entity/project/name:version"
-        )
-    prefix = "wandb-artifact://"
-    if not load_path.startswith(prefix):
-        return Path(load_path)
-    if wandb_run is None:
-        raise SystemExit("W&B artifact resume requires an active online W&B run")
-    artifact_ref = load_path[len(prefix) :].strip("/")
-    if artifact_ref.count("/") < 2 or ":" not in artifact_ref.rsplit("/", 1)[-1]:
-        raise SystemExit(
-            "W&B checkpoint reference must be "
-            "wandb-artifact://entity/project/name:version"
-        )
-    artifact = wandb_run.use_artifact(artifact_ref, type="model")
-    dest = Path(save_folder) / "_wandb_resume"
-    log.info("Resuming: download W&B artifact %s → %s", artifact_ref, dest)
-    downloaded = Path(artifact.download(root=str(dest)))
-    direct = downloaded / "state.pt"
-    if direct.is_file():
-        return downloaded
-    matches = list(downloaded.rglob("state.pt"))
-    if len(matches) != 1:
-        raise SystemExit(
-            f"W&B resume artifact {artifact_ref!r} must contain exactly one state.pt; "
-            f"found {len(matches)}"
-        )
-    return matches[0].parent
-
-
-def _refuse_legacy_uri(uri: str) -> None:
-    if LEGACY_DATA_BUCKET in uri:
-        raise SystemExit(
-            f"refusing legacy training URI (use s3://{DATA_BUCKET}/ via edullm_data): {uri}"
-        )
 
 
 @dataclass
@@ -416,48 +352,6 @@ def gather_train_module_state_dict(train_module: TransformerTrainModule) -> dict
         "model": _plainify_state_tree(model_sd),
         "optim": _plainify_state_tree(optim_sd) if optim_sd is not None else None,
     }
-
-
-def save_checkpoint(
-    path: Path,
-    step: int,
-    train_module: TransformerTrainModule,
-    args: argparse.Namespace,
-    meta: dict,
-) -> None:
-    """All ranks gather; rank 0 atomically writes the local permanent checkpoint."""
-    train_module_sd = gather_train_module_state_dict(train_module)
-    ok = True
-    err = "permanent checkpoint save failed"
-    if get_rank() == 0:
-        try:
-            path.mkdir(parents=True, exist_ok=True)
-            state = {
-                "step": step,
-                "train_module": train_module_sd,
-                "args": vars(args),
-                "meta": meta,
-                "architecture": "olmo_core.TransformerConfig.olmo2_370M",
-                "config_name": CONFIG_NAME,
-                "train_stack": "TransformerTrainModule/HSDP/SkipStepAdamW (curriculum)",
-                "method": (
-                    "plain_ce" if args.pacing == "control" else f"curriculum:{args.pacing}"
-                ),
-                "arm": args.arm_id,
-                "run_id": args.name,
-                "ephemeral": False,
-                "checkpoint_format": "full_state_dict_v1",
-            }
-            tmp = path / "state.pt.tmp"
-            torch.save(state, tmp)
-            tmp.replace(path / "state.pt")
-            (path / "step.txt").write_text(str(step) + "\n")
-            log.info("Saved permanent full checkpoint → %s (step=%s)", path, step)
-        except Exception as exc:  # noqa: BLE001 — fail closed via broadcast
-            ok = False
-            err = f"permanent checkpoint save failed: {exc}"
-            log.error("%s", err)
-    _abort_all_ranks(err, ok=ok)
 
 
 def load_checkpoint(path: Path, train_module: TransformerTrainModule) -> int:

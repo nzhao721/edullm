@@ -6,23 +6,11 @@ from pathlib import Path
 
 _MIXLAW = Path(__file__).resolve().parents[1]
 _CORE = _MIXLAW / "olmo_370m_core.py"
-_TRAINERS = (
-    _MIXLAW / "train_mixlaw_validation_370m.py",
-    _MIXLAW.parent / "skillit" / "train_skillit_370m.py",
-)
+_TRAINERS = (_MIXLAW / "train_mixlaw_validation_370m.py",)
 
 
 def _tree() -> ast.Module:
     return ast.parse(_CORE.read_text(encoding="utf-8"))
-
-
-def _function_source(name: str) -> str:
-    node = next(
-        item
-        for item in _tree().body
-        if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)) and item.name == name
-    )
-    return ast.unparse(node)
 
 
 def test_core_defines_every_name_the_trainers_use() -> None:
@@ -51,9 +39,3 @@ def test_core_has_no_curriculum_imports() -> None:
         elif isinstance(node, ast.Import):
             assert all("curriculum" not in alias.name for alias in node.names)
 
-
-def test_resume_staging_refuses_s3_checkpoints() -> None:
-    stage = _function_source("stage_load_path")
-    assert "S3 checkpoint resume is prohibited" in stage
-    assert "wandb-artifact://" in stage
-    assert "use_artifact" in stage

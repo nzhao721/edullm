@@ -2,9 +2,7 @@
 
 This is the code that actually produced the two Skill-It 370M runs reported in
 the paper. It is a **copy**, vendored here so that the paper's "all code is
-available" claim is true from this repository alone. This directory's parent,
-`experiments/skill-dag/skillit/`, has its own `train_skillit_370m.py`; that is a
-separate trainer, and the reported runs did not use it.
+available" claim is true from this repository alone.
 
 ## Where it came from
 

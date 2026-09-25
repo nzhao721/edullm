@@ -205,8 +205,7 @@ Skill-It `.edullm/` code on FarmShare scratch, launched with
 [`olmo_core_skillit/`](olmo_core_skillit/); its
 [`PROVENANCE.md`](olmo_core_skillit/PROVENANCE.md) records where it came from,
 how it differs from the nearest upstream commit (`f2ded0b6` on
-`edullm/skillit-370m`), and what was left out. The `train_skillit_370m.py` in
-this directory is a separate trainer; the reported runs did not use it. The
+`edullm/skillit-370m`), and what was left out. The
 controls they are compared against are the MixLaw runs; see
 [`../mixlaw/README.md`](../mixlaw/README.md#training-code-provenance).
 

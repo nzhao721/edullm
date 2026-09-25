@@ -1,19 +1,14 @@
-"""Focused tests for SkillIt source, resume, eval, and launcher hardening."""
+"""Focused tests for SkillIt data-source, eval, and launcher hardening."""
 from __future__ import annotations
 
-import ast
 import importlib.util
 import json
 from pathlib import Path
-from typing import Any, Mapping, Optional
 
-import numpy as np
 import pytest
 
 _SKILLIT = Path(__file__).resolve().parents[1]
 _PREPARE = _SKILLIT / "prepare_skillit_370m_data.py"
-_TRAINER = _SKILLIT / "train_skillit_370m.py"
-_LAUNCHER = _SKILLIT / "launch_arm.sh"
 _PROBE_LAUNCHER = _SKILLIT / "launch_probe.sh"
 _PROBE_SUBMITTER = _SKILLIT / "submit_skillit_probes.sh"
 _WANDB = _SKILLIT / "wandb_logging.py"
@@ -29,20 +24,6 @@ def _load_prepare():
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
-
-
-def _load_trainer_function(name: str, namespace: dict[str, object]):
-    tree = ast.parse(_TRAINER.read_text(encoding="utf-8"))
-    node = next(
-        item
-        for item in tree.body
-        if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)) and item.name == name
-    )
-    module = ast.Module(body=[node], type_ignores=[])
-    ast.fix_missing_locations(module)
-    scope = dict(namespace)
-    exec(compile(module, str(_TRAINER), "exec"), scope)
-    return scope[name]
 
 
 def _write_probe_pool(root: Path, *, dataset_id: str, version_key: str, version: str) -> None:
@@ -103,35 +84,8 @@ def test_pool_provenance_rejects_wrong_or_conflicting_identity(tmp_path: Path) -
         prepare.load_pool_source(tmp_path)
 
 
-def test_trainer_has_explicit_local_resume() -> None:
-    text = _TRAINER.read_text(encoding="utf-8")
-    assert "choose exactly one resume mode" in text
-    assert "find_latest_checkpoint" not in text
-    assert "sync_from_s3" not in text
-    assert "edullm-checkpoints" not in text
-    assert "required post-update step" in text
-    assert "_validate_checkpoint_source(" in text
-    assert "export_curriculum_artifacts(" not in text
-    assert "export_curriculum_checkpoint(" not in text
-    assert "--s3-export" not in text
-    assert "runtime_scratch" in text
-
-
-def test_trainer_uses_shared_strict_all_rank_eval_and_fails_closed() -> None:
-    text = _TRAINER.read_text(encoding="utf-8")
-    assert "pause_eval_reload_distributed(" in text
-    assert "strict=True" in text
-    assert "del train_module" in text
-    assert "suite_complete" in text
-    assert "expected exactly 20 raw task-loss labels" in text
-    assert "stale task-loss payload" in text
-    assert "_wandb_upload_or_abort(" in text
-    assert "wandb_log_runtime_artifacts(" in text
-    assert "async_=True" not in text
-
-
 def test_launchers_never_write_artifacts_to_s3() -> None:
-    for path in (_LAUNCHER, _PROBE_LAUNCHER, _PROBE_SUBMITTER):
+    for path in (_PROBE_LAUNCHER, _PROBE_SUBMITTER):
         text = path.read_text(encoding="utf-8")
         assert "aws s3 sync" not in text
         assert "RESULTS_S3" not in text
@@ -186,89 +140,13 @@ def test_checkpoint_artifact_upload_waits_for_wandb(tmp_path: Path) -> None:
     assert events[-2:] == ["log_artifact", "wait"]
 
 
-def test_update_payload_rejects_missing_and_stale_eval() -> None:
-    validate = _load_trainer_function(
-        "_validate_task_loss_payload",
-        {"Mapping": Mapping, "Any": Any, "Path": Path},
-    )
-    valid = {
-        "step": 500,
-        "suite_complete": True,
-        "raw_label_count": 20,
-        "labels": {f"label-{i}": float(i) for i in range(20)},
-    }
-    validate(valid, step=500, path=Path("step500_task_loss.json"))
-    with pytest.raises(RuntimeError, match="stale"):
-        validate(valid, step=875, path=Path("step875_task_loss.json"))
-    with pytest.raises(RuntimeError, match="not contract-complete"):
-        validate(
-            {**valid, "suite_complete": False},
-            step=500,
-            path=Path("step500_task_loss.json"),
-        )
-
-
-def test_resume_requires_exact_latest_update_snapshot(tmp_path: Path) -> None:
-    restore = _load_trainer_function(
-        "_restore_weights_from_jsonl",
-        {
-            "Path": Path,
-            "Optional": Optional,
-            "np": np,
-            "json": json,
-            "DOMAINS": ("dclm", "arxiv"),
-        },
-    )
-    progress = tmp_path / "progress"
-    progress.mkdir()
-    records = [
-        {
-            "step": 0,
-            "domain_order": ["dclm", "arxiv"],
-            "p_after": {"dclm": 0.5, "arxiv": 0.5},
-        },
-        {
-            "step": 500,
-            "domain_order": ["dclm", "arxiv"],
-            "p_after": {"dclm": 0.75, "arxiv": 0.25},
-        },
-    ]
-    (progress / "skillit_updates.jsonl").write_text(
-        "".join(json.dumps(record) + "\n" for record in records),
-        encoding="utf-8",
-    )
-    restored = restore(progress, 625, required_update_step=500)
-    assert np.allclose(restored, [0.75, 0.25])
-    with pytest.raises(RuntimeError, match="required post-update step 875"):
-        restore(progress, 1000, required_update_step=875)
-
-
-def test_skillit_update_schedule_and_math_contract_unchanged() -> None:
-    text = _TRAINER.read_text(encoding="utf-8")
-    assert "SKILLIT_UPDATE_STEPS: tuple[int, ...] = (500, 875, 1250, 1625, 2000)" in text
-    # Multiplicative Skill-It rule: the previous mixture must be fed back in.
-    assert "skillit_update(A, L, p_before=p_before, eta=eta, w=1.0)" in text
+def test_skillit_recipe_update_schedule_unchanged() -> None:
     recipe = json.loads(_RECIPE.read_text(encoding="utf-8"))
     assert recipe["skillit"] == {
         "update_steps": [500, 875, 1250, 1625, 2000],
         "eta": 0.2,
         "w": 1.0,
     }
-
-
-def test_launcher_preflights_resume_source_hf_olmes_and_world_size() -> None:
-    text = _LAUNCHER.read_text(encoding="utf-8")
-    for required in (
-        "RESUME_MODE=fresh or RESUME_MODE=resume",
-        "pretrain/olmo-127b",
-        "PINNED_DATASET_VERSION=\"v1\"",
-        "LADDER_BASE_CONFIG",
-        "HF_TOKEN",
-        "label_to_task_map",
-        "TASK_LOSS_NPROC=NPROC",
-        "32 % NPROC",
-    ):
-        assert required in text
 
 
 def test_60m_eval_reuses_shared_compatible_config_loader() -> None:
