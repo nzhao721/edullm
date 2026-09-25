@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Submit 7 Skill-It DataDecide-60M one-hot probes as one Slurm array (1 GPU per task).
 #
-# Prereq: edullm-data pool + recipe sidecars (submit_skillit_prepare_probes.sh).
+# Prereq: edullm-data pool (../mixlaw/stage_working_pool_from_edullm_data.py) +
+# recipe sidecars (prepare_skillit_probe_data.py).
 # Never assumes the old ladder scratch tree or s3://edullm-datasets/.
 #
 # Required:
@@ -53,7 +54,7 @@ fi
   --pool-layout probe \
   --validate-pool-only
 if [[ ! -d "${RECIPE_WORK}" ]]; then
-  echo "missing recipe sidecars under ${RECIPE_WORK} (run submit_skillit_prepare_probes.sh first)" >&2
+  echo "missing recipe sidecars under ${RECIPE_WORK} (run prepare_skillit_probe_data.py first)" >&2
   exit 2
 fi
 if [[ ! -f "${SKILLIT_ROOT}/skillit_probe.sbatch" ]]; then

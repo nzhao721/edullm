@@ -2,7 +2,7 @@
 # Recipe sidecars for the 24 mixing-law probes (DataDecide-60M).
 #
 # Requires a working pool already staged from published edullm-data via
-#   stage_working_pool_from_edullm_data.py / submit_mixlaw_pilot_pool.sh
+#   stage_working_pool_from_edullm_data.py
 # Sole supported path: DomainMixtureStream at mixtures.json weights
 # (no per-mix materialized slices; do not use build_mixture_data.py).
 #
@@ -39,7 +39,7 @@ fi
 
 if [[ ! -f "$POOL_DIR/edullm_data_source.json" ]]; then
   echo "missing $POOL_DIR/edullm_data_source.json — refuse orphan pool; stage from edullm-data first" >&2
-  echo "  (submit_mixlaw_pilot_pool.sh or stage_working_pool_from_edullm_data.py)" >&2
+  echo "  (stage_working_pool_from_edullm_data.py)" >&2
   exit 2
 fi
 if [[ ! -d "$POOL_DIR/tokenized/dclm" && ! -f "$POOL_DIR/dclm/dclm.npy" ]]; then
